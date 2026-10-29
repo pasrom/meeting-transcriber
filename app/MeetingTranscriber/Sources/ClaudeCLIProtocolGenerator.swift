@@ -43,9 +43,20 @@
             meetingStartTime: Date?,
         ) async throws -> String {
             let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language, meetingStartTime: meetingStartTime) + transcript
-
-            let process = Process()
             let launch = await Self.launchConfiguration(claudeBin: claudeBin, anthropicAPIKey: anthropicAPIKey)
+            do {
+                return try await run(prompt: prompt, launch: launch)
+            } catch let rejection as NoSessionPersistenceRejected {
+                guard let retry = await Self.launchWithoutRejectedFlag(after: launch, claudeBin: claudeBin) else {
+                    throw rejection.error
+                }
+                return try await run(prompt: prompt, launch: retry)
+            }
+        }
+
+        /// One CLI run with `launch`, up to the validated protocol text.
+        private func run(prompt: String, launch: LaunchConfiguration) async throws -> String {
+            let process = Process()
             let resolvedBin = launch.resolvedBin
             process.executableURL = URL(fileURLWithPath: resolvedBin)
             process.arguments = launch.arguments
@@ -132,7 +143,8 @@
             if process.terminationStatus != 0 {
                 let stderrData = await stderrRead
                 throw Self.handleFailure(
-                    exitCode: process.terminationStatus, stderrData: stderrData, text: text, resultEvent: resultEvent,
+                    exitCode: process.terminationStatus, stderrData: stderrData, text: text,
+                    resultEvent: resultEvent, arguments: launch.arguments,
                 )
             }
 
@@ -147,10 +159,12 @@
 
         /// Decodes `stderrData`, logs the raw exit/stderr/text, and builds the
         /// error `generate()` throws on a nonzero exit — pulled out of
-        /// `generate()` itself to keep that function's body short.
+        /// `generate()` itself to keep that function's body short. A run
+        /// with `arguments` that the CLI refused `noSessionPersistenceFlag`
+        /// gets its error wrapped as `NoSessionPersistenceRejected`.
         static func handleFailure(
-            exitCode: Int32, stderrData: Data, text: String, resultEvent: ResultEventInfo?,
-        ) -> ProtocolError {
+            exitCode: Int32, stderrData: Data, text: String, resultEvent: ResultEventInfo?, arguments: [String],
+        ) -> any Error {
             let stderrText = String(data: stderrData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             // The accumulated text is a complete generated protocol on any run
@@ -172,7 +186,9 @@
             logger.error(
                 "claude_cli_failed_reason exit=\(exitCode, privacy: .public) reason=\(publicMessage, privacy: .public)",
             )
-            return makeFailureError(exitCode: exitCode, stderrText: publicMessage)
+            let error = makeFailureError(exitCode: exitCode, stderrText: publicMessage)
+            let rejected = rejectedNoSessionPersistence(stderr: stderrText, message: publicMessage, arguments: arguments)
+            return rejected ? NoSessionPersistenceRejected(error: error) : error
         }
 
         /// The message surfaced to the user and logged at `.public`. Prefers
@@ -417,7 +433,7 @@
         /// `/usr/bin/env` fallback, prepend `claudeBin` so env can resolve
         /// it from PATH. `noSessionPersistence` adds
         /// `noSessionPersistenceFlag`; pass what
-        /// `cliSupportsNoSessionPersistence` found for this binary.
+        /// the CLI's `--help` lists it (see `launchConfiguration`).
         static func buildSubprocessArgs(claudeBin: String, resolvedBin: String, noSessionPersistence: Bool) -> [String] {
             var args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", "sonnet"]
             if noSessionPersistence {

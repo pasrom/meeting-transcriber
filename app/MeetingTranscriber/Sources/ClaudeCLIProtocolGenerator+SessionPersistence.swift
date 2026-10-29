@@ -33,27 +33,102 @@
         static let helpProbeTimeoutSeconds: TimeInterval = 10
 
         /// Binaries seen to accept the flag, keyed by resolved path and name.
-        /// Only a yes is remembered: a no is asked again on the next run, so
-        /// updating an old CLI takes effect without restarting the app.
+        /// A yes is remembered so that a later `--help` that times out cannot
+        /// start a meeting without the flag; a no is asked again on the next
+        /// run. A run refused the flag drops the yes.
         private static let binariesAcceptingNoSessionPersistence = OSAllocatedUnfairLock<Set<String>>(initialState: [])
 
-        /// Executable, arguments and environment for one run.
-        static func launchConfiguration(
-            claudeBin: String, anthropicAPIKey: String?,
-        ) async -> (resolvedBin: String, arguments: [String], environment: [String: String]) {
+        typealias LaunchConfiguration = (resolvedBin: String, arguments: [String], environment: [String: String])
+
+        /// Executable, arguments and environment for one run. The flag goes
+        /// in only when `--help` lists it, since a CLI older than the flag
+        /// rejects it; a help text that cannot be read counts as no, which
+        /// keeps the behaviour from before the flag existed.
+        static func launchConfiguration(claudeBin: String, anthropicAPIKey: String?) async -> LaunchConfiguration {
             let resolvedBin = resolveClaudePath(claudeBin)
             let environment = buildEnvironment(
                 baseEnvironment: ProcessInfo.processInfo.environment,
                 searchPaths: searchPaths,
                 anthropicAPIKey: anthropicAPIKey,
             )
-            let noSessionPersistence = await cliSupportsNoSessionPersistence(
-                resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment,
-            )
+            let answer = await askNoSessionPersistence(resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment)
+            if answer != .listed {
+                logger.warning(
+                    "claude_cli_session_persistence_on helpRead=\(answer != .unread, privacy: .public) — the CLI keeps this run's session, transcript included",
+                )
+            }
             let arguments = buildSubprocessArgs(
-                claudeBin: claudeBin, resolvedBin: resolvedBin, noSessionPersistence: noSessionPersistence,
+                claudeBin: claudeBin, resolvedBin: resolvedBin, noSessionPersistence: answer == .listed,
             )
             return (resolvedBin, arguments, environment)
+        }
+
+        /// The launch for one more run after `failed` was refused the flag,
+        /// or nil for none. Drops the remembered yes and asks `--help` again:
+        /// only a help text that was read and does not list the flag earns a
+        /// run without it, with the same executable and environment.
+        static func launchWithoutRejectedFlag(
+            after failed: LaunchConfiguration, claudeBin: String,
+        ) async -> LaunchConfiguration? {
+            let key = cacheKey(resolvedBin: failed.resolvedBin, claudeBin: claudeBin)
+            _ = binariesAcceptingNoSessionPersistence.withLock { $0.remove(key) }
+            let answer = await askNoSessionPersistence(
+                resolvedBin: failed.resolvedBin, claudeBin: claudeBin, environment: failed.environment,
+            )
+            logger.warning(
+                "claude_cli_rejected_no_session_persistence help=\(String(describing: answer), privacy: .public) retry=\(answer == .notListed, privacy: .public)",
+            )
+            guard answer == .notListed else { return nil }
+            let arguments = buildSubprocessArgs(
+                claudeBin: claudeBin, resolvedBin: failed.resolvedBin, noSessionPersistence: false,
+            )
+            return (failed.resolvedBin, arguments, failed.environment)
+        }
+
+        private static func cacheKey(resolvedBin: String, claudeBin: String) -> String {
+            "\(resolvedBin)\u{0}\(claudeBin)"
+        }
+
+        /// What `--help` says about the flag.
+        enum HelpAnswer {
+            case listed
+            case notListed
+            /// The help could not be read, so it says nothing either way.
+            case unread
+        }
+
+        /// What the CLI's `--help` says about the flag, or the remembered yes.
+        private static func askNoSessionPersistence(
+            resolvedBin: String, claudeBin: String, environment: [String: String],
+        ) async -> HelpAnswer {
+            let key = cacheKey(resolvedBin: resolvedBin, claudeBin: claudeBin)
+            if binariesAcceptingNoSessionPersistence.withLock({ $0.contains(key) }) { return .listed }
+            guard let help = await readHelp(resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment)
+            else { return .unread }
+            guard helpListsNoSessionPersistence(help) else { return .notListed }
+            _ = binariesAcceptingNoSessionPersistence.withLock { $0.insert(key) }
+            return .listed
+        }
+
+        /// A failed run whose CLI refused the flag. `error` is what the run
+        /// reports when there is no second run.
+        struct NoSessionPersistenceRejected: Error {
+            let error: ProtocolError
+        }
+
+        /// Whether a run given the flag was refused it: a line of its stderr
+        /// or reported message names the flag together with unknown-option
+        /// wording, ignoring case. Both are read because the message prefers
+        /// a result event's reason over stderr.
+        static func rejectedNoSessionPersistence(stderr: String, message: String, arguments: [String]) -> Bool {
+            guard arguments.contains(noSessionPersistenceFlag) else { return false }
+            let wordings = ["unknown option", "unrecognized option", "unrecognised option", "invalid option"]
+            return [stderr, message].contains { text in
+                text.split(whereSeparator: \.isNewline).contains { line in
+                    let line = line.lowercased()
+                    return line.contains(noSessionPersistenceFlag) && wordings.contains { line.contains($0) }
+                }
+            }
         }
 
         /// How long a CLI sent SIGTERM may take to exit before it gets SIGKILL.
@@ -79,28 +154,6 @@
         static func removeRunFolders(workingDirectory: URL, projectFolder: URL?) {
             try? FileManager.default.removeItem(at: workingDirectory)
             if let projectFolder { removeIfOnlyEmptyFolders(projectFolder) }
-        }
-
-        /// Whether the installed CLI accepts `noSessionPersistenceFlag`, read
-        /// from its `--help`. Asked rather than assumed because a CLI older
-        /// than the flag rejects an unknown option and would fail every
-        /// protocol. A help text that cannot be read counts as no, which
-        /// keeps the behaviour from before the flag existed.
-        static func cliSupportsNoSessionPersistence(
-            resolvedBin: String, claudeBin: String, environment: [String: String],
-        ) async -> Bool {
-            let key = "\(resolvedBin)\u{0}\(claudeBin)"
-            if binariesAcceptingNoSessionPersistence.withLock({ $0.contains(key) }) { return true }
-            let help = await readHelp(resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment)
-            let supported = help.map(helpListsNoSessionPersistence) ?? false
-            if supported {
-                binariesAcceptingNoSessionPersistence.withLock { _ = $0.insert(key) }
-            } else {
-                logger.warning(
-                    "claude_cli_session_persistence_on helpRead=\(help != nil, privacy: .public) — the CLI keeps this run's session, transcript included",
-                )
-            }
-            return supported
         }
 
         static func helpListsNoSessionPersistence(_ help: String) -> Bool {
