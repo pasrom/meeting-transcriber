@@ -5,10 +5,11 @@
 /// MUST match the node's channel count (a hardcoded 1-channel tap raised an
 /// NSException on a multi-channel device) — is unit-testable without hardware.
 public enum TapFormatResolver {
-    /// The tap format matching the node's bus — i.e. the node's own
-    /// `outputFormat` — or nil when the hardware reported an invalid
-    /// (0 Hz / 0-channel) format, the transient a device change can briefly
-    /// expose. Returning the node's own format (rather than reconstructing a
+    /// The tap format matching the node's bus — the node's own format object
+    /// as `MicEngineSession.hardwareFormat` read it (the output side, or the
+    /// input side after a pin, issue #724) — or nil when the hardware reported
+    /// an invalid (0 Hz / 0-channel) format, the transient a device change can
+    /// briefly expose. Returning the node's own format (rather than reconstructing a
     /// `standardFormatWithSampleRate:channels:`) is both correct and robust:
     /// it always matches the bus (issue #379 — a mismatched channel count made
     /// installTapOnBus raise) AND it works for any channel count, whereas

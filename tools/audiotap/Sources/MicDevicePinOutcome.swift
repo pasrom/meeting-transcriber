@@ -105,6 +105,28 @@ enum MicDevicePinOutcome: Equatable, Sendable {
         }
     }
 
+    /// `AudioUnitSetProperty` answered `noErr`. That says the call was
+    /// accepted, not which device the unit is on now (see `.set`). False
+    /// without a pin and after a refused one, when the unit never moved.
+    ///
+    /// Weaker than `isConfirmed` on purpose. It decides which side of the
+    /// input node the tap format is read from (issue #724): after an accepted
+    /// set the node's `outputFormat(forBus: 0)` still answers the format of
+    /// the device the engine was bound to before, while `inputFormat(forBus:
+    /// 0)` answers whichever device the unit is on now, adopted, unconfirmed
+    /// or another one. Measured on macOS 27 with a 48 kHz mono default and a
+    /// virtual 44.1 kHz stereo device pinned: the output side stayed 48 kHz
+    /// mono, a tap built from it installed, the engine reported running and
+    /// no buffer ever arrived; built from the input side the same tap
+    /// delivered. With a renegotiation of the bus in between, the stale
+    /// format fails `installTap` with a format mismatch instead. Not yet
+    /// confirmed on the field setup (built-in microphone configured, AirPods
+    /// in the 24 kHz call profile as the system input).
+    var wasAccepted: Bool {
+        guard case let .set(_, _, status, _) = self else { return false }
+        return status == noErr
+    }
+
     /// What the capture log prints, nil when there is nothing to say. Spelled
     /// out here rather than at the logging site so the wording is under test;
     /// the caller decides only the level.

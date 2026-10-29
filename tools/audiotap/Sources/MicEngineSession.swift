@@ -177,7 +177,12 @@ final class MicEngineSession: MicEngineSessionProviding {
             logger.log(level: pinOutcome.level, "\(line, privacy: .public)")
         }
 
-        return inputNode.outputFormat(forBus: 0)
+        // After an accepted pin, `outputFormat` still answers the previous
+        // device's format and a tap built from it never delivers (issue #724,
+        // see `wasAccepted`). Unpinned, the read is the one it always was.
+        return pinOutcome.wasAccepted
+            ? inputNode.inputFormat(forBus: 0)
+            : inputNode.outputFormat(forBus: 0)
     }
 
     /// Point the unit at the configured device, then ask the unit where it
@@ -217,9 +222,10 @@ final class MicEngineSession: MicEngineSessionProviding {
     }
 
     /// The device the unit is on and the hardware-side format of its input
-    /// element, read straight from the unit (the format
-    /// `inputNode.outputFormat(forBus: 0)` reports, without the engine). Start
-    /// and change are read the same way so they compare like with like.
+    /// element, read straight from the unit (the side
+    /// `inputNode.inputFormat(forBus: 0)` reports, without the engine; the
+    /// node's output side goes stale after a pin, issue #724). Start and
+    /// change are read the same way so they compare like with like.
     private static func configuration(of unit: AudioUnit) -> MicEngineConfiguration? {
         guard let deviceID = currentDeviceID(of: unit) else { return nil }
         var format = AudioStreamBasicDescription()

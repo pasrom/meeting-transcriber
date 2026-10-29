@@ -187,6 +187,35 @@ final class MicDeviceDiagnosticsTests: XCTestCase {
         XCTAssertNil(MicDevicePinOutcome.notRequested.deviceToReport(systemDefault: nil))
     }
 
+    // MARK: - Which side of the input node the tap format comes from
+
+    /// After any accepted set the node's output side is stale and the tap has
+    /// to come from the input side (issue #724). Weaker than `isConfirmed` on
+    /// purpose: an unconfirmed or unadopted set is judged the same way, since
+    /// the input side answers whichever device the unit is on.
+    func testAnyAcceptedSetReadsTheInputSide() {
+        for actual: AudioDeviceID? in [42, 104, nil] {
+            let outcome = MicDevicePinOutcome.set(
+                uid: builtIn, requested: 42, status: noErr, actual: actual,
+            )
+            XCTAssertTrue(outcome.wasAccepted, "accepted with read-back \(String(describing: actual))")
+        }
+    }
+
+    /// Without a pin, or after a refused one, the unit never moved and the
+    /// read stays the one it always was.
+    func testNoPinAndARefusedPinLeftTheUnitWhereItWas() {
+        let unmoved: [MicDevicePinOutcome] = [
+            .notRequested,
+            .unresolvedUID("GoneWithTheHeadset"),
+            .set(uid: builtIn, requested: 42, status: kAudioUnitErr_InvalidPropertyValue, actual: 104),
+        ]
+
+        for outcome in unmoved {
+            XCTAssertFalse(outcome.wasAccepted, "\(outcome)")
+        }
+    }
+
     // MARK: - What the line reads like
 
     func testTheLineNamesTheDeviceItWasGiven() {
