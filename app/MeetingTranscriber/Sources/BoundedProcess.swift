@@ -16,6 +16,12 @@ final class BoundedProcess: Sendable {
 
     static let defaultTerminationGrace: TimeInterval = 1
 
+    /// `timeout` in seconds for messages and logs: "300" for a whole number
+    /// of seconds, "0.2" otherwise.
+    static func label(for timeout: TimeInterval) -> String {
+        timeout == timeout.rounded() ? String(format: "%.0f", timeout) : String(format: "%.1f", timeout)
+    }
+
     private struct State {
         var exited = false
         var stopped = false

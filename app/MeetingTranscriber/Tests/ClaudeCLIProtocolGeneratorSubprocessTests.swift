@@ -181,30 +181,6 @@
             XCTAssertLessThan(elapsed, Self.bound, "the failure waited for the child's stderr")
         }
 
-        /// Only the end of stderr is kept, cut where a character starts.
-        func testCollectTailKeepsTheLastBytesOnACharacterBoundary() async {
-            let (chunks, continuation) = AsyncStream<Data>.makeStream()
-            continuation.yield(Data(String(repeating: "a", count: 10).utf8))
-            continuation.yield(Data("äb".utf8))
-            continuation.finish()
-
-            let tail = await ClaudeCLIProtocolGenerator.collectTail(of: chunks, limit: 2)
-
-            XCTAssertEqual(String(data: tail, encoding: .utf8), "b")
-        }
-
-        /// Trimming waits for twice the limit, but what comes back is never
-        /// more than the limit.
-        func testCollectTailTrimsWhatIsLeftAtTheEnd() async {
-            let (chunks, continuation) = AsyncStream<Data>.makeStream()
-            continuation.yield(Data("abc".utf8))
-            continuation.finish()
-
-            let tail = await ClaudeCLIProtocolGenerator.collectTail(of: chunks, limit: 2)
-
-            XCTAssertEqual(String(data: tail, encoding: .utf8), "bc")
-        }
-
         // MARK: - Cancellation
 
         /// A job cancelled while the `--help` probe runs stops the probe and

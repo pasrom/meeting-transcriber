@@ -48,6 +48,12 @@ final class BoundedProcessTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 2)
     }
 
+    /// A whole number of seconds is shown without a fraction.
+    func testLabelShowsAFractionOnlyWhenThereIsOne() {
+        XCTAssertEqual(BoundedProcess.label(for: 300), "300")
+        XCTAssertEqual(BoundedProcess.label(for: 0.2), "0.2")
+    }
+
     private static func shell(_ command: String) -> Process {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")

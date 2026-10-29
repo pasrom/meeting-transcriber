@@ -27,7 +27,7 @@
         let terminationGrace: TimeInterval
 
         /// How long the CLI's output is still read after it has exited
-        /// (`outputDrainGraceSeconds` in production).
+        /// (`ProcessOutput.defaultDrainGrace` in production).
         let outputDrainGrace: TimeInterval
 
         init(
@@ -36,7 +36,7 @@
             anthropicAPIKey: String? = nil,
             timeout: TimeInterval = Self.timeoutSeconds,
             terminationGrace: TimeInterval = BoundedProcess.defaultTerminationGrace,
-            outputDrainGrace: TimeInterval = Self.outputDrainGraceSeconds,
+            outputDrainGrace: TimeInterval = ProcessOutput.defaultDrainGrace,
         ) {
             self.claudeBin = claudeBin
             self.language = language
