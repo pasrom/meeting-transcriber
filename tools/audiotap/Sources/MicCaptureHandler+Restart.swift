@@ -225,6 +225,18 @@ extension MicCaptureHandler {
         }
     }
 
+    /// An engine configuration change restarts the engine unless it left a
+    /// pinned engine as it started; see `MicConfigurationChangePolicy` for
+    /// why that case exists. Main queue.
+    func handleEngineConfigChange() {
+        if MicConfigurationChangePolicy.decide(session.configurationChangeReading()) == .ignore {
+            logger.info("Mic: engine configuration change left the pinned engine unchanged; keeping it")
+            return
+        }
+        logger.info("Mic: engine configuration changed (format/route change)")
+        handleDeviceChange(fromConfigurationChange: true)
+    }
+
     func removeConfigChangeObserver() {
         guard let observer = configChangeObserver else { return }
         NotificationCenter.default.removeObserver(observer)

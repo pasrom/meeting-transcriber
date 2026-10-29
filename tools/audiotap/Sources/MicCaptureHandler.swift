@@ -432,11 +432,6 @@ public class MicCaptureHandler: @unchecked Sendable {
         logger.info("Mic: listening for engine configuration changes")
     }
 
-    private func handleEngineConfigChange() {
-        logger.info("Mic: engine configuration changed (format/route change)")
-        handleDeviceChange(fromConfigurationChange: true)
-    }
-
     private func handleDefaultInputDeviceChanged() {
         logger.info("Mic: default input device changed")
         handleDeviceChange()

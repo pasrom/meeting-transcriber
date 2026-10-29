@@ -63,6 +63,11 @@ protocol MicEngineSessionProviding: AnyObject {
 
     /// Remove the tap if one was installed, stop and reset the engine.
     func teardown()
+
+    /// What an engine configuration change finds on this engine, for
+    /// `MicConfigurationChangePolicy`; nil when no pin was confirmed or the
+    /// unit could not be read. Main queue, like `teardown`.
+    func configurationChangeReading() -> MicConfigurationChangeReading?
 }
 
 extension MicEngineSessionProviding {
@@ -71,6 +76,12 @@ extension MicEngineSessionProviding {
     /// real session can know, and only the diagnostics ask, so a fake that is
     /// about something else does not have to care.
     var boundInputDevice: MicInputDevice? {
+        nil
+    }
+
+    /// A session that cannot read its unit restarts on every configuration
+    /// change.
+    func configurationChangeReading() -> MicConfigurationChangeReading? {
         nil
     }
 }
@@ -93,6 +104,12 @@ final class MicEngineSession: MicEngineSessionProviding {
     /// `teardown` has stopped and reset it, and one cheap read on a unit that
     /// is known to be up buys that question away.
     private var pinOutcome: MicDevicePinOutcome = .notRequested
+
+    /// The input unit and its configuration once a pin was confirmed; nil
+    /// otherwise and after `teardown`. The unit is kept so a configuration
+    /// change is answered without going back through `engine.inputNode`, the
+    /// getter that can wedge (issue #588); it lives as long as `engine`.
+    private var pinned: (uid: String, unit: AudioUnit, atStart: MicEngineConfiguration)?
 
     var notificationObject: AnyObject {
         engine
@@ -143,6 +160,10 @@ final class MicEngineSession: MicEngineSessionProviding {
         let inputNode = engine.inputNode
 
         pinOutcome = pin(deviceUID: deviceUID, on: inputNode)
+        if pinOutcome.isConfirmed, let uid = deviceUID, let unit = inputNode.audioUnit,
+           let atStart = Self.configuration(of: unit) {
+            pinned = (uid, unit, atStart)
+        }
         if let line = pinOutcome.logLine {
             // A pin that was refused, or accepted and then not adopted, means
             // the recording is running on a microphone the user did not choose.
@@ -176,14 +197,13 @@ final class MicEngineSession: MicEngineSessionProviding {
         )
         return .set(
             uid: uid, requested: deviceID, status: status,
-            actual: Self.currentDeviceID(of: inputNode),
+            actual: Self.currentDeviceID(of: audioUnit),
         )
     }
 
     /// The device the unit is currently on. Optional rather than force-unwrapped
     /// because a diagnostic must never be the thing that crashes a recording.
-    private static func currentDeviceID(of inputNode: AVAudioInputNode) -> AudioDeviceID? {
-        guard let audioUnit = inputNode.audioUnit else { return nil }
+    private static func currentDeviceID(of audioUnit: AudioUnit) -> AudioDeviceID? {
         var deviceID = AudioDeviceID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         let status = AudioUnitGetProperty(
@@ -194,6 +214,33 @@ final class MicEngineSession: MicEngineSessionProviding {
         )
         guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
         return deviceID
+    }
+
+    /// The device the unit is on and the hardware-side format of its input
+    /// element, read straight from the unit (the format
+    /// `inputNode.outputFormat(forBus: 0)` reports, without the engine). Start
+    /// and change are read the same way so they compare like with like.
+    private static func configuration(of unit: AudioUnit) -> MicEngineConfiguration? {
+        guard let deviceID = currentDeviceID(of: unit) else { return nil }
+        var format = AudioStreamBasicDescription()
+        var formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        guard AudioUnitGetProperty(
+            unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 1,
+            &format, &formatSize,
+        ) == noErr else { return nil }
+
+        return MicEngineConfiguration(
+            deviceID: deviceID, sampleRate: format.mSampleRate, channelCount: format.mChannelsPerFrame,
+            formatID: format.mFormatID, formatFlags: format.mFormatFlags, bitsPerChannel: format.mBitsPerChannel,
+        )
+    }
+
+    func configurationChangeReading() -> MicConfigurationChangeReading? {
+        guard let pinned, let now = Self.configuration(of: pinned.unit) else { return nil }
+        return MicConfigurationChangeReading(
+            atStart: pinned.atStart, now: now, isRunning: engine.isRunning,
+            pinnedDevicePresent: Self.deviceIDForUID(pinned.uid) == pinned.atStart.deviceID,
+        )
     }
 
     func installTap(format: AVAudioFormat, block: @escaping AVAudioNodeTapBlock) throws {
@@ -225,6 +272,7 @@ final class MicEngineSession: MicEngineSessionProviding {
         // A session is one engine's lifetime, so the device it was on stops
         // being an answer here rather than becoming a stale one.
         pinOutcome = .notRequested
+        pinned = nil
 
         // Hold a strong reference to the engine for a grace period so any
         // in-flight `AVAudioIOUnit::IOUnitPropertyListener` blocks that

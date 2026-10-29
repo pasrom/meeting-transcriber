@@ -23,6 +23,9 @@ final class ScriptedMicSession: MicEngineSessionProviding, @unchecked Sendable {
     /// object, which it does right after adopting this session and before it
     /// judges the epoch that adoption ended.
     var deliverOnObserverInstall = false
+    /// What a configuration change finds when it asks the engine. Nil by
+    /// default, which restarts on every change.
+    var configurationReading: MicConfigurationChangeReading?
 
     let entered = XCTestExpectation(description: "attempt entered the wedging call")
     private let wedge = DispatchSemaphore(value: 0)
@@ -59,6 +62,10 @@ final class ScriptedMicSession: MicEngineSessionProviding, @unchecked Sendable {
     }
 
     func start() {}
+
+    func configurationChangeReading() -> MicConfigurationChangeReading? {
+        configurationReading
+    }
 
     func teardown() {
         engineMutex.lock()

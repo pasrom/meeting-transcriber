@@ -63,6 +63,14 @@ enum MicDevicePinOutcome: Equatable, Sendable {
         }
     }
 
+    /// The set was accepted and the unit reports exactly the requested
+    /// device. False in every other case, including an accepted set that
+    /// could not be read back.
+    var isConfirmed: Bool {
+        guard case let .set(_, requested, status, actual) = self else { return false }
+        return status == noErr && actual == requested
+    }
+
     /// Which device the diagnostics name.
     ///
     /// The rule lives here, apart from the CoreAudio lookups that feed it, so
