@@ -64,4 +64,22 @@ final class CompositeMeetingDetectorTests: XCTestCase {
         mic.processProvider = { [] }
         XCTAssertFalse(composite.isMeetingActive(meeting))
     }
+
+    // MARK: - Call IDs (issue #765)
+
+    private let teamsMeeting = DetectedMeeting(
+        pattern: .teams, windowTitle: "Call", ownerName: "MSTeams", windowPID: 55,
+    )
+
+    func testCallIDsComeFromTheStrategyThatCanIdentifyCalls() {
+        let assertions = assertionDetector(active: true)
+        assertions.assertionProvider = { PowerAssertionFixture.teamsCall(7, 8, pid: 55) }
+        let composite = CompositeMeetingDetector([assertions, micDetector()])
+        XCTAssertEqual(composite.activeCalls(teamsMeeting), .ids(["7", "8"]))
+    }
+
+    func testCallIDsAreUnknownWhenNoStrategyCanIdentifyCalls() {
+        let composite = CompositeMeetingDetector([micDetector()])
+        XCTAssertEqual(composite.activeCalls(teamsMeeting), .unidentified)
+    }
 }

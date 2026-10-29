@@ -316,6 +316,18 @@ final class CompositeMeetingDetector: MeetingDetecting {
         detectors.contains { $0.isMeetingActive(meeting) }
     }
 
+    /// Union of the strategies that can identify calls.
+    func activeCalls(_ meeting: DetectedMeeting) -> ActiveCalls {
+        var union: Set<String> = []
+        var identified = false
+        for detector in detectors {
+            guard case let .ids(ids) = detector.activeCalls(meeting) else { continue }
+            identified = true
+            union.formUnion(ids)
+        }
+        return identified ? .ids(union) : .unidentified
+    }
+
     func reset(appName: String?) {
         for detector in detectors {
             detector.reset(appName: appName)

@@ -28,6 +28,11 @@ class PowerAssertionDetector: MeetingDetecting {
         /// `processNames`: a pattern can accept a fixed list of processes and
         /// still identify each of them separately.
         let identity: Identity
+        /// Whether each call gets assertions with fresh IDs, so an unseen ID
+        /// means a new call (issue #765). On only where measured (Teams):
+        /// Zoom also matches by type, and an unrelated assertion recreated
+        /// mid-call would split one call in two.
+        let assertionIdentifiesCall: Bool
 
         /// `.shared`: every process in `processNames` is the same app, so the
         /// pattern's own `appName` is the identity (Teams is one app whether it
@@ -52,6 +57,7 @@ class PowerAssertionDetector: MeetingDetecting {
             keywords: [String],
             assertionTypes: [String] = [],
             identity: Identity = .shared,
+            assertionIdentifiesCall: Bool = false,
         ) {
             // A process-open pattern MUST identify per process. Shared identity
             // would file every unclaimed process on the machine into one
@@ -70,6 +76,7 @@ class PowerAssertionDetector: MeetingDetecting {
             self.keywords = keywords
             self.assertionTypes = assertionTypes
             self.identity = processNames.isEmpty ? .perProcess : identity
+            self.assertionIdentifiesCall = assertionIdentifiesCall
             loweredKeywords = keywords.map { $0.lowercased() }
         }
 
@@ -121,6 +128,7 @@ class PowerAssertionDetector: MeetingDetecting {
             appName: "Microsoft Teams",
             processNames: ["MSTeams", "Microsoft Teams", "Microsoft Teams WebView", "Microsoft Teams (work or school)"],
             keywords: ["call in progress"],
+            assertionIdentifiesCall: true,
         ),
         AssertionPattern(
             appName: "Zoom",
@@ -347,28 +355,44 @@ class PowerAssertionDetector: MeetingDetecting {
     }
 
     func isMeetingActive(_ meeting: DetectedMeeting) -> Bool {
-        let assertions = assertionProvider()
-        for (_, pidAssertions) in assertions {
-            for assertion in pidAssertions {
-                guard let processName = assertion["Process Name"] as? String,
-                      let assertName = assertion["AssertName"] as? String else {
-                    continue
-                }
-                let assertType = assertion["AssertType"] as? String ?? ""
-                // Same rule as `checkOnce`: an assertion keeps this meeting
-                // alive only when it resolves to the SAME identity. Comparing
-                // `pattern.appName` would compare a category token against a
-                // process name for `.perProcess` patterns, so nothing would ever
-                // match and every browser recording would stop at the end grace.
-                for pattern in patterns
-                    where pattern.identifies(meetingAppName: meeting.pattern.appName, processName: processName) {
-                    if matchAssertion(processName: processName, assertName: assertName, assertType: assertType, pattern: pattern) {
-                        return true
-                    }
-                }
-            }
+        assertionProvider().values.joined().contains { matchingPattern(of: $0, for: meeting) != nil }
+    }
+
+    func activeCalls(_ meeting: DetectedMeeting) -> ActiveCalls {
+        let identifiesCall = patterns.contains { pattern in
+            pattern.assertionIdentifiesCall
+                && pattern.identifies(meetingAppName: meeting.pattern.appName, processName: meeting.ownerName)
         }
-        return false
+        guard identifiesCall else { return .unidentified }
+        var ids: Set<String> = []
+        for assertion in assertionProvider().values.joined() {
+            guard let pattern = matchingPattern(of: assertion, for: meeting) else { continue }
+            // An assertion without an ID, or from a pattern whose IDs do not
+            // track calls, cannot be told apart from the next call's.
+            guard pattern.assertionIdentifiesCall, let id = assertion["AssertionId"] as? Int else {
+                return .unidentified
+            }
+            ids.insert(String(id))
+        }
+        return .ids(ids)
+    }
+
+    /// The pattern through which `assertion` keeps `meeting` alive, if any.
+    private func matchingPattern(of assertion: [String: Any], for meeting: DetectedMeeting) -> AssertionPattern? {
+        guard let processName = assertion["Process Name"] as? String,
+              let assertName = assertion["AssertName"] as? String else {
+            return nil
+        }
+        let assertType = assertion["AssertType"] as? String ?? ""
+        // Same rule as `checkOnce`: an assertion keeps this meeting
+        // alive only when it resolves to the SAME identity. Comparing
+        // `pattern.appName` would compare a category token against a
+        // process name for `.perProcess` patterns, so nothing would ever
+        // match and every browser recording would stop at the end grace.
+        return patterns.first { pattern in
+            pattern.identifies(meetingAppName: meeting.pattern.appName, processName: processName)
+                && matchAssertion(processName: processName, assertName: assertName, assertType: assertType, pattern: pattern)
+        }
     }
 
     func reset(appName: String? = nil) {
