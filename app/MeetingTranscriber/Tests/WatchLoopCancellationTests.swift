@@ -49,7 +49,7 @@ final class WatchLoopCancellationTests: XCTestCase {
             pollInterval: 0.01,
             endGracePeriod: 100, // never ends naturally during the test window
             maxDuration: 100,
-            noMic: true,
+            noMic: { true },
             sleepProvider: sleepProvider,
         )
         loop.permissionChecker = {
@@ -122,7 +122,7 @@ final class WatchLoopCancellationTests: XCTestCase {
             pollInterval: 0.01,
             endGracePeriod: 100,
             maxDuration: 100,
-            noMic: true,
+            noMic: { true },
             sleepProvider: sleepProvider,
         )
         loop.permissionChecker = {

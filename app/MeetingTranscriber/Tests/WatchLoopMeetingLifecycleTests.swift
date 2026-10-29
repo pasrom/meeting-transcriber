@@ -21,7 +21,7 @@ final class WatchLoopMeetingLifecycleTests: XCTestCase {
             pipelineQueue: queue,
             pollInterval: 0.05,
             endGracePeriod: 0.1,
-            noMic: true,
+            noMic: { true },
             nowProvider: { clock.now },
             sleepProvider: { await clock.sleep(for: $0) },
         )

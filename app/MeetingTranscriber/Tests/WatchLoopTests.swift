@@ -134,7 +134,7 @@ final class WatchLoopTests: XCTestCase {
 
     func testNoMicDefault() {
         let loop = makeLoop()
-        XCTAssertFalse(loop.noMic)
+        XCTAssertFalse(loop.noMic())
     }
 
     // MARK: - PipelineQueue Configuration

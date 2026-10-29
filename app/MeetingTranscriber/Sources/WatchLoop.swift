@@ -44,8 +44,12 @@ class WatchLoop {
     let pollInterval: TimeInterval
     let endGracePeriod: TimeInterval
     let maxDuration: TimeInterval
-    let noMic: Bool
-    let micDeviceUID: String?
+    /// "No Microphone" and the mic picker (nil = system default), read at recording
+    /// start: a loop lives as long as watching does, so snapshots went stale (issue #706).
+    let noMic: () -> Bool
+    let micDeviceUID: () -> String?
+    /// The running recording's source, nil once it ended; see `activeRecordingSource`.
+    private(set) var recordingSource: RecordingSource?
     /// Dynamic accessor — read at recording-start time so toggling the setting
     /// at runtime takes effect on the next recording without an app restart.
     let verboseDiagnostics: () -> Bool
@@ -120,8 +124,8 @@ class WatchLoop {
         pollInterval: TimeInterval = 3.0,
         endGracePeriod: TimeInterval = 15.0,
         maxDuration: TimeInterval = 14400,
-        noMic: Bool = false,
-        micDeviceUID: String? = nil,
+        noMic: @escaping () -> Bool = { false },
+        micDeviceUID: @escaping () -> String? = { nil },
         verboseDiagnostics: @escaping () -> Bool = { false },
         recordOnly: @escaping () -> Bool = { false },
         recordOnlyDestination: @escaping () -> RecordOnlyDestination = {
@@ -228,7 +232,7 @@ class WatchLoop {
 
     func startManualRecording(pid: pid_t, appName: String, title: String) async throws {
         try await startManualRecording(
-            source: .forApp(pid: pid, noMic: noMic),
+            source: .forApp(pid: pid, noMic: noMic()),
             appName: appName,
             title: title,
         )
@@ -259,6 +263,8 @@ class WatchLoop {
             logger.warning("Cannot start manual recording — already recording")
             return
         }
+        // Read before the awaits, like the `noMic` behind `source`.
+        let micDeviceUID = micDeviceUID()
 
         // Gate on what this path needs, not on overall health (see `blocksRecording`).
         let health = await permissionChecker()
@@ -282,6 +288,7 @@ class WatchLoop {
         )
 
         let pid = source.appPID
+        recordingSource = source
         activeRecorder = recorder
         update { next in
             next.phase = .recording
@@ -415,13 +422,15 @@ class WatchLoop {
         let title = Self.cleanTitle(meeting.windowTitle)
 
         // --- Recording ---
+        let source = RecordingSource.forApp(pid: meeting.windowPID, noMic: noMic())
+        let micDeviceUID = micDeviceUID()
+        recordingSource = source
         update { next in
             next.phase = .recording
             next.currentMeeting = meeting
             next.detail = "Recording: \(title)"
         }
 
-        let source = RecordingSource.forApp(pid: meeting.windowPID, noMic: noMic)
         let recorder = await recorderFactory()
         // A quit or a stop that came while the recorder was being built: a
         // recording started now would end at once, empty, as an error.
@@ -564,6 +573,7 @@ class WatchLoop {
         if manualRecordingInfo != next.manualRecordingInfo {
             manualRecordingInfo = next.manualRecordingInfo
         }
+        if oldPhase == .recording, next.phase != .recording { recordingSource = nil }
         if oldPhase != next.phase {
             onStateChange?(oldPhase, next.phase)
         }

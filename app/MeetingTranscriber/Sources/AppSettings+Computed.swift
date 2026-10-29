@@ -10,6 +10,12 @@ extension AppSettings {
         whisperLanguage.isEmpty ? nil : whisperLanguage
     }
 
+    /// Pinned microphone as an optional value. Empty string means the system
+    /// default input device.
+    var micDeviceUIDOrNil: String? {
+        micDeviceUID.isEmpty ? nil : micDeviceUID
+    }
+
     /// Parakeet language hint as an optional value. Empty string means the
     /// engine should auto-detect the language.
     var parakeetLanguageOrNil: String? {

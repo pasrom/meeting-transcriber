@@ -120,7 +120,7 @@ final class RecordOnlyE2ETests: XCTestCase { // swiftlint:disable:this balanced_
             pollInterval: 0.05,
             endGracePeriod: 0.1,
             maxDuration: 10,
-            noMic: false,
+            noMic: { false },
             recordOnly: { true },
             recordOnlyDestination: { .unscoped(outputDir) },
             notifier: notifier,

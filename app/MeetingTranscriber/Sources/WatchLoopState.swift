@@ -34,20 +34,20 @@ extension WatchLoop {
     /// The channel-health monitors need it: they see only per-channel levels,
     /// and -120 dBFS means both "never opened" and "stopped delivering".
     ///
-    /// Derived from the fields the `.recording` transition publishes, not
-    /// mirrored in a stored property. `apply` commits every field before it
-    /// calls `onStateChange`, and the channel-health wiring reads this from
-    /// inside that callback, so a stored mirror would have to be assigned
-    /// before the phase in every start path. Missing that in one of them reads
-    /// as nil and silently disables the indicator for that whole path, which is
-    /// not a failure any of the flags downstream can distinguish from a quiet
+    /// The source the recorder was started with, not one rebuilt from the
+    /// settings: "No Microphone" is read live (issue #706), so rebuilding would
+    /// follow a toggle made mid-recording and describe channels that were
+    /// never opened.
+    ///
+    /// Both start paths assign `recordingSource` before the `.recording`
+    /// transition. `apply` commits every field before it calls
+    /// `onStateChange`, and the channel-health wiring reads this from inside
+    /// that callback, so a path that assigned it later would read nil there and
+    /// silently disable the indicator for that whole path, which is not a
+    /// failure any of the flags downstream can distinguish from a quiet
     /// recording.
     var activeRecordingSource: RecordingSource? {
-        guard state == .recording else { return nil }
-        if let info = manualRecordingInfo {
-            return info.pid.map { .forApp(pid: $0, noMic: noMic) } ?? .micOnly
-        }
-        return currentMeeting.map { .forApp(pid: $0.windowPID, noMic: noMic) }
+        state == .recording ? recordingSource : nil
     }
 
     /// Value-type view of the five observable fields. Useful for tests,

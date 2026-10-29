@@ -50,6 +50,7 @@ final class WatchLoopActiveRecorderTests: XCTestCase {
     /// whole path, which is exactly what a stored mirror invites.
     func testTheRecordingSourceIsReadableFromTheRecordingTransition() async throws {
         let recorder = CapturingRecorder()
+        let noMic: () -> Bool = { true }
         let loop = WatchLoop(
             detector: ImmediatelyInactiveDetector(),
             recorderFactory: { recorder },
@@ -57,7 +58,7 @@ final class WatchLoopActiveRecorderTests: XCTestCase {
             pollInterval: 0.01,
             endGracePeriod: 0.01,
             maxDuration: 10,
-            noMic: true,
+            noMic: noMic,
         )
         loop.permissionChecker = {
             HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
@@ -86,6 +87,7 @@ final class WatchLoopActiveRecorderTests: XCTestCase {
 
     func testHandleMeetingExposesActiveRecorderForChannelHealthPolling() async throws {
         let recorder = CapturingRecorder()
+        let noMic: () -> Bool = { true }
         let loop = WatchLoop(
             detector: ImmediatelyInactiveDetector(),
             recorderFactory: { recorder },
@@ -93,7 +95,7 @@ final class WatchLoopActiveRecorderTests: XCTestCase {
             pollInterval: 0.01,
             endGracePeriod: 0.01,
             maxDuration: 10,
-            noMic: true,
+            noMic: noMic,
         )
         loop.permissionChecker = {
             HealthCheckResult(screenRecording: .healthy, microphone: .healthy)

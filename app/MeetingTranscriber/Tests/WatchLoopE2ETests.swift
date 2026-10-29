@@ -80,7 +80,6 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
             pollInterval: 0.05,
             endGracePeriod: 0.1,
             maxDuration: 10,
-            noMic: false,
         )
     }
 

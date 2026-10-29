@@ -16,6 +16,7 @@ final class WatchLoopMeetingStartTimeTests: XCTestCase {
         recorder.mixPath = URL(fileURLWithPath: "/tmp/test_meeting_start_time.wav")
         recorder.recordingStartDate = fixedStart
         let queue = try makeIsolatedQueue()
+        let noMic: () -> Bool = { true }
         let loop = WatchLoop(
             detector: ImmediatelyInactiveDetector(),
             recorderFactory: { recorder },
@@ -23,7 +24,7 @@ final class WatchLoopMeetingStartTimeTests: XCTestCase {
             pollInterval: 0.01,
             endGracePeriod: 0.01,
             maxDuration: 10,
-            noMic: true,
+            noMic: noMic,
         )
         loop.permissionChecker = {
             HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
