@@ -63,79 +63,97 @@ enum FFmpegHelper {
     /// open through `AVAudioFile` with both Vorbis and Opus payloads.
     static let ffmpegOnlyExtensions: Set<String> = ["mkv", "webm"]
 
+    /// How long one conversion may run before ffmpeg is stopped.
     static let timeoutSeconds: TimeInterval = 300
 
     /// Extract audio from a file using ffmpeg, returning 16kHz mono Float32 samples.
     ///
     /// Runs: `ffmpeg -i <input> -vn -ac 1 -ar 16000 -f wav <tempfile>`
     /// Loads the temp WAV via `AudioMixer.loadAudioFileAsFloat32()`, then cleans up.
-    static func loadAudioWithFFmpeg(url: URL) async throws -> (samples: [Float], sampleRate: Int) {
-        guard let ffmpeg = ffmpegPath else {
+    ///
+    /// A cancelled task throws `CancellationError` before ffmpeg is looked
+    /// for, so a job cancelled while an earlier decoder tier ran ends as
+    /// cancelled rather than as ffmpeg missing. `binary` is the detected
+    /// ffmpeg in production.
+    static func loadAudioWithFFmpeg(
+        url: URL, binary: String? = ffmpegPath,
+    ) async throws -> (samples: [Float], sampleRate: Int) {
+        try Task.checkCancellation()
+        guard let ffmpeg = binary else {
             throw AudioMixerError.ffmpegNotAvailable
         }
+        return try await loadAudioWithFFmpeg(url: url, executable: ffmpeg)
+    }
 
+    /// `loadAudioWithFFmpeg(url:)` with the binary and the limits of its run
+    /// given. The run is bounded by `ProcessOutput.run`, with stdin at
+    /// `/dev/null`: ffmpeg reads stdin for keyboard commands, and in the
+    /// process group of its own it runs in, a read from a terminal would
+    /// stop it until the timeout. stderr is always read, but drained after
+    /// the exit only when ffmpeg failed. Throws `AudioMixerError.ffmpegFailed` for a
+    /// non-zero exit or a run stopped at `timeout`, `CancellationError` when
+    /// cancelled, and `AudioMixerError.ffmpegNotAvailable` when ffmpeg cannot
+    /// be started. ffmpeg has exited before the temporary WAV is removed.
+    static func loadAudioWithFFmpeg(
+        url: URL,
+        executable: String,
+        timeout: TimeInterval = timeoutSeconds,
+        terminationGrace: TimeInterval = BoundedProcess.defaultTerminationGrace,
+        drainGrace: TimeInterval = ProcessOutput.defaultDrainGrace,
+    ) async throws -> (samples: [Float], sampleRate: Int) {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ffmpeg_\(UUID().uuidString).wav")
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: ffmpeg)
+        process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = Self.buildConversionArguments(
             input: url,
             output: tempURL,
             sampleRate: AudioConstants.targetSampleRate,
         )
-
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
-        // Suppress stdout (ffmpeg writes to file, not pipe)
         process.standardOutput = FileHandle.nullDevice
-
-        // Set terminationHandler before run() to avoid race
-        let exitStream = AsyncStream<Void> { continuation in
-            process.terminationHandler = { _ in
-                continuation.yield()
-                continuation.finish()
-            }
-        }
-
-        do {
-            try process.run()
-        } catch {
-            throw AudioMixerError.ffmpegNotAvailable
-        }
+        process.standardInput = FileHandle.nullDevice
+        let stderr = ProcessOutput.chunks(of: stderrPipe)
 
         logger.info("ffmpeg converting: \(url.lastPathComponent, privacy: .private)")
-
-        // Read stderr in background to prevent pipe buffer deadlock
-        async let stderrRead = Task.detached {
-            stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        }.value
-
-        // Timeout: terminate ffmpeg if it takes too long
-        let timeoutTask = Task.detached {
-            try await Task.sleep(for: .seconds(timeoutSeconds))
-            if process.isRunning {
-                logger.warning("ffmpeg timed out after \(timeoutSeconds)s, terminating")
-                process.terminate()
-            }
+        let run: (outcome: BoundedProcess.Outcome, output: Data)
+        do {
+            run = try await ProcessOutput.run(
+                BoundedProcess(process, terminationGrace: terminationGrace),
+                timeout: timeout,
+                ending: [stderr.end],
+                drainGrace: drainGrace,
+                drainOnSuccess: false,
+                onCut: { _ in
+                    // A process ffmpeg started still held stderr when the
+                    // drain grace ran out, so the failure message may be
+                    // incomplete.
+                    logger.warning("ffmpeg_stderr_cut_after_exit grace=\(drainGrace, privacy: .public)s")
+                },
+                read: { await ProcessOutput.collectTail(of: stderr.chunks) },
+            )
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            logger.error("ffmpeg_not_started error=\(error.localizedDescription, privacy: .public)")
+            throw AudioMixerError.ffmpegNotAvailable
         }
+        switch run.outcome {
+        case .timedOut:
+            let limit = BoundedProcess.label(for: timeout)
+            logger.error("ffmpeg_timeout limit=\(limit, privacy: .public)s")
+            throw AudioMixerError.ffmpegFailed("timed out after \(limit) s")
 
-        // Await process exit
-        for await _ in exitStream {
+        case let .exited(status) where status != 0:
+            throw Self.makeFFmpegFailureError(stderrData: run.output)
+
+        case .exited:
             break
         }
 
-        timeoutTask.cancel()
-
-        // Always consume stderr to avoid leaking the pipe file descriptor
-        let stderrData = await stderrRead
-
-        if process.terminationStatus != 0 {
-            throw Self.makeFFmpegFailureError(stderrData: stderrData)
-        }
-
-        // Load the temp WAV file
         let samples = try AudioMixer.loadAudioFileAsFloat32(url: tempURL)
         logger.info("ffmpeg extracted \(samples.count) samples at 16kHz from \(url.lastPathComponent, privacy: .private)")
         return (samples, AudioConstants.targetSampleRate)
