@@ -299,9 +299,8 @@ public class AppAudioCapture: @unchecked Sendable {
         // report can be triaged without the user toggling Verbose Audio
         // Logging first — process names like "MSTeams Helper (Renderer)"
         // make issue-#84-style failures actionable.
-        let tapSummary = translated.map { "\(getExecutableName(pid: $0.pid))(\($0.pid))" }.joined(separator: ", ")
         logger.info(
-            "App audio tap: \(translated.count) PID(s) [\(tapSummary, privacy: .public)]",
+            "App audio tap: \(translated.count) PID(s) [\(pidSummary(translated.map(\.pid)), privacy: .public)]",
         )
 
         if debugLogging {

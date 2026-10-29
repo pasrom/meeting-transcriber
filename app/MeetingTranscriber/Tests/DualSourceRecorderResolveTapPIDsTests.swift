@@ -3,8 +3,9 @@ import XCTest
 
 /// Unit tests for `DualSourceRecorder.resolveTapPIDs` — the PID-set decision for
 /// which processes to tap under a meeting-matched root PID. The injected-closure
-/// overload exercises the fallback / passthrough / root-prepend branches without
-/// real running processes; the no-arg form covers the real nil-bundle fallback.
+/// overload exercises the fallback / passthrough / root-prepend branches and the
+/// widen-then-select order without real running processes; the no-arg form
+/// covers the real nil-bundle fallback.
 @MainActor
 final class DualSourceRecorderResolveTapPIDsTests: XCTestCase {
     private let bundle = URL(fileURLWithPath: "/Applications/Teams.app")
@@ -44,5 +45,20 @@ final class DualSourceRecorderResolveTapPIDsTests: XCTestCase {
         // is taken from the first PID (#84, Electron helper children).
         let pids = DualSourceRecorder.resolveTapPIDs(rootPID: 42, bundleURL: bundle) { _ in [100, 200] }
         XCTAssertEqual(pids, [42, 100, 200], "the root must be prepended (first), not appended")
+    }
+
+    func testResolveTapPIDsSelectsAfterWidening() {
+        // Issue #791: the bundle walk returns a Chromium browser's audio
+        // service (200) and video-capture service (300); the responsibility
+        // widening attributes both to the browser and would re-add 300 if the
+        // selection had already removed it. Run in the right order, 300 is gone.
+        let pids = DualSourceRecorder.resolveTapPIDs(
+            rootPID: 42,
+            bundleURL: bundle,
+            enumerate: { _ in [42, 200] },
+            widen: { Array(Set($0 + [300])).sorted() },
+            select: { $0.filter { $0 != 300 } },
+        )
+        XCTAssertEqual(pids, [42, 200], "the helper selection must run on the widened set, not before it")
     }
 }

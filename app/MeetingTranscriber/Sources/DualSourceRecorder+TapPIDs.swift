@@ -14,27 +14,37 @@ extension DualSourceRecorder {
     /// prepending the root if enumeration somehow missed it — order matters
     /// for the aggregate device's cosmetic name tag (root first).
     static func resolveTapPIDs(rootPID: pid_t) -> [pid_t] {
-        // Safari's audio runs in WebKit XPC outside Safari.app — see ProcessResponsibility.tapPIDs.
-        ProcessResponsibility.tapPIDs(rootPID: rootPID, bundleDerived: resolveTapPIDs(
+        resolveTapPIDs(
             rootPID: rootPID,
             bundleURL: NSRunningApplication(processIdentifier: rootPID)?.bundleURL,
             enumerate: ProcessTreeEnumerator.pidsRooted(in:),
-        ))
+            // Safari's audio runs in WebKit XPC outside Safari.app — see ProcessResponsibility.tapPIDs.
+            widen: { ProcessResponsibility.tapPIDs(rootPID: rootPID, bundleDerived: $0) },
+            select: ChromiumHelperFilter.audioRelevantPIDs,
+        )
     }
 
     /// Test seam — same PID-set decision as `resolveTapPIDs(rootPID:)` but with
-    /// the running-app bundle lookup + child-PID enumeration injected, so the
-    /// empty-enumeration fallback, the already-includes-root passthrough, and the
-    /// load-bearing root-prepend ordering (aggregate device name tag; #84) are
-    /// unit-testable without real running processes.
+    /// the running-app bundle lookup, child-PID enumeration, the responsibility
+    /// widening and the helper selection injected, so the empty-enumeration
+    /// fallback, the already-includes-root passthrough, the load-bearing
+    /// root-prepend ordering (aggregate device name tag; #84) and the
+    /// widen-then-select order are unit-testable without real running processes.
+    ///
+    /// `select` runs last on purpose: `widen` attributes a Chromium helper to its
+    /// browser just like the bundle walk does, so a helper dropped before the
+    /// widening would be re-added by it (issue #791, `ChromiumHelperFilter`).
     static func resolveTapPIDs(
         rootPID: pid_t,
         bundleURL: URL?,
         enumerate: (URL) -> [pid_t],
+        widen: ([pid_t]) -> [pid_t] = \.self,
+        select: ([pid_t]) -> [pid_t] = \.self,
     ) -> [pid_t] {
         guard let bundleURL else { return [rootPID] }
         let enumerated = enumerate(bundleURL)
         // Empty `enumerated` needs no guard: it falls through to `[rootPID] + []`, the root alone.
-        return enumerated.contains(rootPID) ? enumerated : [rootPID] + enumerated
+        let bundleDerived = enumerated.contains(rootPID) ? enumerated : [rootPID] + enumerated
+        return select(widen(bundleDerived))
     }
 }

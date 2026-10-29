@@ -150,6 +150,13 @@ public func getExecutableName(pid: pid_t) -> String {
     return stringFromNullTerminated(name)
 }
 
+/// `Name(pid), Name(pid)` for a log line. The tap summary and the helpers the
+/// tap leaves out (`ChromiumHelperFilter`) are read side by side, so both
+/// render through this one function.
+func pidSummary(_ pids: [pid_t]) -> String {
+    pids.map { "\(getExecutableName(pid: $0))(\($0))" }.joined(separator: ", ")
+}
+
 /// Decodes a null-terminated `[CChar]` into a Swift `String`. Replaces the
 /// deprecated `String(cString: [CChar])` initializer with the buffer-pointer
 /// variant; the precondition is that `buffer` is non-empty (the only callers
