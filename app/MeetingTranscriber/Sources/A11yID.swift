@@ -43,6 +43,10 @@ enum A11yID {
         "jobRetryButton.\(index)"
     }
 
+    /// Menu bar items that answer an open browser consent prompt.
+    static let menuRecordPendingConsent = "menuRecordPendingConsent"
+    static let menuDeclinePendingConsent = "menuDeclinePendingConsent"
+
     static let recordOnlyBanner = "recordOnlyBanner"
     static let transcriptionSection = "transcriptionSection"
     static let protocolSection = "protocolSection"

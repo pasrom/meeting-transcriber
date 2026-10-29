@@ -26,6 +26,12 @@ struct MenuBarView: View {
     let onProcessFiles: () -> Void
     let onDismissJob: (UUID) -> Void
     let onQuit: () -> Void
+    /// The browser whose recording-consent prompt is open, nil when none is.
+    /// Mirrors the notification in the menu so a prompt hidden by Focus, screen
+    /// sharing or a notification style of None can still be answered (issue #814).
+    var pendingConsentApp: String?
+    /// Answers the open prompt: true records, false declines.
+    var onAnswerPendingConsent: (Bool) -> Void = { _ in }
 
     private var state: TranscriberState {
         status?.state ?? .idle
@@ -57,6 +63,7 @@ struct MenuBarView: View {
         statusHeader
         meetingInfo
         errorInfo
+        consentPrompt
 
         Divider()
 
@@ -117,6 +124,28 @@ struct MenuBarView: View {
                 .font(.caption)
                 .foregroundStyle(.red)
                 .padding(.horizontal, 4)
+        }
+    }
+
+    @ViewBuilder private var consentPrompt: some View {
+        if let app = pendingConsentApp {
+            Divider()
+            Text("Meeting detected in \(app)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+            Button {
+                onAnswerPendingConsent(true)
+            } label: {
+                Label("Record This Meeting", systemImage: "record.circle.fill")
+            }
+            .accessibilityIdentifier(A11yID.menuRecordPendingConsent)
+            Button {
+                onAnswerPendingConsent(false)
+            } label: {
+                Label("Don't Record", systemImage: "xmark.circle")
+            }
+            .accessibilityIdentifier(A11yID.menuDeclinePendingConsent)
         }
     }
 

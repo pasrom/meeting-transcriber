@@ -64,6 +64,17 @@ extension WatchLoop {
         return approvedConsentMeeting
     }
 
+    /// Answer the parked prompt from the menu-bar items that mirror it.
+    /// Routed through the notifier like an answer to the notification itself,
+    /// so `finishConsent` runs (and logs) the same way either way; a "no" here
+    /// is a decline with its full cooldown, not an expiry. Returns whether a
+    /// prompt was waiting.
+    @discardableResult
+    func answerParkedConsent(granted: Bool) -> Bool {
+        guard pendingConsentApp != nil else { return false }
+        return notifier.resolveBrowserConsent(granted: granted)
+    }
+
     /// Answer a parked prompt as a decline, for `stop()`. Routed through the
     /// notifier so the real prompt's parked continuation completes; without it
     /// the question would linger for the rest of its timeout.

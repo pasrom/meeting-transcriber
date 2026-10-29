@@ -120,6 +120,26 @@ final class MenuBarViewTests: XCTestCase {
         XCTAssertThrowsError(try body.find(text: "Name Speakers..."))
     }
 
+    // MARK: - Pending browser consent (issue #814)
+
+    func testPendingConsentItemAnswersThePrompt() throws {
+        var answers: [Bool] = []
+        var sut = try makeView(status: makeStatus(state: .watching), isWatching: true)
+        sut.pendingConsentApp = "Google Chrome"
+        sut.onAnswerPendingConsent = { answers.append($0) }
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Meeting detected in Google Chrome"))
+        try body.find(viewWithAccessibilityIdentifier: A11yID.menuRecordPendingConsent).button().tap()
+        try body.find(viewWithAccessibilityIdentifier: A11yID.menuDeclinePendingConsent).button().tap()
+        XCTAssertEqual(answers, [true, false])
+    }
+
+    func testPendingConsentItemHiddenWithoutAPrompt() throws {
+        let sut = try makeView(status: makeStatus(state: .watching), isWatching: true)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: A11yID.menuRecordPendingConsent))
+    }
+
     // MARK: - Detail text
 
     func testDetailShownWhenNonEmpty() throws {

@@ -520,6 +520,18 @@ final class AppState {
         watching.watchLoop?.isManualRecording == true
     }
 
+    /// The browser whose consent prompt is open, for the menu-bar item that
+    /// mirrors it. Hoisted for the same type-check-budget reason as
+    /// `isManualRecording`.
+    var pendingConsentApp: String? {
+        watching.watchLoop?.pendingConsentApp
+    }
+
+    /// Answer the open consent prompt from the menu bar.
+    func answerPendingConsent(granted: Bool) {
+        watching.watchLoop?.answerParkedConsent(granted: granted)
+    }
+
     /// Menu-bar **top-half** red tint: mic channel silent, OR both channels
     /// silent (`recordingSilentActive` paints both halves). Hoisted out of the
     /// menu-bar body for the same type-check-budget reason as

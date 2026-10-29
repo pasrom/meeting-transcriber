@@ -357,6 +357,49 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
         loop.stop()
     }
 
+    /// The menu-bar item answers the same parked prompt as the notification
+    /// (issue #814): a prompt hidden by Focus or screen sharing must still be
+    /// answerable, and through the same `finishConsent` checks.
+    func testGrantingFromTheMenuBarStartsTheParkedRecording() async throws {
+        let spy = ParkingConsentSpy()
+        let (loop, recorder) = try makeLoop(detector: SwappableDetector(browserMeeting()), spy: spy)
+        XCTAssertFalse(loop.answerParkedConsent(granted: true), "nothing to answer before a prompt parks")
+        loop.start()
+
+        await waitFor(spy.isParked)
+        XCTAssertEqual(loop.pendingConsentApp, "Google Chrome")
+
+        XCTAssertTrue(loop.answerParkedConsent(granted: true))
+        await waitFor(recorder.startCalled, timeout: .seconds(3))
+        XCTAssertTrue(recorder.startCalled, "a menu-bar grant must record")
+        XCTAssertEqual(spy.resolutions, [true])
+        XCTAssertNil(loop.pendingConsentApp, "the answered prompt must no longer show in the menu")
+        loop.stop()
+    }
+
+    /// A "no" from the menu is an explicit decline, not a prompt left to
+    /// expire: nothing records and the long decline cooldown applies.
+    func testDecliningFromTheMenuBarRecordsNothing() async throws {
+        let spy = ParkingConsentSpy()
+        let (loop, recorder) = try makeLoop(detector: SwappableDetector(browserMeeting()), spy: spy)
+        loop.start()
+
+        await waitFor(spy.isParked)
+        XCTAssertTrue(loop.answerParkedConsent(granted: false))
+        await waitFor(loop.pendingConsentApp == nil)
+        XCTAssertEqual(spy.resolutions, [false])
+        XCTAssertFalse(recorder.startCalled, "a menu-bar decline must not record")
+        guard case let .suppressed(until) = loop.consentPolicy.decision(app: "Google Chrome", now: Date()) else {
+            XCTFail("a menu-bar decline must suppress the next prompt")
+            return
+        }
+        XCTAssertGreaterThan(
+            until.timeIntervalSinceNow, BrowserConsentPolicy().expiryCooldown,
+            "a decline's cooldown, not the short one an expiry gets",
+        )
+        loop.stop()
+    }
+
     /// The point of telling the two apart: a prompt nobody answered must not
     /// buy the same silence as a refusal. The user was away, not opposed.
     func testAnExpiredPromptIsAskedAgainSoon() async throws {
