@@ -258,7 +258,7 @@ class PowerAssertionDetector: MeetingDetecting {
         // not misses, and the diagnostic must not call them "did not match"
         // (issue #814); it reads this set, not `hitsThisRound`.
         var matchedThisRound: Set<String> = []
-        var firstMatch: [String: (pid: Int32, processName: String, pattern: AssertionPattern)] = [:]
+        var firstMatch: [String: Hit] = [:]
 
         for (pid, pidAssertions) in assertions {
             for assertion in pidAssertions {
@@ -302,28 +302,36 @@ class PowerAssertionDetector: MeetingDetecting {
 
         logUnmatchedWatchedAssertions(assertions, matched: matchedThisRound)
 
-        // Check confirmation threshold
-        for (key, hits) in consecutiveHits {
-            if hits >= confirmationCount, let match = firstMatch[key] {
-                let meetingPattern = Self.meetingIdentity(
-                    pattern: match.pattern, processName: match.processName,
-                )
-                let title = lookupWindowTitle(for: meetingPattern, pattern: match.pattern)
-                    ?? Self.placeholderTitle(appName: meetingPattern.appName)
-                return DetectedMeeting(
-                    pattern: meetingPattern,
-                    windowTitle: title,
-                    ownerName: match.processName,
-                    windowPID: match.pid,
-                )
-            }
-        }
-
-        // Reset counters for identities with no hit this round
+        // Reset counters for identities with no hit this round. Before the
+        // pick, not after: returning a meeting used to skip this, and the
+        // parked browser call is returned on every poll, so a stale single
+        // hit survived for minutes and the next hit confirmed in one poll
+        // instead of `confirmationCount` consecutive ones.
         for key in consecutiveHits.keys where !hitsThisRound.contains(key) {
             consecutiveHits[key] = 0
         }
 
+        // Check confirmation threshold. One meeting per poll, and not in
+        // dictionary order: a browser call whose consent prompt is parked
+        // re-confirms on every poll and is skipped by the loop each time, so
+        // the slot must go to a meeting that can start now (issue #814). The
+        // `firstMatch` entries are this round's hits, so they are the
+        // candidates.
+        let confirmed = firstMatch.compactMap { key, match -> Candidate? in
+            guard consecutiveHits[key, default: 0] >= confirmationCount else { return nil }
+            let identity = Self.meetingIdentity(pattern: match.pattern, processName: match.processName)
+            return Candidate(key: key, match: match, identity: identity)
+        }
+        if let pick = confirmed.min(by: { Self.startRank($0) < Self.startRank($1) }) {
+            let title = lookupWindowTitle(for: pick.identity, pattern: pick.match.pattern)
+                ?? Self.placeholderTitle(appName: pick.identity.appName)
+            return DetectedMeeting(
+                pattern: pick.identity,
+                windowTitle: title,
+                ownerName: pick.match.processName,
+                windowPID: pick.match.pid,
+            )
+        }
         return nil
     }
 
@@ -365,6 +373,23 @@ class PowerAssertionDetector: MeetingDetecting {
                 requiresRecordingConsent: category?.requiresRecordingConsent ?? true,
             )
         }
+    }
+
+    /// What one poll recorded for an identity's first matching assertion.
+    private typealias Hit = (pid: Int32, processName: String, pattern: AssertionPattern)
+
+    /// An identity over the confirmation threshold in one poll.
+    private struct Candidate {
+        let key: String
+        let match: Hit
+        let identity: AppMeetingPattern
+    }
+
+    /// Order among the candidates of one poll: a meeting that records without
+    /// asking before one that waits for consent, then by identity key, so the
+    /// pick is the same from one poll to the next.
+    private static func startRank(_ candidate: Candidate) -> (Int, String) {
+        (candidate.identity.requiresRecordingConsent ? 1 : 0, candidate.key)
     }
 
     func isMeetingActive(_ meeting: DetectedMeeting) -> Bool {

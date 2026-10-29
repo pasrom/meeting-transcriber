@@ -73,13 +73,15 @@ enum PowerAssertionFixture {
         assertions((1, processName, assertName))
     }
 
-    /// A detector watching only the browser category, with the window list
-    /// stubbed empty so a test opts in to titles explicitly.
-    static func browserDetector(confirmationCount: Int = 1) -> PowerAssertionDetector {
+    /// A detector watching the browser category (and whatever else `watching`
+    /// names), with the window list stubbed empty so a test opts in to titles
+    /// explicitly.
+    static func browserDetector(
+        watching: [String] = [AppMeetingPattern.browserMeetings.appName],
+        confirmationCount: Int = 1,
+    ) -> PowerAssertionDetector {
         let detector = PowerAssertionDetector(
-            patterns: PowerAssertionDetector.patterns(
-                watching: [AppMeetingPattern.browserMeetings.appName],
-            ),
+            patterns: PowerAssertionDetector.patterns(watching: watching),
             confirmationCount: confirmationCount,
         )
         detector.windowListProvider = { [] }

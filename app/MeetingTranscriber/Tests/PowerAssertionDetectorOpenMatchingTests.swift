@@ -186,4 +186,73 @@ final class PowerAssertionDetectorOpenMatchingTests: XCTestCase {
         )
         XCTAssertEqual(keys, [])
     }
+
+    // MARK: - One meeting per poll: the one that can start now
+
+    func testANativeCallIsReturnedAheadOfAConsentGatedBrowserCall() {
+        // A browser call whose consent prompt is parked re-confirms every poll
+        // for as long as the prompt is open (up to five minutes), and the poll
+        // loop skips it each time. `checkOnce` returns ONE meeting, and when
+        // two have reached the threshold the pick used to fall to dictionary
+        // order: in half of all sessions a Teams call starting during that
+        // window was never returned, and never recorded. The meeting that can
+        // start without asking anyone must win.
+        // Teams and the browser category together, confirming in two polls
+        // like production.
+        let detector = PowerAssertionFixture.browserDetector(
+            watching: ["Microsoft Teams", AppMeetingPattern.browserMeetings.appName], confirmationCount: 2,
+        )
+        detector.assertionProvider = {
+            PowerAssertionFixture.assertions(
+                (7, "Google Chrome", PowerAssertionFixture.webRTC),
+                (9, "MSTeams", "Microsoft Teams Call in progress"),
+            )
+        }
+        XCTAssertNil(detector.checkOnce(), "nothing has reached the confirmation count yet")
+        let meeting = detector.checkOnce()
+        XCTAssertEqual(meeting?.pattern.appName, "Microsoft Teams")
+        XCTAssertEqual(meeting?.pattern.requiresRecordingConsent, false)
+    }
+
+    func testACounterOfAnIdentityNotSeenThisPollResetsWhileAnotherMeetingIsReturned() {
+        // Confirmation means consecutive polls. The parked browser is returned
+        // on every poll, and returning used to skip the reset of counters with
+        // no hit this round, so one Teams hit from minutes ago still counted
+        // and the next single hit confirmed Teams in one poll instead of two.
+        let detector = PowerAssertionFixture.browserDetector(
+            watching: ["Microsoft Teams", AppMeetingPattern.browserMeetings.appName], confirmationCount: 2,
+        )
+        let both = PowerAssertionFixture.assertions(
+            (7, "Google Chrome", PowerAssertionFixture.webRTC),
+            (9, "MSTeams", "Microsoft Teams Call in progress"),
+        )
+        let browserOnly = PowerAssertionFixture.assertions((7, "Google Chrome", PowerAssertionFixture.webRTC))
+
+        detector.assertionProvider = { both }
+        XCTAssertNil(detector.checkOnce(), "one hit each")
+        detector.assertionProvider = { browserOnly }
+        XCTAssertEqual(detector.checkOnce()?.pattern.appName, "Google Chrome", "browser confirmed; Teams had no hit")
+        detector.assertionProvider = { both }
+        XCTAssertEqual(
+            detector.checkOnce()?.pattern.appName, "Google Chrome",
+            "one Teams hit after a gap is not a confirmation",
+        )
+        XCTAssertEqual(detector.checkOnce()?.pattern.appName, "Microsoft Teams", "the second consecutive hit is")
+    }
+
+    func testTwoConsentGatedCallsAreReturnedInAStableOrder() {
+        // No native call to prefer: two browsers confirm together, and the
+        // pick must still be the same on every poll, or the gate would park a
+        // prompt for one and then see the other, forever alternating.
+        let detector = PowerAssertionFixture.browserDetector(confirmationCount: 1)
+        detector.assertionProvider = {
+            PowerAssertionFixture.assertions(
+                (7, "Microsoft Edge", PowerAssertionFixture.webRTC),
+                (9, "Brave Browser", PowerAssertionFixture.webRTC),
+            )
+        }
+        for _ in 0 ..< 5 {
+            XCTAssertEqual(detector.checkOnce()?.pattern.appName, "Brave Browser")
+        }
+    }
 }
