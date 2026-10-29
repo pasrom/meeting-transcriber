@@ -240,7 +240,7 @@ final class AppSettings {
     /// Overlay-window visibility only. Live transcription still runs when the
     /// master toggle is on; this setting only hides `LiveCaptionsOverlay`.
     /// Default on, so existing users keep seeing the bar. Missing UserDefaults
-    /// key reads as true (`defaults.object(forKey:) as? Bool ?? true`).
+    /// key reads as true (`defaults.bool(forKey:default: true)`).
     var liveCaptionsOverlayEnabled: Bool {
         didSet { defaults.set(liveCaptionsOverlayEnabled, forKey: "liveCaptionsOverlayEnabled") }
     }
@@ -620,28 +620,28 @@ final class AppSettings {
         self.claudeAPIKeyAccount = claudeAPIKeyAccount
         self.defaultOutputDir = defaultOutputDir
 
-        watchTeams = defaults.object(forKey: "watchTeams") as? Bool ?? true
-        watchZoom = defaults.object(forKey: "watchZoom") as? Bool ?? true
-        watchWebex = defaults.object(forKey: "watchWebex") as? Bool ?? true
-        watchBrowserMeetings = defaults.object(forKey: "watchBrowserMeetings") as? Bool ?? false
+        watchTeams = defaults.bool(forKey: "watchTeams", default: true)
+        watchZoom = defaults.bool(forKey: "watchZoom", default: true)
+        watchWebex = defaults.bool(forKey: "watchWebex", default: true)
+        watchBrowserMeetings = defaults.bool(forKey: "watchBrowserMeetings", default: false)
         consentDeniedApps = defaults.stringArray(forKey: "consentDeniedApps") ?? []
-        watchWeChat = defaults.object(forKey: "watchWeChat") as? Bool ?? false
-        watchTencentMeeting = defaults.object(forKey: "watchTencentMeeting") as? Bool ?? false
-        watchFaceTime = defaults.object(forKey: "watchFaceTime") as? Bool ?? false
-        watchWhatsApp = defaults.object(forKey: "watchWhatsApp") as? Bool ?? false
+        watchWeChat = defaults.bool(forKey: "watchWeChat", default: false)
+        watchTencentMeeting = defaults.bool(forKey: "watchTencentMeeting", default: false)
+        watchFaceTime = defaults.bool(forKey: "watchFaceTime", default: false)
+        watchWhatsApp = defaults.bool(forKey: "watchWhatsApp", default: false)
         watchCustomApps = defaults.stringArray(forKey: "watchCustomApps") ?? []
-        autoWatch = defaults.object(forKey: "autoWatch") as? Bool ?? false
+        autoWatch = defaults.bool(forKey: "autoWatch", default: false)
 
         pollInterval = defaults.object(forKey: "pollInterval") as? Double ?? 3.0
         endGrace = defaults.object(forKey: "endGrace") as? Double ?? 15.0
-        noMic = defaults.object(forKey: "noMic") as? Bool ?? false
-        recordOnly = defaults.object(forKey: "recordOnly") as? Bool ?? false
+        noMic = defaults.bool(forKey: "noMic", default: false)
+        recordOnly = defaults.bool(forKey: "recordOnly", default: false)
         micDeviceUID = defaults.object(forKey: "micDeviceUID") as? String ?? ""
         micName = defaults.object(forKey: "micName") as? String ?? "Me"
-        perChannelIndicatorEnabled = defaults.object(forKey: "perChannelIndicatorEnabled") as? Bool ?? true
-        silentTrackWatchdogEnabled = defaults.object(forKey: "silentTrackWatchdogEnabled") as? Bool ?? false
-        liveTranscriptionEnabled = defaults.object(forKey: "liveTranscriptionEnabled") as? Bool ?? false
-        liveCaptionsOverlayEnabled = defaults.object(forKey: "liveCaptionsOverlayEnabled") as? Bool ?? true
+        perChannelIndicatorEnabled = defaults.bool(forKey: "perChannelIndicatorEnabled", default: true)
+        silentTrackWatchdogEnabled = defaults.bool(forKey: "silentTrackWatchdogEnabled", default: false)
+        liveTranscriptionEnabled = defaults.bool(forKey: "liveTranscriptionEnabled", default: false)
+        liveCaptionsOverlayEnabled = defaults.bool(forKey: "liveCaptionsOverlayEnabled", default: true)
         liveCaptionsSize = defaults.string(forKey: "liveCaptionsSize")
             .flatMap(LiveCaptionsSize.init(rawValue:)) ?? .medium
         asymmetricSilenceWarningSeconds = max(30, min(300, defaults.object(forKey: "asymmetricSilenceWarningSeconds") as? Double ?? 90))
@@ -650,7 +650,7 @@ final class AppSettings {
             .flatMap(TranscriptionEngineSetting.init(rawValue:))) ?? .whisperKit
         whisperKitModel = defaults.object(forKey: "whisperKitModel") as? String
             ?? "openai_whisper-large-v3-v20240930_turbo"
-        whisperKitCustomModelEnabled = defaults.object(forKey: "whisperKitCustomModelEnabled") as? Bool ?? false
+        whisperKitCustomModelEnabled = defaults.bool(forKey: "whisperKitCustomModelEnabled", default: false)
         whisperKitCustomRepo = defaults.string(forKey: "whisperKitCustomRepo") ?? ""
         whisperKitCustomVariant = defaults.string(forKey: "whisperKitCustomVariant") ?? ""
         whisperKitCustomModelFolderPath = defaults.string(forKey: "whisperKitCustomModelFolderPath") ?? ""
@@ -660,16 +660,16 @@ final class AppSettings {
         parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
         customVocabularyBookmark = defaults.data(forKey: "customVocabularyBookmark")
-        whisperKitVocabularyPromptEnabled = defaults.object(forKey: "whisperKitVocabularyPromptEnabled") as? Bool ?? false
+        whisperKitVocabularyPromptEnabled = defaults.bool(forKey: "whisperKitVocabularyPromptEnabled", default: false)
         let savedTerminologyRules = defaults.string(forKey: "terminologyRulesText") ?? ""
         terminologyRulesText = savedTerminologyRules
         terminologyRulesValidation = TerminologyNormalizer(rulesText: savedTerminologyRules).diagnostics
         customVocabularyValidation = .notConfigured
-        diarize = defaults.object(forKey: "diarize") as? Bool ?? true
-        vadEnabled = defaults.object(forKey: "vadEnabled") as? Bool ?? false
+        diarize = defaults.bool(forKey: "diarize", default: true)
+        vadEnabled = defaults.bool(forKey: "vadEnabled", default: false)
         vadThreshold = defaults.object(forKey: "vadThreshold") as? Float ?? 0.5
-        echoCancellationEnabled = defaults.object(forKey: "echoCancellationEnabled") as? Bool ?? false
-        echoDedupEnabled = defaults.object(forKey: "echoDedupEnabled") as? Bool ?? false
+        echoCancellationEnabled = defaults.bool(forKey: "echoCancellationEnabled", default: false)
+        echoDedupEnabled = defaults.bool(forKey: "echoDedupEnabled", default: false)
         diarizerMode = (defaults.string(forKey: "diarizerMode")
             .flatMap(DiarizerMode.init(rawValue:))) ?? .offline
         numSpeakers = defaults.object(forKey: "numSpeakers") as? Int ?? 0
@@ -687,9 +687,9 @@ final class AppSettings {
             claudeBin = defaults.object(forKey: "claudeBin") as? String ?? "claude"
         #endif
         protocolLanguage = defaults.string(forKey: "protocolLanguage") ?? "German"
-        includeFullTranscriptInProtocol = defaults.object(forKey: "includeFullTranscriptInProtocol") as? Bool ?? true
-        saveRawTranscriptSeparately = defaults.object(forKey: "saveRawTranscriptSeparately") as? Bool ?? true
-        useAITitleForFilenames = defaults.object(forKey: "useAITitleForFilenames") as? Bool ?? false
+        includeFullTranscriptInProtocol = defaults.bool(forKey: "includeFullTranscriptInProtocol", default: true)
+        saveRawTranscriptSeparately = defaults.bool(forKey: "saveRawTranscriptSeparately", default: true)
+        useAITitleForFilenames = defaults.bool(forKey: "useAITitleForFilenames", default: false)
 
         openAIEndpoint = defaults.object(forKey: "openAIEndpoint") as? String
             ?? Self.defaultOpenAIEndpoint
@@ -698,9 +698,9 @@ final class AppSettings {
 
         // Migrate legacy "audioDebugLogging" key (renamed to "verboseDiagnostics" 2026-05-04).
         // New key wins if both are set; legacy value seeds the new key on first launch.
-        if let new = defaults.object(forKey: "verboseDiagnostics") as? Bool {
+        if let new = defaults.flag(forKey: "verboseDiagnostics") {
             verboseDiagnostics = new
-        } else if let legacy = defaults.object(forKey: "audioDebugLogging") as? Bool {
+        } else if let legacy = defaults.flag(forKey: "audioDebugLogging") {
             verboseDiagnostics = legacy
             defaults.set(legacy, forKey: "verboseDiagnostics")
         } else {
@@ -713,10 +713,10 @@ final class AppSettings {
             defaults.removeObject(forKey: "audioDebugLogging")
         }
         #if !APPSTORE
-            debugRPCEnabled = defaults.object(forKey: "debugRPCEnabled") as? Bool ?? false
+            debugRPCEnabled = defaults.bool(forKey: "debugRPCEnabled", default: false)
         #endif
-        checkForUpdates = defaults.object(forKey: "checkForUpdates") as? Bool ?? true
-        includePreReleases = defaults.object(forKey: "includePreReleases") as? Bool ?? false
+        checkForUpdates = defaults.bool(forKey: "checkForUpdates", default: true)
+        includePreReleases = defaults.bool(forKey: "includePreReleases", default: false)
         refreshCustomVocabularyValidation()
         refreshWhisperKitCustomModelValidation()
     }
@@ -742,8 +742,7 @@ final class AppSettings {
                 ?? DiarizerTuningDefaults.warmStartFb,
             minSegmentDuration: defaults.object(forKey: "diarizerMinSegmentDuration") as? Double
                 ?? DiarizerTuningDefaults.minSegmentDurationSeconds,
-            excludeOverlap: defaults.object(forKey: "diarizerExcludeOverlap") as? Bool
-                ?? DiarizerTuningDefaults.excludeOverlap,
+            excludeOverlap: defaults.bool(forKey: "diarizerExcludeOverlap", default: DiarizerTuningDefaults.excludeOverlap),
         )
     }
 }
