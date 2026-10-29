@@ -147,6 +147,44 @@ final class WatchLoopEndPolicyTests: XCTestCase {
         // at t=13 proves the reset.
     }
 
+    // MARK: - New call (issue #765)
+
+    private func callStep(seen: Set<String>, current: ActiveCalls, active: Bool = true) -> WatchLoopEndDecision {
+        WatchLoopEndPolicy.step(
+            config: Self.defaultConfig,
+            now: t0.addingTimeInterval(5),
+            startTime: t0,
+            graceStart: nil,
+            meetingActive: active,
+            callIDsSeen: seen,
+            currentCalls: current,
+        )
+    }
+
+    func testStopsWhenOnlyUnseenCallIDsAreActive() {
+        XCTAssertEqual(callStep(seen: ["1", "2"], current: .ids(["3", "4"])), .stopNewCall)
+    }
+
+    func testContinuesWhileARecordedCallIDIsStillActive() {
+        // An extra assertion next to the recorded call's is not a new call.
+        XCTAssertEqual(callStep(seen: ["1", "2"], current: .ids(["2", "3"])), .continuePolling(graceStart: nil))
+    }
+
+    func testContinuesOnTheFirstObservation() {
+        XCTAssertEqual(callStep(seen: [], current: .ids(["1"])), .continuePolling(graceStart: nil))
+    }
+
+    func testContinuesWhenTheDetectorCannotIdentifyCalls() {
+        XCTAssertEqual(callStep(seen: ["1"], current: .unidentified), .continuePolling(graceStart: nil))
+    }
+
+    func testInactiveMeetingStartsGraceRatherThanSplitting() {
+        XCTAssertEqual(
+            callStep(seen: ["1"], current: .ids([]), active: false),
+            .continuePolling(graceStart: t0.addingTimeInterval(5)),
+        )
+    }
+
     /// Helper: assert decision is `.continuePolling` and return the new
     /// grace-start carried forward to the next poll.
     private func expectContinue(_ decision: WatchLoopEndDecision) -> Date? {

@@ -390,8 +390,9 @@ class WatchLoop {
     /// Record one meeting to completion and return to watching. True means the
     /// loop was cancelled mid-recording and must exit.
     private func runMeeting(_ meeting: DetectedMeeting) async -> Bool {
+        var endReason = MeetingEndReason.ended
         do {
-            try await handleMeeting(meeting)
+            endReason = try await handleMeeting(meeting)
         } catch {
             if error is CancellationError || isNothingRecordedAtQuit(error) { return true }
             let msg = "Recording error: \(error.localizedDescription)"
@@ -404,7 +405,19 @@ class WatchLoop {
             try? await sleepProvider(10)
         }
 
-        detector.reset(appName: meeting.pattern.appName)
+        // After a split the next call is already live. Neither the cooldown
+        // nor a reset applies: the app's confirmation count still stands
+        // from the detection that started this recording, so this poll
+        // confirms the new call at once instead of `confirmationCount` polls
+        // later, which would cut its first seconds.
+        if endReason == .replacedByNewCall {
+            if !Task.isCancelled, let next = detector.checkOnce() {
+                return await runMeeting(next)
+            }
+            detector.reset()
+        } else {
+            detector.reset(appName: meeting.pattern.appName)
+        }
 
         if !Task.isCancelled {
             update { next in
@@ -418,7 +431,8 @@ class WatchLoop {
 
     // MARK: - Meeting Handling
 
-    func handleMeeting(_ meeting: DetectedMeeting) async throws {
+    @discardableResult
+    func handleMeeting(_ meeting: DetectedMeeting) async throws -> MeetingEndReason {
         let title = Self.cleanTitle(meeting.windowTitle)
 
         // --- Recording ---
@@ -461,8 +475,9 @@ class WatchLoop {
         // naming dialog) because the cancellation propagated past `stop()` and
         // `enqueueRecording()`. `recorder.stop()` + `enqueueRecording()` below
         // are synchronous, so they still run to completion on the cancelled task.
+        var endReason = MeetingEndReason.ended
         do {
-            try await waitForMeetingEnd(meeting)
+            endReason = try await waitForMeetingEnd(meeting)
         } catch is CancellationError {
             logger.info("Watch cancelled mid-recording — finalizing in-flight recording")
         }
@@ -479,39 +494,7 @@ class WatchLoop {
                 participants: participants,
             )
         }
-    }
-
-    // MARK: - Meeting End Detection
-
-    func waitForMeetingEnd(_ meeting: DetectedMeeting) async throws {
-        var graceStart: Date?
-        let startTime = nowProvider()
-        let config = WatchLoopEndConfig(
-            maxDuration: maxDuration,
-            endGracePeriod: endGracePeriod,
-        )
-
-        while !Task.isCancelled {
-            let decision = WatchLoopEndPolicy.step(
-                config: config,
-                now: nowProvider(),
-                startTime: startTime,
-                graceStart: graceStart,
-                meetingActive: detector.isMeetingActive(meeting),
-            )
-            switch decision {
-            case .stopMaxDurationExceeded:
-                logger.info("Max recording duration reached (\(Int(self.maxDuration))s)")
-                return
-
-            case .stopGraceExpired:
-                return
-
-            case let .continuePolling(newGraceStart):
-                graceStart = newGraceStart
-            }
-            try await sleepProvider(pollInterval)
-        }
+        return endReason
     }
 
     // MARK: - Helpers

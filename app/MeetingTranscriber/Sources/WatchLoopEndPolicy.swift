@@ -14,6 +14,9 @@ enum WatchLoopEndDecision: Equatable {
     /// Stop because the meeting has been inactive for the full grace
     /// period — the meeting is definitively over.
     case stopGraceExpired
+    /// Stop because every call ID seen is gone and only new ones are active:
+    /// the app moved on to another call within the grace (issue #765).
+    case stopNewCall
 }
 
 /// Static configuration for `WatchLoopEndPolicy.step` — duration limits
@@ -39,17 +42,29 @@ enum WatchLoopEndPolicy {
     ///     if the meeting was active on the last poll (or has never gone
     ///     inactive).
     ///   - meetingActive: Whether the meeting is active right now.
+    ///   - callIDsSeen: Every call ID observed so far during this recording.
+    ///   - currentCalls: The calls observed right now; `.unidentified` leaves
+    ///     the decision to the grace period alone.
     static func step(
         config: WatchLoopEndConfig,
         now: Date,
         startTime: Date,
         graceStart: Date?,
         meetingActive: Bool,
+        callIDsSeen: Set<String> = [],
+        currentCalls: ActiveCalls = .unidentified,
     ) -> WatchLoopEndDecision {
         if now.timeIntervalSince(startTime) > config.maxDuration {
             return .stopMaxDurationExceeded
         }
         if meetingActive {
+            // Deliberately no requirement that a gap was observed first: the
+            // switch can fall between two polls, and an all-new ID set already
+            // proves the recorded call's assertions are gone.
+            if case let .ids(current) = currentCalls, !current.isEmpty, !callIDsSeen.isEmpty,
+               current.isDisjoint(with: callIDsSeen) {
+                return .stopNewCall
+            }
             return .continuePolling(graceStart: nil)
         }
         guard let start = graceStart else {
