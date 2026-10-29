@@ -52,7 +52,7 @@
 
             await assertTimesOut(script: script)
 
-            try assertGone(pidFile)
+            try assertProcessGone(pidFile: pidFile)
             try await assertReaped(childFile)
         }
 
@@ -71,7 +71,7 @@
 
             await assertTimesOut(script: script)
 
-            try assertGone(pidFile)
+            try assertProcessGone(pidFile: pidFile)
             try await assertReaped(childFile)
         }
 
@@ -88,7 +88,7 @@
 
             await assertTimesOut(script: script)
 
-            try assertGone(pidFile)
+            try assertProcessGone(pidFile: pidFile)
         }
 
         /// A prompt larger than the pipe buffer that the CLI never reads,
@@ -109,7 +109,7 @@
 
             await assertTimesOut(script: script, transcript: Self.largeTranscript)
 
-            try assertGone(pidFile)
+            try assertProcessGone(pidFile: pidFile)
         }
 
         /// Stopping a CLI that has not read its whole prompt breaks the pipe
@@ -124,7 +124,7 @@
 
             await assertTimesOut(script: script, transcript: Self.largeTranscript)
 
-            try assertGone(pidFile)
+            try assertProcessGone(pidFile: pidFile)
         }
 
         // MARK: - Runs that end by themselves
@@ -196,7 +196,7 @@
             let generator = makeGenerator(script: script, timeout: 30)
             let run = Task { try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false) }
             let startedBy = Date().addingTimeInterval(5)
-            while Self.readPID(probeFile) == nil, Date() < startedBy {
+            while readPID(probeFile) == nil, Date() < startedBy {
                 try await Task.sleep(for: .milliseconds(20))
             }
             let start = Date()
@@ -206,7 +206,7 @@
 
             XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "got \($0)") }
             XCTAssertLessThan(Date().timeIntervalSince(start), Self.bound)
-            try assertGone(probeFile)
+            try assertProcessGone(pidFile: probeFile)
             XCTAssertFalse(FileManager.default.fileExists(atPath: ranFile.path), "the CLI was started after the cancel")
         }
 
@@ -224,7 +224,7 @@
             let generator = makeGenerator(script: script, timeout: 30)
             let run = Task { try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false) }
             let startedBy = Date().addingTimeInterval(5)
-            while Self.readPID(pidFile) == nil, Date() < startedBy {
+            while readPID(pidFile) == nil, Date() < startedBy {
                 try await Task.sleep(for: .milliseconds(20))
             }
             let start = Date()
@@ -234,7 +234,7 @@
 
             XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "got \($0)") }
             XCTAssertLessThan(Date().timeIntervalSince(start), Self.bound)
-            try assertGone(pidFile)
+            try assertProcessGone(pidFile: pidFile)
         }
 
         // MARK: - Helpers
@@ -278,25 +278,16 @@
             )
         }
 
-        /// The process whose pid `pidFile` holds has exited and been reaped.
-        private func assertGone(_ pidFile: URL, file: StaticString = #filePath, line: UInt = #line) throws {
-            let pid = try XCTUnwrap(Self.readPID(pidFile), "the fake CLI never started", file: file, line: line)
-            let result = kill(pid, 0)
-            let code = errno
-            XCTAssertEqual(result, -1, "the process is still running", file: file, line: line)
-            XCTAssertEqual(code, ESRCH, file: file, line: line)
-        }
-
-        /// Like `assertGone`, for a process the CLI started: no longer this
-        /// process's child once the CLI is gone, it is reaped elsewhere, a
-        /// moment later.
+        /// Like `assertProcessGone`, for a process the CLI started: no longer
+        /// this process's child once the CLI is gone, it is reaped elsewhere,
+        /// a moment later.
         private func assertReaped(_ pidFile: URL, file: StaticString = #filePath, line: UInt = #line) async throws {
-            let pid = try XCTUnwrap(Self.readPID(pidFile), "the child never started", file: file, line: line)
+            let pid = try XCTUnwrap(readPID(pidFile), "the child never started", file: file, line: line)
             let reapedBy = Date().addingTimeInterval(1)
             while kill(pid, 0) == 0, Date() < reapedBy {
                 try await Task.sleep(for: .milliseconds(20))
             }
-            try assertGone(pidFile, file: file, line: line)
+            try assertProcessGone(pidFile: pidFile, file: file, line: line)
         }
 
         /// A fake `claude` that runs `help` for the `--help` probe (by
@@ -304,18 +295,13 @@
         private func makeFakeCLI(
             run: String, help: String = "echo '  -p, --print  Print response and exit'",
         ) throws -> String {
-            let path = try XCTUnwrap(scratch).appendingPathComponent("fake-claude.sh").path
-            let body = """
-            #!/bin/sh
+            try makeExecutableScript(in: XCTUnwrap(scratch), name: "fake-claude.sh", body: """
             if [ "$1" = "--help" ]; then
                 \(help)
                 exit 0
             fi
             \(run)
-            """
-            try body.write(toFile: path, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
-            return path
+            """)
         }
 
         /// Four times a pipe buffer.
@@ -323,10 +309,5 @@
 
         private static let replyLine =
             #"printf '%s\n' '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Protocol body"}}'"#
-
-        private static func readPID(_ file: URL) -> pid_t? {
-            guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
-            return pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
     }
 #endif
