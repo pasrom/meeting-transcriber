@@ -22,7 +22,7 @@ final class SilentTrackWatchdogPolicyTests: XCTestCase {
         guard case .check = policy.tick(ages(energy: zeroRun), now: now) else { return nil }
         guard let result = policy.conclude(anyRunningOutput: running) else { return nil }
         if case .rebuild = result.decision {
-            XCTAssertNil(policy.beginRebuild(ages(energy: zeroRun), sameTap: true, captureRunning: true))
+            XCTAssertNil(policy.beginRebuild(ages(energy: zeroRun), sameTap: true, captureRunning: true, now: now))
             policy.rebuildStarted(now: now)
         }
         return result.decision
@@ -82,7 +82,7 @@ final class SilentTrackWatchdogPolicyTests: XCTestCase {
         XCTAssertNotNil(policy.tick(ages(energy: 61), now: 1000))
         let result = try XCTUnwrap(policy.conclude(anyRunningOutput: true))
         XCTAssertEqual(result.decision, .rebuild)
-        XCTAssertEqual(result.zeroRunSeconds, 61)
+        XCTAssertEqual(result.trigger, .zeroRun(seconds: 61))
         XCTAssertEqual(policy.counters.rebuilds, 0, "a request is not a rebuild until it starts")
     }
 
@@ -173,7 +173,7 @@ final class SilentTrackWatchdogPolicyTests: XCTestCase {
     /// main queue gets to it, signal may be back.
     func testARequestIsDroppedWhenSignalCameBack() {
         var policy = pendingRequest()
-        XCTAssertEqual(policy.beginRebuild(ages(energy: 0.2), sameTap: true, captureRunning: true), .signalReturned)
+        XCTAssertEqual(policy.beginRebuild(ages(energy: 0.2), sameTap: true, captureRunning: true, now: 1000), .signalReturned)
         XCTAssertEqual(policy.counters.rebuilds, 0)
     }
 
@@ -181,13 +181,13 @@ final class SilentTrackWatchdogPolicyTests: XCTestCase {
     /// silent is gone; rebuilding the new one acts on a tap nobody looked at.
     func testARequestIsDroppedWhenTheTapWasReplaced() {
         var policy = pendingRequest()
-        XCTAssertEqual(policy.beginRebuild(ages(energy: 65), sameTap: false, captureRunning: true), .tapReplaced)
+        XCTAssertEqual(policy.beginRebuild(ages(energy: 65), sameTap: false, captureRunning: true, now: 1000), .tapReplaced)
         XCTAssertEqual(policy.counters.rebuilds, 0)
     }
 
     func testARequestIsDroppedWhenCaptureIsNotRunning() {
         var policy = pendingRequest()
-        XCTAssertEqual(policy.beginRebuild(ages(energy: 65), sameTap: true, captureRunning: false), .captureNotRunning)
+        XCTAssertEqual(policy.beginRebuild(ages(energy: 65), sameTap: true, captureRunning: false, now: 1000), .captureNotRunning)
         XCTAssertEqual(policy.counters.rebuilds, 0)
     }
 
@@ -195,7 +195,7 @@ final class SilentTrackWatchdogPolicyTests: XCTestCase {
     /// restart path refused (a restart already in flight) is neither.
     func testARebuildTheRestartPathRefusedIsNotCounted() {
         var policy = pendingRequest()
-        XCTAssertNil(policy.beginRebuild(ages(energy: 65), sameTap: true, captureRunning: true))
+        XCTAssertNil(policy.beginRebuild(ages(energy: 65), sameTap: true, captureRunning: true, now: 1000))
         policy.rebuildNotStarted()
         XCTAssertEqual(policy.counters.rebuilds, 0)
         XCTAssertEqual(policy.unrecoveredStreak, 0)
@@ -205,14 +205,14 @@ final class SilentTrackWatchdogPolicyTests: XCTestCase {
 
     func testBeginningWithoutARequestDoesNothing() {
         var policy = Policy()
-        XCTAssertEqual(policy.beginRebuild(ages(energy: 65), sameTap: true, captureRunning: true), .captureNotRunning)
+        XCTAssertEqual(policy.beginRebuild(ages(energy: 65), sameTap: true, captureRunning: true, now: 1000), .captureNotRunning)
     }
 
     /// The recovery window runs from the moment the rebuild started, not from
     /// the check that asked for it.
     func testTheRecoveryWindowStartsWhenTheRebuildStarts() {
         var policy = pendingRequest()
-        XCTAssertNil(policy.beginRebuild(ages(energy: 70), sameTap: true, captureRunning: true))
+        XCTAssertNil(policy.beginRebuild(ages(energy: 70), sameTap: true, captureRunning: true, now: 1000))
         policy.rebuildStarted(now: 1030)
         XCTAssertEqual(policy.counters.rebuilds, 1)
         XCTAssertEqual(policy.tick(ages(energy: 1), now: 1035), .recovered(rebuild: 1, withinSeconds: 4))
@@ -353,7 +353,7 @@ final class SilentTrackWatchdogPolicyTests: XCTestCase {
         XCTAssertNotNil(policy.tick(ages(energy: 61), now: 1000))
         policy.stop()
         XCTAssertNil(policy.conclude(anyRunningOutput: true))
-        XCTAssertEqual(policy.beginRebuild(ages(energy: 61), sameTap: true, captureRunning: true), .captureNotRunning)
+        XCTAssertEqual(policy.beginRebuild(ages(energy: 61), sameTap: true, captureRunning: true, now: 1000), .captureNotRunning)
         XCTAssertNil(policy.tick(ages(energy: 200), now: 5000))
         XCTAssertEqual(policy.counters.rebuilds, 0)
     }
@@ -456,11 +456,11 @@ final class SilentTrackWatchdogPolicyTests: XCTestCase {
         // Dropped on re-check.
         _ = policy.tick(ages(energy: 61), now: next())
         _ = policy.conclude(anyRunningOutput: true)
-        _ = policy.beginRebuild(ages(energy: 0.2), sameTap: true, captureRunning: true)
+        _ = policy.beginRebuild(ages(energy: 0.2), sameTap: true, captureRunning: true, now: 1000)
         // Refused by the restart path.
         _ = policy.tick(ages(energy: 61), now: next())
         _ = policy.conclude(anyRunningOutput: true)
-        XCTAssertNil(policy.beginRebuild(ages(energy: 61), sameTap: true, captureRunning: true))
+        XCTAssertNil(policy.beginRebuild(ages(energy: 61), sameTap: true, captureRunning: true, now: 1000))
         policy.rebuildNotStarted()
         // Three started, fruitless, then the give-up.
         for _ in 0 ..< 4 {

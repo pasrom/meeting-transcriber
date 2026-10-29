@@ -162,6 +162,17 @@ extension SilentTrackWatchdogWiringTests {
         func pending(at offset: TimeInterval) -> [DispatchWorkItem] {
             lock.withLock { armed.filter { $0.offset == offset && !$0.item.isCancelled }.map(\.item) }
         }
+
+        /// How many deadlines were ever armed at `offset`, cancelled or not.
+        func armedCount(at offset: TimeInterval) -> Int {
+            lock.withLock { armed.filter { $0.offset == offset }.count }
+        }
+    }
+
+    /// Lets an attempt reach the capture it builds for, as `startCapture()`
+    /// can in production. Weak, since the capture owns the attempt.
+    final class CaptureBox: @unchecked Sendable {
+        weak var capture: AppAudioCapture?
     }
 
     /// One capture with its hardware stand-ins and its clock.
@@ -174,11 +185,15 @@ extension SilentTrackWatchdogWiringTests {
 
         /// A capture wired to the stand-ins, not yet started. `readAges` is
         /// what the capture reads as the track's live ages; by default the
-        /// ages of a run still going.
+        /// ages of a run still going. `armsProbes` makes every attempt arm
+        /// the no-first-buffer probes for the tap it builds, as
+        /// `startCapture()` does for every tap in production and the seam
+        /// otherwise leaves out.
         static func make(
             watchdog: Bool = true,
             running: Bool = true,
             hold: Bool = false,
+            armsProbes: Bool = false,
             readAges: @escaping @Sendable () -> ChannelSignalAges = { ages(energy: 65) },
             // After `readAges`, so a trailing closure keeps binding to that one.
             sink: @escaping SilentTrackDiagnostics.Sink = { _, _ in },
@@ -190,23 +205,55 @@ extension SilentTrackWatchdogWiringTests {
             state.running = running
             state.hold = hold
             let readClock: @Sendable () -> TimeInterval = { clock.read() }
-            return Self(
-                capture: AppAudioCapture(
-                    pids: [1],
-                    outputFileDescriptor: FileHandle.nullDevice.fileDescriptor,
-                    attemptBody: { try attempts.run() },
-                    silentTrackDiagnostics: SilentTrackDiagnostics(
-                        probe: state.probe, sink: sink, delayedWork: deadlines.schedule,
-                    ),
-                    silentTrackWatchdog: watchdog,
-                    signalAgesOverride: readAges,
-                    clockOverride: readClock,
+            let box = CaptureBox()
+            let capture = AppAudioCapture(
+                pids: [1],
+                outputFileDescriptor: FileHandle.nullDevice.fileDescriptor,
+                attemptBody: {
+                    let session = try attempts.run()
+                    if armsProbes, let session {
+                        box.capture?.armNoBufferProbes(session.tappedProcesses, aggregateID: session.aggregateID)
+                    }
+                    return session
+                },
+                silentTrackDiagnostics: SilentTrackDiagnostics(
+                    probe: state.probe, sink: sink, delayedWork: deadlines.schedule,
                 ),
-                attempts: attempts,
-                state: state,
-                clock: clock,
-                deadlines: deadlines,
+                silentTrackWatchdog: watchdog,
+                signalAgesOverride: readAges,
+                clockOverride: readClock,
             )
+            box.capture = capture
+            return Self(capture: capture, attempts: attempts, state: state, clock: clock, deadlines: deadlines)
         }
+
+        /// The same, started, from the precondition every wiring test starts
+        /// at. The caller stops it.
+        static func started(
+            watchdog: Bool = true,
+            running: Bool = true,
+            hold: Bool = false,
+            armsProbes: Bool = false,
+            readAges: @escaping @Sendable () -> ChannelSignalAges = { ages(energy: 65) },
+            sink: @escaping SilentTrackDiagnostics.Sink = { _, _ in },
+        ) throws -> Self {
+            let rig = make(
+                watchdog: watchdog, running: running, hold: hold, armsProbes: armsProbes, readAges: readAges, sink: sink,
+            )
+            try rig.capture.start()
+            XCTAssertEqual(rig.attempts.starts, 1, "precondition: start() ran one attempt")
+            return rig
+        }
+    }
+}
+
+extension XCTestCase {
+    /// Let queued main-queue and diagnostics work run, long enough for the
+    /// restart path's 0.5 s initial wait to have fired had anything been
+    /// scheduled. Used only to show that something did NOT happen.
+    func settle(_ seconds: TimeInterval = 1.0) {
+        let settled = expectation(description: "settled")
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { settled.fulfill() }
+        wait(for: [settled], timeout: seconds + 5)
     }
 }

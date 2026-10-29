@@ -103,6 +103,14 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
     /// cancelling a work item is documented as safe from any thread.
     private let armedLock = NSLock()
     private var armedNoBufferProbes: [DispatchWorkItem] = []
+    /// Bumped by every arming and every disarming, under `armedLock`. A probe
+    /// carries the value it was armed with and hands its reading to the
+    /// watchdog only while that is still the current one. Cancelling the work
+    /// item cannot stop a probe whose read is already inside coreaudiod, and a
+    /// first buffer, a teardown or a newer tap's arming that lands during that
+    /// read would otherwise put the tap installed now on trial for a reading
+    /// taken about the one before it (issue #693).
+    private var noBufferArming = 0
 
     /// How a deadline is armed. Nil means the diagnostics queue's own
     /// `asyncAfter`, which is what production uses; a test injects one so it
@@ -134,24 +142,53 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
     /// reason the IOProc block captures its session: a deadline that outlives
     /// its own attempt must report the aggregate it was armed for, not whatever
     /// the newest attempt installed.
+    ///
+    /// `then` hears each probe's reading on the diagnostics queue, after the
+    /// sink has logged it, with the offset the probe fired at: the watchdog
+    /// acts on the read the log shows, not on a second one. Only while the
+    /// probe's arming is still the current one, see `noBufferArming`.
     func scheduleNoBufferProbes(
         _ processes: [TappedProcess],
         aggregateID: AudioObjectID,
         schedule: NoFirstBufferProbeSchedule = .production,
+        then: (@Sendable (_ afterSeconds: TimeInterval, _ snapshot: ProbeSnapshot) -> Void)? = nil,
     ) {
-        cancelNoBufferProbes()
+        // One critical section for disarming the old set, taking the new
+        // arming and storing the new set, so no disarm can land between them.
+        armedLock.lock()
+        let previous = armedNoBufferProbes
+        noBufferArming += 1
+        let arming = noBufferArming
         let items = schedule.offsets.map { offset in
             let reason = schedule.reason(after: offset)
             return (offset, DispatchWorkItem { [weak self] in
-                _ = self?.probeAsync(processes, aggregateID: aggregateID, reason: reason)
+                guard let self else { return }
+                var hook: (@Sendable (ProbeSnapshot) -> Void)?
+                if let then {
+                    hook = { snapshot in
+                        guard self.noBufferProbesStillArmed(arming) else { return }
+                        then(offset, snapshot)
+                    }
+                }
+                probeAsync(processes, aggregateID: aggregateID, reason: reason, then: hook)
             })
         }
-        armedLock.lock()
         armedNoBufferProbes = items.map(\.1)
         armedLock.unlock()
+        for item in previous {
+            item.cancel()
+        }
         for (offset, item) in items {
             arm(item, after: offset, on: queue)
         }
+    }
+
+    /// Whether the probes armed as `arming` are still the armed ones: no
+    /// first buffer, teardown or newer arming has happened since.
+    private func noBufferProbesStillArmed(_ arming: Int) -> Bool {
+        armedLock.lock()
+        defer { armedLock.unlock() }
+        return noBufferArming == arming
     }
 
     /// Disarm every pending probe. Called when the first buffer arrives, which
@@ -161,6 +198,7 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         armedLock.lock()
         let pending = armedNoBufferProbes
         armedNoBufferProbes = []
+        noBufferArming += 1
         armedLock.unlock()
         for item in pending {
             item.cancel()
@@ -219,6 +257,21 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         }
     }
 
+    /// Decide on a no-first-buffer probe's reading. Called on the diagnostics
+    /// queue. The generation is the tap installed when the reading came back:
+    /// an adoption that lands between it and the re-check on the main queue
+    /// drops the request as `tapReplaced`, and the next probe asks again. Nil
+    /// when the policy opened nothing or the watchdog is off. See
+    /// `SilentTrackWatchdogPolicy.noFirstBuffer`.
+    func watchdogNoFirstBuffer(
+        afterSeconds: TimeInterval, anyRunningOutput: Bool, now: TimeInterval,
+    ) -> (result: SilentTrackWatchdogPolicy.CheckResult, generation: Int)? {
+        withWatchdog { watchdog, generation in
+            watchdog?.noFirstBuffer(afterSeconds: afterSeconds, anyRunningOutput: anyRunningOutput, now: now)
+                .map { ($0, generation) }
+        }
+    }
+
     /// Close the open check. Called on the diagnostics queue.
     func watchdogConclude(anyRunningOutput: Bool) -> SilentTrackWatchdogPolicy.CheckResult? {
         withWatchdog { watchdog, _ in watchdog?.conclude(anyRunningOutput: anyRunningOutput) }
@@ -227,11 +280,13 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
     /// Re-check a requested rebuild on the main queue; nil means go ahead.
     /// See `SilentTrackWatchdogPolicy.beginRebuild`.
     func watchdogBeginRebuild(
-        _ ages: ChannelSignalAges, judgedGeneration: Int, captureRunning: Bool,
+        _ ages: ChannelSignalAges, judgedGeneration: Int, captureRunning: Bool, now: TimeInterval,
     ) -> SilentTrackWatchdogPolicy.Abandoned? {
         withWatchdog { watchdog, generation in
             guard watchdog != nil else { return .captureNotRunning }
-            return watchdog?.beginRebuild(ages, sameTap: generation == judgedGeneration, captureRunning: captureRunning)
+            return watchdog?.beginRebuild(
+                ages, sameTap: generation == judgedGeneration, captureRunning: captureRunning, now: now,
+            )
         }
     }
 
@@ -249,9 +304,8 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         withWatchdog { watchdog, _ in watchdog?.restartGaveUp() }
     }
 
-    /// See `SilentTrackWatchdogPolicy.rebuiltTapInstalled`. The clock is
-    /// read under the lock, and only when a rebuild is open.
-    func watchdogRebuiltTapInstalled(now: () -> TimeInterval) -> (rebuild: Int, install: Int)? {
+    /// See `SilentTrackWatchdogPolicy.rebuiltTapInstalled`.
+    func watchdogRebuiltTapInstalled(now: TimeInterval) -> (rebuild: Int, install: Int)? {
         withWatchdog { watchdog, _ in watchdog?.rebuiltTapInstalled(now: now) }
     }
 

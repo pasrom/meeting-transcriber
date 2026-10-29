@@ -245,7 +245,7 @@ public class AppAudioCapture: @unchecked Sendable {
         tapSession = session
         silentTrackDiagnostics.remember(session.tappedProcesses, aggregateID: session.aggregateID)
         actualSampleRate = session.resolvedSampleRate
-        armRebuiltTapDeadline()
+        noteTapInstalledForWatchdog()
     }
 
     /// Follow a device that renegotiated its sample rate without the default
@@ -517,10 +517,9 @@ public class AppAudioCapture: @unchecked Sendable {
         // exists; the triggers land after it (the meeting app opening its own
         // input, a route change mid-call). These are taken while the recording
         // is running and are disarmed by the first buffer, so a healthy capture
-        // emits none of them (issue #693).
-        silentTrackDiagnostics.scheduleNoBufferProbes(
-            session.tappedProcesses, aggregateID: session.aggregateID,
-        )
+        // emits none of them (issue #693). With the watchdog on, a reading that
+        // finds a process rendering also opens a check; see the extension.
+        armNoBufferProbes(session.tappedProcesses, aggregateID: session.aggregateID)
         return session
     }
 

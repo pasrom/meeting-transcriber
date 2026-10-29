@@ -159,7 +159,10 @@ public class AudioCaptureSession {
     /// independently, so the same race stays reachable there. And an app-only
     /// recording opens no microphone at all, so the ordering buys it nothing:
     /// the meeting app opening its own input is the same trigger in the same
-    /// window, which only a delivery check after the fact would catch.
+    /// window, which only a delivery check after the fact can catch. That
+    /// check exists behind the opt-in silent-track watchdog: a no-first-buffer
+    /// probe that finds a tapped process rendering rebuilds the tap, see
+    /// `AppAudioCapture+SilentTrackWatchdog.swift`.
     public func start() throws {
         guard config.appOutputURL != nil || config.micOutputURL != nil else {
             throw AudioCaptureSessionError.noTracksRequested

@@ -36,19 +36,7 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
         hold: Bool = false,
         readAges: @escaping @Sendable () -> ChannelSignalAges = { ages(energy: 65) },
     ) throws -> Rig {
-        let rig = makeRig(watchdog: watchdog, running: running, hold: hold, readAges: readAges)
-        try rig.capture.start()
-        XCTAssertEqual(rig.attempts.starts, 1, "precondition: start() ran one attempt")
-        return rig
-    }
-
-    /// Let queued main-queue and diagnostics work run, long enough for the
-    /// restart path's 0.5 s initial wait to have fired had anything been
-    /// scheduled. Used only to show that something did NOT happen.
-    private func settle(_ seconds: TimeInterval = 1.0) {
-        let settled = expectation(description: "settled")
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { settled.fulfill() }
-        wait(for: [settled], timeout: seconds + 5)
+        try Rig.started(watchdog: watchdog, running: running, hold: hold, readAges: readAges)
     }
 
     // MARK: - The restart path
@@ -355,7 +343,7 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
         settle(0.3)
         XCTAssertEqual(
             rig.capture.silentTrackWatchdogSummary,
-            "watchdogChecks=1 watchdogDeclined=1 watchdogDropped=0 watchdogRebuilds=0 "
+            "watchdogChecks=1 watchdogNoFirstBufferChecks=0 watchdogDeclined=1 watchdogDropped=0 watchdogRebuilds=0 "
                 + "watchdogRecoveries=0 watchdogGaveUp=false watchdogCapped=false watchdogEndedChannel=false "
                 + "watchdogRebuiltTapStalled=0 watchdogSuperseded=0",
         )

@@ -50,7 +50,8 @@ enum SettingsHelp {
     static let silentTrackWatchdog =
         """
         When the app-audio track has carried only silence for \
-        \(Int(SilentTrackWatchdogLimits.secondsOfZerosBeforeRebuild)) seconds while the \
+        \(Int(SilentTrackWatchdogLimits.secondsOfZerosBeforeRebuild)) seconds, or has \
+        delivered nothing at all since the capture started, while the \
         meeting app still reports playing audio, rebuild the capture, at most \
         once every \(Int(SilentTrackWatchdogLimits.secondsBetweenRebuilds)) seconds \
         and \(SilentTrackWatchdogLimits.rebuildsPerRecording) times per recording. \

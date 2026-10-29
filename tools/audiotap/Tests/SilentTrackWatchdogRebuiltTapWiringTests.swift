@@ -19,17 +19,7 @@ final class SilentTrackWatchdogRebuiltTapWiringTests: XCTestCase {
 
     /// Started; the caller stops it.
     private func startedRig() throws -> Rig {
-        let rig = makeRig()
-        try rig.capture.start()
-        XCTAssertEqual(rig.attempts.starts, 1, "precondition: start() ran one attempt")
-        return rig
-    }
-
-    /// Let queued main-queue work run.
-    private func settle(_ seconds: TimeInterval) {
-        let settled = expectation(description: "settled")
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { settled.fulfill() }
-        wait(for: [settled], timeout: seconds + 5)
+        try Rig.started()
     }
 
     private var deadline: TimeInterval {

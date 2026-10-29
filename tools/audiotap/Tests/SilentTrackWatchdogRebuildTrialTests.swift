@@ -17,13 +17,13 @@ final class SilentTrackWatchdogRebuildTrialTests: XCTestCase {
     private func openRebuild(_ policy: inout Policy, at now: TimeInterval) -> Int? {
         guard case .check = policy.tick(ages(energy: 61), now: now),
               case .rebuild? = policy.conclude(anyRunningOutput: true)?.decision,
-              policy.beginRebuild(ages(energy: 61), sameTap: true, captureRunning: true) == nil
+              policy.beginRebuild(ages(energy: 61), sameTap: true, captureRunning: true, now: 1000) == nil
         else { return nil }
         return policy.rebuildStarted(now: now)
     }
 
     private func install(_ policy: inout Policy, at now: TimeInterval) -> (rebuild: Int, install: Int)? {
-        policy.rebuiltTapInstalled { now }
+        policy.rebuiltTapInstalled(now: now)
     }
 
     // MARK: - The deadline
@@ -150,10 +150,11 @@ final class SilentTrackWatchdogRebuildTrialTests: XCTestCase {
     }
 
     /// Neither a tap nor a device change is the watchdog's business while no
-    /// rebuild is open, and the clock is not even read.
+    /// rebuild is open; an installation is only kept for the re-check of a
+    /// no-first-buffer rebuild.
     func testWithNoRebuildOpenNothingIsOnTrialOrTainted() {
         var policy = Policy()
-        XCTAssertNil(policy.rebuiltTapInstalled { XCTFail("clock read with no rebuild open"); return 0 })
+        XCTAssertNil(policy.rebuiltTapInstalled(now: 1000))
         XCTAssertNil(policy.outputDeviceChanged(ages(energy: 1), now: 1000))
         XCTAssertEqual(policy.counters, Policy.Counters())
     }

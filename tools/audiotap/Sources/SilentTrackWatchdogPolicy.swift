@@ -2,7 +2,8 @@ import Foundation
 
 /// Decides when a run of exact zeros on the app track is worth rebuilding the
 /// tap for, how often, whether a rebuild helped, and when to stop trying
-/// (issue #672, part 2).
+/// (issue #672, part 2). The same judgement covers a tap that never delivered
+/// a first buffer at all (issue #693): see `noFirstBuffer`.
 ///
 /// `SilentTrackObserver` is the sensor: it logs when the track enters and
 /// leaves a zero run. This is the actuator's judgement, and it is opt-in,
@@ -99,8 +100,11 @@ struct SilentTrackWatchdogPolicy: Equatable {
 
     struct Counters: Equatable {
         /// Checks opened: zero run past the window, buffers arriving, rate
-        /// limit clear.
+        /// limit clear; or a no-first-buffer probe with the rate limit clear.
         var checks = 0
+        /// The share of `checks` opened by a no-first-buffer probe (issue
+        /// #693) rather than by a zero run.
+        var noFirstBufferChecks = 0
         /// Checks at which no tapped process reported output.
         var declined = 0
         /// Rebuilds the restart path actually started.
@@ -179,8 +183,26 @@ struct SilentTrackWatchdogPolicy: Equatable {
         case capReached
     }
 
+    /// What opened a check, carried through to the rebuild it may become: the
+    /// re-check before acting asks a different question for each, and the log
+    /// line names it.
+    enum Trigger: Equatable {
+        /// The track has been at exact zeros for this long with buffers
+        /// arriving (issue #672).
+        case zeroRun(seconds: TimeInterval)
+        /// No buffer has arrived this long after the device was started, and
+        /// a tapped process reports output (issue #693). The process reading
+        /// is the discriminator: under `kAudioAggregateDeviceTapAutoStartKey`
+        /// an aggregate whose target plays nothing waits, dormant, and starts
+        /// by itself once it does, so no process rendering is declined, not
+        /// rebuilt; a process rendering into an aggregate that has not run an
+        /// IO cycle is the start that never took. `afterSeconds` names the
+        /// probe in the log line.
+        case noFirstBuffer(afterSeconds: TimeInterval)
+    }
+
     struct CheckResult: Equatable {
-        let zeroRunSeconds: TimeInterval
+        let trigger: Trigger
         let decision: Decision
         /// Rebuilds in this zero run that have not restored signal.
         let unrecoveredStreak: Int
@@ -190,6 +212,8 @@ struct SilentTrackWatchdogPolicy: Equatable {
     enum Abandoned: Equatable {
         case signalReturned
         case buffersStopped
+        /// A no-first-buffer rebuild whose tap delivered before it could start.
+        case buffersArrived
         case tapReplaced
         /// Capture stopped, or is between a restart's stop and its adoption.
         /// Also the answer when no request is open, which only a stop causes.
@@ -200,10 +224,10 @@ struct SilentTrackWatchdogPolicy: Equatable {
     /// optionals, so "a check and a rebuild open at once" cannot be written.
     private enum Phase: Equatable {
         case idle
-        /// A check waiting for `conclude`, with the zero run it was opened on.
-        case checking(zeroRun: TimeInterval)
+        /// A check waiting for `conclude`, with what it was opened on.
+        case checking(Trigger)
         /// A rebuild requested and not yet started or dropped.
-        case requested
+        case requested(Trigger)
         /// A rebuild started and waiting for its verdict. `startedAt` opens
         /// its recovery window: the rebuild's start, then the installation of
         /// each tap put on trial for it.
@@ -222,6 +246,9 @@ struct SilentTrackWatchdogPolicy: Equatable {
     /// The installation on trial for the open rebuild, nil while none is
     /// installed (before the first, or after a tap was torn down).
     private var tapOnTrial: Int?
+    /// When the tap installed last was installed; nil before the first, which
+    /// no probe precedes. See `rebuiltTapInstalled`.
+    private var lastInstalledAt: TimeInterval?
     /// An output device changed while the open rebuild waited for its
     /// verdict; see `outputDeviceChanged`.
     private var rebuildTainted = false
@@ -237,12 +264,14 @@ struct SilentTrackWatchdogPolicy: Equatable {
 
     mutating func tick(_ ages: ChannelSignalAges, now: TimeInterval) -> TickEvent? {
         guard !stopped else { return nil }
-        // The tap that was never allowed to hear the app (issue #524).
-        guard let energyAge = ages.secondsSinceLastEnergy else { return nil }
 
         // A started rebuild is judged first, and nothing else happens while
         // its window is open. The level publisher outlives the tap, so an
-        // energy age reaching back before the window is the old run growing.
+        // energy age reaching back before the window is the old run growing,
+        // and a track with no energy on record at all reads the same way: no
+        // signal in the window. That is how a no-first-buffer rebuild into a
+        // far end that renders silence closes, as unrecovered at the window,
+        // by the tick its delivering tap drives.
         //
         // What decides is when the signal arrived, not when a tick saw it:
         // ticks only come with buffers, so after a slow or backed-off restart
@@ -252,7 +281,9 @@ struct SilentTrackWatchdogPolicy: Equatable {
         // as late too; it cannot happen, since a delivering tap ticks every
         // 5 s and is judged inside the window.
         if case let .rebuilding(number, startedAt) = phase {
-            let within = Self.signalInWindow(signalAt: now - energyAge, windowStart: startedAt)
+            let within = ages.secondsSinceLastEnergy.flatMap { energyAge in
+                Self.signalInWindow(signalAt: now - energyAge, windowStart: startedAt)
+            }
             guard within != nil || now - startedAt >= Self.recoveryWindowSeconds else { return nil }
             // An output device change during the rebuild took the verdict
             // away; signal from before it was already credited then.
@@ -269,6 +300,10 @@ struct SilentTrackWatchdogPolicy: Equatable {
             return .unrecovered(rebuild: number, afterSeconds: now - startedAt)
         }
 
+        // The tap that was never allowed to hear the app (issue #524): a
+        // track that has carried no signal at all opens no zero-run check.
+        guard let energyAge = ages.secondsSinceLastEnergy else { return nil }
+
         // Signal inside the last trigger window means the zero run ended. The
         // budget is per run, so it refills here, a decline in between or not.
         if energyAge < Self.triggerZeroRunSeconds {
@@ -276,29 +311,68 @@ struct SilentTrackWatchdogPolicy: Equatable {
             declineLoggedThisRun = false
         }
 
-        guard phase == .idle, !counters.gaveUp, !counters.capped, !counters.endedChannel,
-              let zeroRun = ages.zeroRunWhileBuffersArrive,
-              zeroRun >= Self.triggerZeroRunSeconds
+        guard let zeroRun = ages.zeroRunWhileBuffersArrive,
+              zeroRun >= Self.triggerZeroRunSeconds,
+              openCheck(.zeroRun(seconds: zeroRun), now: now)
         else { return nil }
-        if let lastCheckAt, now - lastCheckAt < Self.minSecondsBetweenChecks { return nil }
-
-        lastCheckAt = now
-        phase = .checking(zeroRun: zeroRun)
-        counters.checks += 1
         return .check(zeroRunSeconds: zeroRun)
+    }
+
+    /// A no-first-buffer probe fired `afterSeconds` after the device was
+    /// started and the tap had still delivered nothing (issue #693). Opens a
+    /// check on the probe's own process reading, which `conclude` then closes,
+    /// Decides on the probe's own process reading, already in hand, the way
+    /// `conclude` decides a zero-run check: declined when nothing renders,
+    /// otherwise a rebuild request under the same phase, budgets and stop as
+    /// a zero run, so a rebuild is never requested twice over. The rate limit
+    /// is spent only on a request: it bounds rebuilds and the reads a
+    /// zero-run check takes to decide one, and this read was taken either
+    /// way, so a declined probe leaves the next one free to ask and the fault
+    /// is acted on by the first probe that sees it. Not a tick: ticks come
+    /// with buffers, and this is about their absence. What the reading
+    /// decides is on `Trigger.noFirstBuffer`. Nil when nothing was opened.
+    mutating func noFirstBuffer(afterSeconds: TimeInterval, anyRunningOutput: Bool, now: TimeInterval) -> CheckResult? {
+        guard openCheck(.noFirstBuffer(afterSeconds: afterSeconds), now: now, rateLimited: anyRunningOutput)
+        else { return nil }
+        counters.noFirstBufferChecks += 1
+        return conclude(anyRunningOutput: anyRunningOutput)
+    }
+
+    /// Open a check for `trigger` if the recording has not stopped, nothing
+    /// is open, the budgets allow and, when `rateLimited`, the rate limit is
+    /// clear; an opening under the rate limit also restarts it.
+    private mutating func openCheck(_ trigger: Trigger, now: TimeInterval, rateLimited: Bool = true) -> Bool {
+        guard !stopped, phase == .idle, !counters.gaveUp, !counters.capped, !counters.endedChannel else { return false }
+        if rateLimited {
+            if let lastCheckAt, now - lastCheckAt < Self.minSecondsBetweenChecks { return false }
+            lastCheckAt = now
+        }
+        phase = .checking(trigger)
+        counters.checks += 1
+        return true
     }
 
     /// Close the open check with what the tapped processes said. Nil when no
     /// check is open, which includes every check `stop()` dropped.
     mutating func conclude(anyRunningOutput: Bool) -> CheckResult? {
-        guard case let .checking(zeroRun) = phase else { return nil }
+        guard case let .checking(trigger) = phase else { return nil }
         phase = .idle
 
         let decision: Decision
         if !anyRunningOutput {
             counters.declined += 1
-            let logged = !declineLoggedThisRun && claimSkipLine()
-            if logged { declineLoggedThisRun = true }
+            // A zero run's declines are one line per run, which is the story
+            // there; a probe's reading is logged by the probe itself, so its
+            // decline only needs the skip-line budget.
+            let logged: Bool
+            switch trigger {
+            case .zeroRun:
+                logged = !declineLoggedThisRun && claimSkipLine()
+                if logged { declineLoggedThisRun = true }
+
+            case .noFirstBuffer:
+                logged = claimSkipLine()
+            }
             decision = .declined(logged: logged)
         } else if unrecoveredStreak >= Self.maxUnrecoveredRebuilds {
             counters.gaveUp = true
@@ -307,25 +381,45 @@ struct SilentTrackWatchdogPolicy: Equatable {
             counters.capped = true
             decision = .capReached
         } else {
-            phase = .requested
+            phase = .requested(trigger)
             decision = .rebuild
         }
-        return CheckResult(zeroRunSeconds: zeroRun, decision: decision, unrecoveredStreak: unrecoveredStreak)
+        return CheckResult(trigger: trigger, decision: decision, unrecoveredStreak: unrecoveredStreak)
     }
 
     /// Re-check a requested rebuild against the present, on the main queue,
     /// right before acting. Nil means go ahead, leaving the request open for
     /// `rebuildStarted` or `rebuildNotStarted`; a reason drops it.
-    mutating func beginRebuild(_ ages: ChannelSignalAges, sameTap: Bool, captureRunning: Bool) -> Abandoned? {
-        guard phase == .requested else { return .captureNotRunning }
+    ///
+    /// The question depends on what opened the request. A zero-run rebuild
+    /// needs the zeros to be going on, buffers included. A no-first-buffer
+    /// rebuild needs the opposite: still no buffer from the tap installed
+    /// last, since one that arrived meanwhile means the aggregate started
+    /// late and there is nothing to rebuild. "From that tap", not "ever": the
+    /// ages outlive the tap, and a tap installed by a mid-recording restart
+    /// that never delivers sits behind the previous tap's buffers, so only a
+    /// buffer newer than the installation (`rebuiltTapInstalled`) counts.
+    /// `now` is read for this trigger only.
+    mutating func beginRebuild(
+        _ ages: ChannelSignalAges, sameTap: Bool, captureRunning: Bool, now: TimeInterval,
+    ) -> Abandoned? {
+        guard case let .requested(trigger) = phase else { return .captureNotRunning }
         let reason: Abandoned? = if !captureRunning {
             .captureNotRunning
         } else if !sameTap {
             .tapReplaced
-        } else if let zeroRun = ages.zeroRunWhileBuffersArrive {
-            zeroRun < Self.triggerZeroRunSeconds ? .signalReturned : nil
         } else {
-            .buffersStopped
+            switch trigger {
+            case .zeroRun:
+                if let zeroRun = ages.zeroRunWhileBuffersArrive {
+                    zeroRun < Self.triggerZeroRunSeconds ? .signalReturned : nil
+                } else {
+                    .buffersStopped
+                }
+
+            case .noFirstBuffer:
+                lastInstalledAt.map { Self.delivered(ages, since: $0, now: now) } == true ? .buffersArrived : nil
+            }
         }
         if reason != nil {
             phase = .idle
@@ -366,22 +460,26 @@ struct SilentTrackWatchdogPolicy: Equatable {
         return number
     }
 
-    /// A tap was installed while a rebuild waits for its verdict: put it on
-    /// trial. Its recovery window starts now, not at the rebuild's start, so
-    /// a restart that waited or backed off for longer than the window does not
-    /// cost a rebuild that worked; nothing ticks before an installation, since
-    /// ticks come with the buffers of an installed tap. Returns what its
-    /// deadline must name, or nil when no rebuild is open. `now` is only read
-    /// when one is.
+    /// A tap was installed. Its time is kept for the re-check of a
+    /// no-first-buffer rebuild, which asks whether the tap installed last has
+    /// delivered (`beginRebuild`). While a rebuild waits for its verdict the
+    /// tap is also put on trial: its recovery window starts now, not at the
+    /// rebuild's start, so a restart that waited or backed off for longer
+    /// than the window does not cost a rebuild that worked; nothing ticks
+    /// before an installation, since ticks come with the buffers of an
+    /// installed tap. Returns what its deadline must name, or nil when no
+    /// rebuild is open.
     ///
     /// One rebuild's restart can install more than once (a start reporting
     /// rate 0 is retried), and only the tap installed last is on trial: the
     /// verdict is about the tap that is there.
-    mutating func rebuiltTapInstalled(now: () -> TimeInterval) -> (rebuild: Int, install: Int)? {
-        guard !stopped, case let .rebuilding(number, _) = phase else { return nil }
+    mutating func rebuiltTapInstalled(now: TimeInterval) -> (rebuild: Int, install: Int)? {
+        guard !stopped else { return nil }
+        lastInstalledAt = now
+        guard case let .rebuilding(number, _) = phase else { return nil }
         tapsInstalled += 1
         tapOnTrial = tapsInstalled
-        phase = .rebuilding(number: number, startedAt: now())
+        phase = .rebuilding(number: number, startedAt: now)
         return (number, tapsInstalled)
     }
 
@@ -416,8 +514,13 @@ struct SilentTrackWatchdogPolicy: Equatable {
         phase = .idle
         tapOnTrial = nil
         counters.rebuiltTapStalled += 1
-        let delivered = ages.secondsSinceLastBuffer.map { now - $0 > installedAt } ?? false
-        return .stalled(rebuild: number, deliveredSinceInstall: delivered)
+        return .stalled(rebuild: number, deliveredSinceInstall: Self.delivered(ages, since: installedAt, now: now))
+    }
+
+    /// Whether the latest buffer arrived after `installedAt`. The ages outlive
+    /// the tap, so a buffer age alone cannot say which tap delivered it.
+    private static func delivered(_ ages: ChannelSignalAges, since installedAt: TimeInterval, now: TimeInterval) -> Bool {
+        ages.secondsSinceLastBuffer.map { now - $0 > installedAt } ?? false
     }
 
     /// An output device changed while a rebuild is open, whether or not the
