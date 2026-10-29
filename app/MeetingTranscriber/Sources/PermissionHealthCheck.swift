@@ -302,90 +302,10 @@ enum PermissionHealthCheck {
         return 1.0
     }
 
-    /// Thread-safe mic probe stats (tap callback runs on audio thread).
-    private final class BufferCounter: @unchecked Sendable {
-        private let lock = NSLock()
-        private var count = 0
-        private var maxPeak: Float = 0
-        func record(buffer: AVAudioPCMBuffer) {
-            let peak = PermissionHealthCheck.peakAmplitude(of: buffer)
-            lock.lock()
-            count += 1
-            if peak > maxPeak { maxPeak = peak }
-            lock.unlock()
-        }
-
-        func snapshot() -> (count: Int, maxPeak: Float) {
-            lock.lock(); defer { lock.unlock() }
-            return (count, maxPeak)
-        }
-    }
-
     /// Maximum time to wait for the mic probe to observe the first audio buffer.
     static let probeTimeout: TimeInterval = 0.5
     /// Poll interval while waiting for the first buffer to arrive.
     static let probePollInterval: TimeInterval = 0.02
-
-    static func probeMicrophone() async -> Bool {
-        // No input device available (e.g. Mac Mini server without mic hardware) —
-        // accessing AVAudioEngine.inputNode would throw an uncatchable NSException.
-        guard AVCaptureDevice.default(for: .audio) != nil else {
-            debugLog("probeMicrophone: no input device available")
-            return false
-        }
-
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        // inputFormat reflects what the hardware actually delivers; outputFormat can report
-        // a degenerate (sampleRate=0) format when nothing is attached downstream, which
-        // would false-fail the guard below.
-        let format = inputNode.inputFormat(forBus: 0)
-
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            debugLog("probeMicrophone: invalid format sampleRate=\(format.sampleRate) " +
-                "channels=\(format.channelCount)")
-            return false
-        }
-
-        let counter = BufferCounter()
-        do {
-            // safeInstallTap: a device change mid-probe could make installTap
-            // raise an uncatchable NSException (issue #379); treat that as a
-            // failed probe rather than an abort.
-            try inputNode.safeInstallTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-                if buffer.frameLength > 0 { counter.record(buffer: buffer) }
-            }
-        } catch {
-            debugLog("probeMicrophone: installTap failed: \(error.localizedDescription)")
-            return false
-        }
-
-        do {
-            try engine.start()
-        } catch {
-            inputNode.removeTap(onBus: 0)
-            debugLog("probeMicrophone: engine.start() threw: \(error.localizedDescription)")
-            return false
-        }
-
-        let (stats, elapsedMs) = await waitForProbeSignal(
-            deadline: Date().addingTimeInterval(probeTimeout),
-            pollInterval: Self.probePollInterval,
-            snapshot: counter.snapshot,
-        )
-
-        engine.stop()
-        inputNode.removeTap(onBus: 0)
-
-        // Diagnostic-only (issue #446): buffers flowing but below the noise floor means a
-        // likely muted/virtual input — healthy, not broken, but a useful breadcrumb.
-        let silentDespiteBuffers = micProbeSucceeds(bufferCount: stats.count)
-            && stats.maxPeak <= Self.silentMicPeakThreshold
-        debugLog("probeMicrophone: buffers=\(stats.count) peak=\(stats.maxPeak) " +
-            "silentDespiteBuffers=\(silentDespiteBuffers) elapsed=\(elapsedMs)ms " +
-            "sampleRate=\(format.sampleRate) channels=\(format.channelCount)")
-        return micProbeSucceeds(bufferCount: stats.count)
-    }
 
     /// Polls `snapshot` until the first audio buffer arrives (`count > 0`, healthy — the tap
     /// is delivering data) or `now()` passes `deadline` (broken — no buffers at all). A
@@ -415,12 +335,17 @@ enum PermissionHealthCheck {
     static func checkMicrophoneLive() async -> PermissionStatus {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         if status != .authorized {
+            lastAnsweredMicrophoneVerdict.withLock { $0 = nil }
             let r = checkMicrophone(authStatus: status, probeSucceeds: false)
             debugLog("checkMicrophoneLive: authStatus=\(status.rawValue) probe=skipped → \(r)")
             return r
         }
         let probe = await probeMicrophone()
-        let r = checkMicrophone(authStatus: status, probeSucceeds: probe)
+        let r = microphoneVerdict(
+            afterAuthorizedProbe: probe,
+            lastAnswered: lastAnsweredMicrophoneVerdict.withLock { $0 },
+        )
+        if case .answered = probe { lastAnsweredMicrophoneVerdict.withLock { $0 = r } }
         debugLog("checkMicrophoneLive: authStatus=authorized probe=\(probe) → \(r)")
         return r
     }
