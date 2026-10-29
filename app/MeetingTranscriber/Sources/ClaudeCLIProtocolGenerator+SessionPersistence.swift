@@ -14,9 +14,19 @@
     /// one per protocol since every run has a working directory of its own.
     /// `--no-session-persistence` stops it. What the flag still leaves behind,
     /// measured with CLI 2.1.289, is the project folder itself with an empty
-    /// `memory` folder in it; `removeIfOnlyEmptyFolders` takes that away.
+    /// `memory` folder in it. `disableAutoMemoryVariable` keeps the CLI from
+    /// creating that folder at all; `removeIfOnlyEmptyFolders` takes it away
+    /// where a CLI creates it anyway.
     extension ClaudeCLIProtocolGenerator {
         static let noSessionPersistenceFlag = "--no-session-persistence"
+
+        /// Turns the CLI's auto memory off for the run. Measured with CLI
+        /// 2.1.312: with it set, neither the project folder nor its `memory`
+        /// folder appears. Unlike the cleanup it also covers a `claude-*`
+        /// wrapper that sets its own `CLAUDE_CONFIG_DIR`, as long as the
+        /// wrapper passes its environment on. A CLI that does not know the
+        /// variable ignores it.
+        static let disableAutoMemoryVariable = "CLAUDE_CODE_DISABLE_AUTO_MEMORY"
 
         /// How long `--help` may take before the CLI is treated as one
         /// without the flag.

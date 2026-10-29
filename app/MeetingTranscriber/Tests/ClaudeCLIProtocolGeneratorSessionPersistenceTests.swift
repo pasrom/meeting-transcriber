@@ -123,6 +123,32 @@
             XCTAssertEqual(help, "called with --help\n")
         }
 
+        // MARK: - Auto memory
+
+        /// Set even over a value inherited from the app's environment: a
+        /// protocol run never wants auto memory, whatever the shell had.
+        func testBuildEnvironmentDisablesAutoMemory() {
+            let env = ClaudeCLIProtocolGenerator.buildEnvironment(
+                baseEnvironment: [ClaudeCLIProtocolGenerator.disableAutoMemoryVariable: "0"], searchPaths: [],
+            )
+            XCTAssertEqual(env[ClaudeCLIProtocolGenerator.disableAutoMemoryVariable], "1")
+        }
+
+        /// The variable reaches the started CLI, not just `buildEnvironment`'s
+        /// output: the fake binary replies with the value it sees.
+        func testGeneratePassesTheAutoMemoryVariableToTheCLI() async throws {
+            let script = try Self.makeFakeClaudeScript(
+                helpLine: "  -p, --print  Print response and exit",
+                reply: "$\(ClaudeCLIProtocolGenerator.disableAutoMemoryVariable)",
+            )
+            defer { try? FileManager.default.removeItem(atPath: script) }
+
+            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
+            let result = try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false)
+
+            XCTAssertEqual(result, "1")
+        }
+
         // MARK: - Project folder
 
         /// The name Claude Code gives the folder, as measured:
@@ -244,8 +270,9 @@
         // MARK: - Helpers
 
         /// A fake `claude`: `--help` prints `helpLine`, any other call drains
-        /// stdin and replies with its own arguments as one stream-json text.
-        private static func makeFakeClaudeScript(helpLine: String) throws -> String {
+        /// stdin and replies with `reply`, its own arguments by default, as
+        /// one stream-json text.
+        private static func makeFakeClaudeScript(helpLine: String, reply: String = "$*") throws -> String {
             let path = NSTemporaryDirectory() + "fake-claude-\(UUID().uuidString).sh"
             let body = """
             #!/bin/sh
@@ -254,7 +281,7 @@
                 exit 0
             fi
             cat > /dev/null
-            printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s"}}\\n' "$*"
+            printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s"}}\\n' "\(reply)"
             """
             try body.write(toFile: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)

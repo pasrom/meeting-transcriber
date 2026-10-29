@@ -430,7 +430,8 @@
         }
 
         /// Strip `CLAUDECODE` (avoid nested-session detection by the child
-        /// CLI) and prepend `searchPaths` to `PATH` (app bundles inherit
+        /// CLI), force `disableAutoMemoryVariable` to `1` (see there), and
+        /// prepend `searchPaths` to `PATH` (app bundles inherit
         /// a minimal `PATH`). `anthropicAPIKey`, when non-empty and not
         /// already set in `baseEnvironment`, is injected so the subprocess
         /// can authenticate via API key instead of the CLI's own OAuth
@@ -446,6 +447,7 @@
         ) -> [String: String] {
             var env = baseEnvironment
             env.removeValue(forKey: "CLAUDECODE")
+            env[disableAutoMemoryVariable] = "1"
             let extraPaths = searchPaths.joined(separator: ":")
             env["PATH"] = "\(extraPaths):\(env["PATH"] ?? "/usr/bin:/bin")"
             if env["ANTHROPIC_API_KEY"]?.isEmpty ?? true,
