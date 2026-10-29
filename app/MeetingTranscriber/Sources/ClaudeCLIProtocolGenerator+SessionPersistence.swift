@@ -52,7 +52,7 @@
                 anthropicAPIKey: anthropicAPIKey,
             )
             let answer = await askNoSessionPersistence(resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment)
-            if answer != .listed {
+            if answer != .listed, !Task.isCancelled {
                 logger.warning(
                     "claude_cli_session_persistence_on helpRead=\(answer != .unread, privacy: .public) — the CLI keeps this run's session, transcript included",
                 )
@@ -103,8 +103,10 @@
         ) async -> HelpAnswer {
             let key = cacheKey(resolvedBin: resolvedBin, claudeBin: claudeBin)
             if binariesAcceptingNoSessionPersistence.withLock({ $0.contains(key) }) { return .listed }
-            guard let help = await readHelp(resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment)
-            else { return .unread }
+            let help = await readHelp(resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment)
+            // A probe ended by a cancelled job says nothing about the CLI;
+            // the job ends right after.
+            guard let help, !Task.isCancelled else { return .unread }
             guard helpListsNoSessionPersistence(help) else { return .notListed }
             _ = binariesAcceptingNoSessionPersistence.withLock { $0.insert(key) }
             return .listed
@@ -131,24 +133,6 @@
             }
         }
 
-        /// How long a CLI sent SIGTERM may take to exit before it gets SIGKILL.
-        static let terminationGraceSeconds: TimeInterval = 1
-
-        /// Waits for a CLI that has been sent SIGTERM to exit, sending
-        /// SIGKILL once `grace` has passed. A failed run waits here before
-        /// its folders are removed, so that a CLI still shutting down cannot
-        /// write into them, or recreate its project folder, afterwards.
-        static func awaitExit(
-            of process: Process, exited: AsyncStream<Void>, grace: TimeInterval = terminationGraceSeconds,
-        ) async {
-            DispatchQueue.global().asyncAfter(deadline: .now() + grace) {
-                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            }
-            for await _ in exited {
-                break
-            }
-        }
-
         /// Removes the run's working directory, and the CLI's project folder
         /// for it while that holds nothing but empty folders.
         static func removeRunFolders(workingDirectory: URL, projectFolder: URL?) {
@@ -165,12 +149,12 @@
         /// own, like a real run, so the probe neither inherits the app's
         /// directory nor touches the one the real run is about to get.
         ///
-        /// Output goes to a file in that directory rather than a pipe, and
-        /// the wait is for the process to exit, bounded by `timeout`: a
-        /// wrapper script that ignores SIGTERM, or leaves a child holding its
-        /// output open, must not hold up the protocol. A probe that runs out
-        /// of time is sent SIGTERM, then SIGKILL a second later, and is not
-        /// waited for again.
+        /// Output goes to a file in that directory rather than a pipe, so a
+        /// child of the CLI holding its output open cannot hold up the
+        /// protocol. A probe still running at `timeout` is stopped (SIGTERM,
+        /// then SIGKILL after the termination grace) and its exit awaited
+        /// before the directory is removed, so the probe takes at most
+        /// `timeout` plus that grace. Cancellation stops it the same way.
         static func readHelp(
             resolvedBin: String,
             claudeBin: String,
@@ -192,40 +176,10 @@
             process.standardError = FileHandle.nullDevice
             process.standardInput = FileHandle.nullDevice
 
-            let exited = await runBounded(process, timeout: timeout)
+            let outcome = try? await BoundedProcess(process).run(timeout: timeout)
             try? output.close()
-            guard exited, let data = try? Data(contentsOf: outputFile) else { return nil }
+            guard case .exited = outcome, let data = try? Data(contentsOf: outputFile) else { return nil }
             return String(bytes: data, encoding: .utf8)
-        }
-
-        /// Starts `process` and reports whether it exited within `timeout`.
-        /// False also when it could not be started.
-        private static func runBounded(_ process: Process, timeout: TimeInterval) async -> Bool {
-            await withCheckedContinuation { continuation in
-                let resumed = OSAllocatedUnfairLock(initialState: false)
-                let finish: @Sendable (Bool) -> Void = { exited in
-                    let first = resumed.withLock { done in
-                        defer { done = true }
-                        return !done
-                    }
-                    if first { continuation.resume(returning: exited) }
-                }
-                process.terminationHandler = { _ in finish(true) }
-                do {
-                    try process.run()
-                } catch {
-                    finish(false)
-                    return
-                }
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                    guard process.isRunning else { return }
-                    finish(false)
-                    process.terminate()
-                    DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
-                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-                    }
-                }
-            }
         }
 
         /// The folder the CLI keeps for a run started in `workingDirectory`:

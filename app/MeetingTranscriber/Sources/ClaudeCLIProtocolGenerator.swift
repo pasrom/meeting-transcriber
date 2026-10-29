@@ -23,16 +23,27 @@
         /// `timeoutSeconds`; tests pass a short one.
         let timeout: TimeInterval
 
+        /// How long a CLI sent SIGTERM may take to exit before it gets SIGKILL.
+        let terminationGrace: TimeInterval
+
+        /// How long the CLI's output is still read after it has exited
+        /// (`outputDrainGraceSeconds` in production).
+        let outputDrainGrace: TimeInterval
+
         init(
             claudeBin: String,
             language: String,
             anthropicAPIKey: String? = nil,
             timeout: TimeInterval = Self.timeoutSeconds,
+            terminationGrace: TimeInterval = BoundedProcess.defaultTerminationGrace,
+            outputDrainGrace: TimeInterval = Self.outputDrainGraceSeconds,
         ) {
             self.claudeBin = claudeBin
             self.language = language
             self.anthropicAPIKey = anthropicAPIKey
             self.timeout = timeout
+            self.terminationGrace = terminationGrace
+            self.outputDrainGrace = outputDrainGrace
         }
 
         static let timeoutSeconds: TimeInterval = 600
@@ -55,12 +66,13 @@
         ) async throws -> String {
             let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language, meetingStartTime: meetingStartTime) + transcript
             let launch = await Self.launchConfiguration(claudeBin: claudeBin, anthropicAPIKey: anthropicAPIKey)
+            try Task.checkCancellation()
             do {
                 return try await run(prompt: prompt, launch: launch)
             } catch let rejection as NoSessionPersistenceRejected {
-                guard let retry = await Self.launchWithoutRejectedFlag(after: launch, claudeBin: claudeBin) else {
-                    throw rejection.error
-                }
+                let retry = await Self.launchWithoutRejectedFlag(after: launch, claudeBin: claudeBin)
+                try Task.checkCancellation()
+                guard let retry else { throw rejection.error }
                 return try await run(prompt: prompt, launch: retry)
             }
         }
@@ -77,89 +89,15 @@
             defer { Self.removeRunFolders(workingDirectory: workingDirectory, projectFolder: projectFolder) }
             process.currentDirectoryURL = workingDirectory
 
-            let stdinPipe = Pipe()
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardInput = stdinPipe
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
-            // Set terminationHandler BEFORE process.run() to avoid race
-            // where the process exits before the handler is installed.
-            // AsyncStream buffers the yield, so even if the process exits before
-            // we iterate, the value is not lost.
-            let exitStream = AsyncStream<Void> { continuation in
-                process.terminationHandler = { _ in
-                    continuation.yield()
-                    continuation.finish()
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                logger.error(
-                    "claude_cli_not_found bin=\(self.claudeBin, privacy: .public) resolvedPath=\(resolvedBin, privacy: .public) error=\(error.localizedDescription, privacy: .public)",
-                )
-                throw ProtocolError.cliNotFound(claudeBin)
-            }
-
-            // Guard against process having already exited before we awaited.
-            // If the process already exited, terminationHandler may have already fired,
-            // but AsyncStream buffers the yield so we won't miss it.
-            // No additional check needed — AsyncStream handles the race.
-
-            // Write stdin in a detached task to avoid deadlock on large transcripts.
-            // The pipe buffer is finite (~64KB); if the prompt exceeds it, a synchronous
-            // write blocks until the reader drains — but we haven't started reading yet.
-            let promptData = Data(prompt.utf8)
-            logger.info("claude_cli_subprocess_start prompt_bytes=\(promptData.count, privacy: .public)")
-            let stdinWriteTask = Task.detached {
-                // Use the throwing `write(contentsOf:)` rather than the deprecated
-                // `write(_:)`: the latter raises an uncatchable Obj-C NSException on
-                // a write error (e.g. EPIPE when the child's stdin read end has
-                // closed — which happens on the timeout path where readStreamJSON
-                // calls process.terminate()), aborting the whole app. The throwing
-                // API turns a broken pipe into a handled Swift error so we can log
-                // and fall through to close the handle. Mirrors the write sites in
-                // RecognitionStats and PersistentDiagnosticLog.
-                do {
-                    try stdinPipe.fileHandleForWriting.write(contentsOf: promptData)
-                } catch {
-                    logger.debug(
-                        "claude_cli_stdin_write_failed error=\(error.localizedDescription, privacy: .public)",
-                    )
-                }
-                try? stdinPipe.fileHandleForWriting.close()
-            }
-
-            // Read stream-json output concurrently with stdin write
-            let (text, resultEvent) = try await Self.readStreamJSON(
-                from: stdoutPipe, process: process, exited: exitStream, timeout: timeout,
-            )
-
-            // Ensure stdin write completes (should be done by now)
-            _ = await stdinWriteTask.value
-
-            // Read stderr in background to prevent pipe buffer issues
-            async let stderrRead = Task.detached {
-                stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            }.value
-
-            // Await process exit via the stream installed before launch
-            for await _ in exitStream {
-                break
-            }
-
-            if process.terminationStatus != 0 {
-                let stderrData = await stderrRead
+            let output = try await runCLI(process, prompt: prompt)
+            if output.exitCode != 0 {
                 throw Self.handleFailure(
-                    exitCode: process.terminationStatus, stderrData: stderrData, text: text,
-                    resultEvent: resultEvent, arguments: launch.arguments,
+                    exitCode: output.exitCode, stderrData: output.stderrData,
+                    text: output.text, resultEvent: output.resultEvent, arguments: launch.arguments,
                 )
             }
 
-            return try Self.validateGeneratedText(text)
+            return try Self.validateGeneratedText(output.text)
         }
 
         /// Pair an already-decoded stderr string with `exitCode` as a
@@ -229,36 +167,16 @@
 
         /// Parse Claude CLI stream-json output, accumulate text, and capture
         /// the terminal `result` event (if any) for failure diagnostics.
-        private static func readStreamJSON(
-            from pipe: Pipe, process: Process, exited: AsyncStream<Void>, timeout: TimeInterval,
-        ) async throws -> (text: String, resultEvent: ResultEventInfo?) {
-            let handle = pipe.fileHandleForReading
+        /// Reads until `chunks` ends.
+        static func readStreamJSON(
+            from chunks: AsyncStream<Data>,
+        ) async -> (text: String, resultEvent: ResultEventInfo?) {
             var parts: [String] = []
             var resultEvent: ResultEventInfo?
-            let startTime = ProcessInfo.processInfo.systemUptime
 
             // Read line-by-line from stdout
             var buffer = Data()
-            while true {
-                if ProcessInfo.processInfo.systemUptime - startTime > timeout {
-                    let elapsed = ProcessInfo.processInfo.systemUptime - startTime
-                    let elapsedStr = String(format: "%.1f", elapsed)
-                    logger.error(
-                        "claude_cli_timeout elapsed=\(elapsedStr, privacy: .public)s parts_received=\(parts.count, privacy: .public)",
-                    )
-                    process.terminate()
-                    // The caller removes the run's folders next, which a CLI
-                    // still shutting down could write into afterwards.
-                    await awaitExit(of: process, exited: exited)
-                    throw ProtocolError.timeout
-                }
-
-                // Wrap blocking availableData in Task.detached to avoid
-                // blocking Swift's cooperative thread pool. availableData blocks
-                // until data is available or EOF, which would starve other tasks.
-                let chunk = await Task.detached { handle.availableData }.value
-                if chunk.isEmpty { break } // EOF
-
+            for await chunk in chunks {
                 buffer.append(chunk)
                 parts.append(contentsOf: drainStreamJSONLines(buffer: &buffer, resultEvent: &resultEvent))
             }

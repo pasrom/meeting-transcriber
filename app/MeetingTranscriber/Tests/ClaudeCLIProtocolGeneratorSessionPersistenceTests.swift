@@ -55,8 +55,8 @@
         }
 
         /// A wrapper that ignores SIGTERM and does not exit must not hold up
-        /// the protocol: the probe gives up after its timeout and the run
-        /// goes ahead without the flag.
+        /// the protocol: the probe kills it after its timeout and the
+        /// termination grace, and the run goes ahead without the flag.
         func testHelpProbeGivesUpOnACLIThatDoesNotExit() async throws {
             let path = NSTemporaryDirectory() + "fake-claude-\(UUID().uuidString).sh"
             try "#!/bin/sh\ntrap '' TERM\necho '--no-session-persistence'\nsleep 5\n"
@@ -71,43 +71,6 @@
 
             XCTAssertNil(help, "a probe that ran out of time counts as no help text")
             XCTAssertLessThan(Date().timeIntervalSince(start), 3, "the probe waited for a CLI that never exits")
-        }
-
-        /// A failed run waits for its CLI before removing the folders, and a
-        /// CLI that ignores SIGTERM is killed rather than waited for forever.
-        func testAwaitExitKillsACLIThatIgnoresSIGTERM() async throws {
-            let path = NSTemporaryDirectory() + "fake-claude-\(UUID().uuidString).sh"
-            let ready = path + ".ready"
-            try "#!/bin/sh\ntrap '' TERM\ntouch \"$1\"\nexec sleep 30\n".write(toFile: path, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
-            defer {
-                try? FileManager.default.removeItem(atPath: path)
-                try? FileManager.default.removeItem(atPath: ready)
-            }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = [ready]
-            let exited = AsyncStream<Void> { continuation in
-                process.terminationHandler = { _ in
-                    continuation.yield()
-                    continuation.finish()
-                }
-            }
-            try process.run()
-            // SIGTERM before the trap is set would end the script by itself.
-            let readyDeadline = Date().addingTimeInterval(5)
-            while !FileManager.default.fileExists(atPath: ready), Date() < readyDeadline {
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            process.terminate()
-
-            let start = Date()
-            await ClaudeCLIProtocolGenerator.awaitExit(of: process, exited: exited, grace: 0.2)
-
-            XCTAssertFalse(process.isRunning)
-            XCTAssertEqual(process.terminationReason, .uncaughtSignal)
-            XCTAssertEqual(process.terminationStatus, SIGKILL)
-            XCTAssertLessThan(Date().timeIntervalSince(start), 5, "the wait outlasted the grace period")
         }
 
         func testHelpProbeReadsTheHelpOfACLIThatExits() async throws {
