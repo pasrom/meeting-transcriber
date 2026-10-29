@@ -401,6 +401,7 @@ public class AppAudioCapture: @unchecked Sendable {
         logger.info(
             "Created aggregate device: \(newAggregateID), rate \(resolved.rate) Hz (\(rung, privacy: .public)), default \(self.sampleRate) Hz",
         )
+        Self.logTapLayout(aggregateID: newAggregateID, anchorUID: systemOutputUID)
 
         // Set up IOProc to read audio data and write to file descriptor
         let fd = outputFileDescriptor
