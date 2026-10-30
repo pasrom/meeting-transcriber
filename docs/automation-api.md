@@ -12,6 +12,9 @@ prefix. The `/v1` surface carries a stability contract; the unversioned debug
 endpoints (`/state`, `/metrics`, `/screenshot`, `/action/*`) are inspection-only
 and may change without notice.
 
+The inspection-only `/state` response's `lastJob` also exposes the optional
+`export` object described under [JobStatusDTO](#jobstatusdto).
+
 ## Availability
 
 - **Homebrew / direct build only.** The whole server is compiled out of the App
@@ -154,8 +157,13 @@ curl -sS -X POST "$BASE/v1/jobs" \
 Read a job's current status. Answers for both live (in-flight) jobs and finished
 jobs that have already been reaped from the in-memory queue: terminal records
 are persisted to a small file-backed store (cap 200, owner-only) that survives
-both the queue's 60-second cleanup of finished jobs and an app restart. A slow
-poller therefore never loses the transcript/protocol paths.
+both the queue's 60-second cleanup of finished jobs (deferred while a native
+menu is open) and an app restart. A job whose Notion export failed stays in the
+queue and terminal store for retry even when its original audio is gone. After
+a successful export retry, the normal 60-second cleanup starts. Until then the
+job is held until **Discard Notion Retry** in the menu; its audio sidecars are
+released as soon as it finishes, because the retry only reads the Markdown. A slow poller
+therefore never loses the transcript/protocol paths.
 
 Responses:
 
@@ -384,6 +392,12 @@ Scope and limits:
   "meetingTitle": "Daily Standup",
   "transcriptPath": "/Users/me/.../standup.md",
   "protocolPath": "/Users/me/.../standup-protocol.md",
+  "export": {
+    "destination": "notion",
+    "status": "completed",
+    "id": "7f4d3a2b1c0e4f5a8b9c6d7e8f0a1b2c",
+    "url": "https://app.notion.com/p/7f4d3a2b1c0e4f5a8b9c6d7e8f0a1b2c"
+  },
   "error": null,
   "warnings": [],
   "echo": {
@@ -404,6 +418,24 @@ Scope and limits:
   id (see `GET /v1/jobs/<id>` above).
 - `transcriptPath` / `protocolPath`: absolute paths, present once produced
   (`protocolPath` stays `null` when protocol generation is disabled or skipped).
+- `export`: absent when no export was attempted, including export switched on but
+  not configured, which `warnings` explains. `destination` is `notion`. `status` is
+  `in_progress`, `failed` or `completed`. `id` appears as soon as the page exists, so
+  a failed or interrupted export can be retried against it. `url` appears only after the export
+  completes, which can be after `state` is `done`: the export runs in the background,
+  so poll while `status` is `in_progress`. `POST /v1/transcribe` waits for it within
+  `maxWaitSeconds`. A successful Notion-only export has no `protocolPath`; use
+  `url` to open the page.
+- A done job with `export.status: "failed"` can be retried from its local
+  Markdown backup using the menu's **Retry Notion Export** action. This reads
+  the saved protocol and reuses the page ID when the same database is selected;
+  it does not rerun transcription or protocol generation. The action is enabled
+  only while Notion export is enabled and the backup file exists. If the file is
+  unreadable or empty, the retry stays failed and the job gains a warning. A
+  completed job restored with `in_progress` status is changed to `failed`, with a
+  warning saying the app quit during the export. The status and warning in this
+  response are updated when retry succeeds. With **Skip local markdown** on, a
+  successful retry removes the backup and `protocolPath` becomes `null`.
 - `error`: a message string when `state == "error"`, else `null`.
 - `warnings`: zero or more non-fatal warning strings (for example a partial
   diarization failure on one track).
