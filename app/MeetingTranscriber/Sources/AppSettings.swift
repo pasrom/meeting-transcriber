@@ -654,6 +654,22 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(useAITitleForFilenames, forKey: "useAITitleForFilenames") }
     }
 
+    /// Delete the audio the app recorded and moved into the output folder once
+    /// its outputs are written and `recordingRetentionDays` have passed since
+    /// the recording date. Off by default; imports are never touched.
+    var recordingRetentionEnabled: Bool {
+        didSet { defaults.set(recordingRetentionEnabled, forKey: "recordingRetentionEnabled") }
+    }
+
+    /// Days a recording is kept after its recording date; 0 deletes it as soon
+    /// as its outputs are written. Never negative.
+    var recordingRetentionDays: Int {
+        didSet {
+            if recordingRetentionDays < 0 { recordingRetentionDays = 0 }
+            defaults.set(recordingRetentionDays, forKey: "recordingRetentionDays")
+        }
+    }
+
     static let protocolLanguages = [
         "German", "English", "French", "Spanish", "Italian",
         "Dutch", "Portuguese", "Japanese", "Chinese", "Korean",
@@ -929,6 +945,8 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         includeFullTranscriptInProtocol = defaults.bool(forKey: "includeFullTranscriptInProtocol", default: true)
         saveRawTranscriptSeparately = defaults.bool(forKey: "saveRawTranscriptSeparately", default: true)
         useAITitleForFilenames = defaults.bool(forKey: "useAITitleForFilenames", default: false)
+        recordingRetentionEnabled = defaults.bool(forKey: "recordingRetentionEnabled", default: false)
+        recordingRetentionDays = max(0, defaults.object(forKey: "recordingRetentionDays") as? Int ?? 30)
 
         openAIEndpoint = defaults.object(forKey: "openAIEndpoint") as? String
             ?? Self.defaultOpenAIEndpoint

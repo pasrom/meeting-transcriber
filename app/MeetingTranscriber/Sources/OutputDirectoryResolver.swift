@@ -57,6 +57,12 @@ final class OutputDirectoryResolver {
         }
     }
 
+    /// The directory `resolve()` would return, without reporting anything:
+    /// for a caller that writes nothing there, such as a retention pass.
+    var current: URL {
+        settings.outputDirectoryResolution.url
+    }
+
     private func reportIfNew(configuredPath: String?, fallback: URL) {
         let bookmark = settings.customOutputDirBookmark
         guard bookmark != reportedUnavailableBookmark else { return }
