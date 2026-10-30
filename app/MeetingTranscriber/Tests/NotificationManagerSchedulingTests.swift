@@ -132,6 +132,29 @@ final class NotificationManagerSchedulingTests: XCTestCase {
         XCTAssertEqual(answer, .declined)
     }
 
+    /// A body click reaches the delegate as the default action and must leave
+    /// the prompt exactly as it was: still parked, its timeout still running,
+    /// nothing withdrawn. The real answer then arrives through the same path
+    /// (a menu-bar item routes through the coordinator like an action does).
+    func testAskToRecordBodyClickLeavesThePromptParked() async {
+        let (manager, fake) = makeManager()
+        manager.setUp()
+        let task = Task { await manager.askToRecord(title: "Record browser meeting?", body: "A meeting is active.") }
+
+        guard let posted = await firstPostedRequest(from: fake) else {
+            XCTFail("no consent notification posted")
+            return
+        }
+        manager.resolveConsent(responseIdentifier: posted.identifier, actionIdentifier: UNNotificationDefaultActionIdentifier)
+        // Record afterwards: had the click settled the question as a no, the
+        // grant would land on a resolved prompt and the answer would read
+        // `.declined`.
+        manager.resolveConsent(responseIdentifier: posted.identifier, actionIdentifier: NotificationManager.recordActionID)
+        let answer = await task.value
+        XCTAssertEqual(answer, .granted, "the prompt was still open for the real answer")
+        XCTAssertEqual(fake.removedIdentifiers, [posted.identifier], "withdrawn once, by the real answer")
+    }
+
     /// A resolved prompt is withdrawn. macOS clears a notification the user
     /// actually tapped, but not one that expired on its timer or was answered
     /// out of band, so without this every unanswered prompt stays in

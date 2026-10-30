@@ -251,14 +251,26 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
         )
     }
 
-    /// Pure mapping from the tapped action to an answer. Only the explicit
-    /// Record action grants consent; Never is its own durable answer; Ignore, a
-    /// swipe-away dismiss, the default body tap and anything unrecognised all
+    /// Pure mapping from the tapped action to an answer, or `nil` when the
+    /// gesture is not one. Only the explicit Record action grants consent;
+    /// Never is its own durable answer; Ignore and anything unrecognised
     /// decline, so an unknown identifier can never start a recording.
-    static func consentAnswer(for actionIdentifier: String) -> ConsentAnswer {
+    ///
+    /// A click on the notification body (the default action) is not an
+    /// answer: with the Persistent alert style the buttons sit behind
+    /// "Options", so the body is the natural thing to click, and counting it
+    /// as a no started ten minutes of quiet for a user who was about to say
+    /// yes. macOS removes the notification on that click, so the prompt stays
+    /// parked for the menu-bar items that mirror it (and the badge that points
+    /// at them), and only its own timeout makes it "unanswered". A dismiss is
+    /// mapped the same way: the category registers no custom dismiss action,
+    /// so it never reaches the delegate today, and if one is registered later
+    /// a "Close" must not quietly become a ten-minute decline either.
+    static func consentAnswer(for actionIdentifier: String) -> ConsentAnswer? {
         switch actionIdentifier {
         case recordActionID: .granted
         case neverActionID: .never
+        case UNNotificationDefaultActionIdentifier, UNNotificationDismissActionIdentifier: nil
         default: .declined
         }
     }
@@ -340,15 +352,18 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     /// Resolve a parked consent prompt from a notification response's primitives.
     /// The delegate callback unwraps the framework `UNNotificationResponse` (which
     /// has no public initialiser) into these, so the id + grant mapping stays
-    /// unit-testable without constructing a real response.
+    /// unit-testable without constructing a real response. A gesture that is
+    /// not an answer (`consentAnswer(for:)` returns nil) leaves the prompt
+    /// parked, timeout and all.
     func resolveConsent(responseIdentifier: String, actionIdentifier: String) {
-        consentCoordinator.resolve(
-            id: responseIdentifier,
-            answer: Self.consentAnswer(for: actionIdentifier),
-        )
+        guard let answer = Self.consentAnswer(for: actionIdentifier) else {
+            logger.info("Consent prompt clicked without an answer; still waiting on the menu-bar items")
+            return
+        }
+        consentCoordinator.resolve(id: responseIdentifier, answer: answer)
     }
 
-    // Handle a tapped consent action (or a dismiss) → resolve the prompt.
+    // Handle a tapped consent action → resolve the prompt.
     // swiftlint:disable:next async_without_await
     func userNotificationCenter(_: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         resolveConsent(

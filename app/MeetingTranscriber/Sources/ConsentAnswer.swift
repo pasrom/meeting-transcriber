@@ -14,9 +14,11 @@ import Foundation
 enum ConsentAnswer: Equatable {
     /// The user tapped Record.
     case granted
-    /// The user said no: the Ignore action, a swipe-away dismiss, or a tap on
-    /// the notification body. Also what a notifier with no prompt reports,
-    /// since "we could not ask" must never record.
+    /// The user said no: the Ignore action or the menu-bar "Don't Record". A
+    /// click on the notification body is not a no (it leaves the prompt
+    /// parked; see `NotificationManager.consentAnswer(for:)`). Also what a
+    /// notifier with no prompt reports, since "we could not ask" must never
+    /// record.
     case declined
     /// Nobody answered before `NotificationManager.consentPromptTimeout`.
     case expired

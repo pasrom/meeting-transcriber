@@ -230,11 +230,16 @@ final class NotificationManagerTests: XCTestCase {
         XCTAssertFalse(ConsentAnswer.never.isGranted)
     }
 
-    func testConsentDeclinedForIgnoreDismissAndDefault() {
+    func testConsentDeclinedForIgnoreAndUnknownActions() {
         XCTAssertEqual(NotificationManager.consentAnswer(for: NotificationManager.ignoreActionID), .declined)
-        XCTAssertEqual(NotificationManager.consentAnswer(for: UNNotificationDismissActionIdentifier), .declined)
-        XCTAssertEqual(NotificationManager.consentAnswer(for: UNNotificationDefaultActionIdentifier), .declined)
         XCTAssertEqual(NotificationManager.consentAnswer(for: "something-else"), .declined)
+    }
+
+    /// A click on the notification body is not an answer, and neither is a
+    /// dismiss: the prompt stays parked (why: `consentAnswer(for:)`).
+    func testBodyClickAndDismissAreNotAnAnswer() {
+        XCTAssertNil(NotificationManager.consentAnswer(for: UNNotificationDefaultActionIdentifier))
+        XCTAssertNil(NotificationManager.consentAnswer(for: UNNotificationDismissActionIdentifier))
     }
 
     func testConsentCategoryHasRecordIgnoreAndNeverActions() {
@@ -249,6 +254,11 @@ final class NotificationManagerTests: XCTestCase {
             ],
         )
         XCTAssertEqual(category.actions.map(\.title), ["Record", "Ignore", "Never for this app"])
+        // `consentAnswer(for:)` maps a dismiss to "no answer" on the premise
+        // that it never arrives. Registering `.customDismissAction` would make
+        // a swipe-away park the prompt with nothing on screen; that needs a
+        // decision, not a silent combination.
+        XCTAssertFalse(category.options.contains(.customDismissAction))
     }
 
     /// Neither action may carry `.foreground`. The delegate callback fires
