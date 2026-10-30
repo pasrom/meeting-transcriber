@@ -413,13 +413,18 @@
                 let language: String
                 let openAIEndpoint: String
                 let openAIModel: String
+                /// Sampling overrides for the OpenAI-compatible provider. Nil
+                /// (omitted from the JSON) means the server default applies.
+                let openAITemperature: Double?
+                let openAITopP: Double?
                 /// Claude CLI binary name/path (non-secret). The App Store build
                 /// never compiles this file (`#if !APPSTORE`).
                 let claudeBin: String
 
                 static let empty = Self(
                     provider: "", language: "", openAIEndpoint: "",
-                    openAIModel: "", claudeBin: "",
+                    openAIModel: "", openAITemperature: nil, openAITopP: nil,
+                    claudeBin: "",
                 )
             }
 

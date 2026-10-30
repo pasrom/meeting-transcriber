@@ -124,6 +124,17 @@
             XCTAssertEqual(s.protocolGeneration.provider, ProtocolProvider.openAICompatible.rawValue)
         }
 
+        func test_snapshot_openAISamplingOverrides() {
+            XCTAssertNil(settings.rpcSettingsSnapshot().protocolGeneration.openAITemperature)
+            XCTAssertNil(settings.rpcSettingsSnapshot().protocolGeneration.openAITopP)
+
+            settings.openAITemperature = 0.3
+            settings.openAITopP = 0.9
+            let s = settings.rpcSettingsSnapshot()
+            XCTAssertEqual(s.protocolGeneration.openAITemperature, 0.3)
+            XCTAssertEqual(s.protocolGeneration.openAITopP, 0.9)
+        }
+
         func test_snapshot_protocolProviderNone_mapsToNoneRawValue() {
             settings.protocolProvider = .none
             let s = settings.rpcSettingsSnapshot()
@@ -215,6 +226,9 @@
         /// under ANY name fails this test, which generic substring scans can't
         /// guarantee.
         func test_snapshot_settingsKeysAreExactlyTheAllowlist() throws {
+            // Optional fields are omitted while nil; set them so they are counted.
+            settings.openAITemperature = 0.5
+            settings.openAITopP = 0.5
             let data = try JSONEncoder().encode(settings.rpcSettingsSnapshot())
             let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
@@ -249,6 +263,7 @@
                 "diarization.excludeOverlap",
                 "protocolGeneration.provider", "protocolGeneration.language",
                 "protocolGeneration.openAIEndpoint", "protocolGeneration.openAIModel",
+                "protocolGeneration.openAITemperature", "protocolGeneration.openAITopP",
                 "protocolGeneration.claudeBin",
                 "output.directory", "output.hasCustomDirectory", "output.hasCustomPrompt",
                 "output.includeFullTranscriptInProtocol", "output.saveRawTranscriptSeparately",

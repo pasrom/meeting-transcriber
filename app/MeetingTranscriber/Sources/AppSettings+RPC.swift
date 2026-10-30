@@ -85,6 +85,8 @@
                 language: protocolLanguage,
                 openAIEndpoint: openAIEndpoint,
                 openAIModel: openAIModel,
+                openAITemperature: openAITemperature,
+                openAITopP: openAITopP,
                 claudeBin: claudeBin,
             )
         }
