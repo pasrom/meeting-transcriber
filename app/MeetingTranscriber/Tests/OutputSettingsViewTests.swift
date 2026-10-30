@@ -50,6 +50,14 @@ final class OutputSettingsViewTests: XCTestCase {
         )
     }
 
+    // MARK: - OutputSettingsLogic.retentionDaysLabel
+
+    func testRetentionDaysLabelSpellsOutZeroAndSingular() {
+        XCTAssertEqual(OutputSettingsLogic.retentionDaysLabel(0), "0 days (right away)")
+        XCTAssertEqual(OutputSettingsLogic.retentionDaysLabel(1), "1 day")
+        XCTAssertEqual(OutputSettingsLogic.retentionDaysLabel(30), "30 days")
+    }
+
     // MARK: - OutputSettingsLogic.mergePickerOptions
 
     func testMergePickerOptionsPrependsSelectedWhenAbsent() {

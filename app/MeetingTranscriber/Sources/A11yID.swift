@@ -97,6 +97,7 @@ enum A11yID {
     static let notionUpgradeSchemaButton = "notionUpgradeSchemaButton"
     static let notionRefreshButton = "notionRefreshButton"
     static let outputFolderSection = "outputFolderSection"
+    static let recordingRetentionToggle = "recordingRetentionToggle"
     static let vadSection = "vadSection"
     static let staleNamingTimeoutPicker = "staleNamingTimeoutPicker"
     static let echoCancellationToggle = "echoCancellationToggle"

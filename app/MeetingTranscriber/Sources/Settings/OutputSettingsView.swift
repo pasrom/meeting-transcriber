@@ -40,6 +40,16 @@ enum OutputSettingsLogic {
         guard !selected.isEmpty, !available.contains(selected) else { return available }
         return [selected] + available
     }
+
+    /// The retention period as the Settings row shows it. Zero is spelled out,
+    /// since "0 days" alone reads like "never".
+    static func retentionDaysLabel(_ days: Int) -> String {
+        switch days {
+        case ...0: "0 days (right away)"
+        case 1: "1 day"
+        default: "\(days) days"
+        }
+    }
 }
 
 enum ConnectionTestResult {
@@ -100,6 +110,11 @@ struct OutputSettingsView: View {
 
             NotionExportSettingsView(settings: settings)
 
+            // Outside the record-only block as well: entries recorded before
+            // record-only was switched on are still swept, and record-only
+            // output itself is never recorded, so the setting cannot reach it.
+            recordingRetentionSection
+
             Section("Meeting Notes") {
                 Toggle("Include full transcript in meeting notes", isOn: $settings.includeFullTranscriptInProtocol)
                     .accessibilityIdentifier(A11yID.includeFullTranscriptToggle)
@@ -141,6 +156,35 @@ struct OutputSettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             apiKeyDrafts.commitPending(to: settings)
+        }
+    }
+
+    private var recordingRetentionSection: some View {
+        Section("Recording Retention") {
+            Toggle("Delete recordings after processing", isOn: $settings.recordingRetentionEnabled)
+                .accessibilityIdentifier(A11yID.recordingRetentionToggle)
+
+            HStack {
+                Text("Keep recordings for")
+                Spacer()
+                Text(OutputSettingsLogic.retentionDaysLabel(settings.recordingRetentionDays))
+                    .foregroundStyle(.secondary)
+                Stepper("", value: $settings.recordingRetentionDays, in: 0 ... 3650)
+                    .labelsHidden()
+            }
+            .disabled(!settings.recordingRetentionEnabled)
+
+            Text(
+                "Counted from the recording date. A recording is deleted only after its meeting notes were saved, "
+                    + "or its transcript when no LLM provider is set. A recording waiting for speaker names is kept "
+                    + "until they are given or skipped, or the naming wait set under Speakers runs out. "
+                    + "Only audio this app recorded and moved into "
+                    + "the output folder is affected: imported files, record-only recordings and recordings "
+                    + "processed by earlier versions are never deleted. Switching this on, or shortening the "
+                    + "period, deletes the recordings already past it.",
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 
