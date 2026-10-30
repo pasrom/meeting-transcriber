@@ -199,9 +199,6 @@ class PipelineQueue {
     /// Internal (not private) because `processNext` in PipelineQueue+Stages.swift
     /// fills it.
     @ObservationIgnored var pipelineRuns: [UUID: Task<Bool, Never>] = [:]
-    /// Internal (not private) because `processNext` in PipelineQueue+Stages.swift
-    /// reads this to distinguish a cancellation from a real pipeline error.
-    var cancelledJobIDs = Set<UUID>()
 
     /// Called when a job completes (success or error) — for notifications
     var onJobStateChange: ((PipelineJob, JobState, JobState) -> Void)?
@@ -673,10 +670,7 @@ class PipelineQueue {
     /// whatever the state, because accepting auto-names starts it while the job
     /// is still `.speakerNamingPending`.
     private func cancelWork(of id: UUID) {
-        if let run = pipelineRuns[id] {
-            cancelledJobIDs.insert(id)
-            run.cancel()
-        }
+        pipelineRuns[id]?.cancel()
         naming.cancelLateWork(jobID: id)
     }
 

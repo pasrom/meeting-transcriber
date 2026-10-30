@@ -241,6 +241,34 @@ final class LateRerunCancelTests: XCTestCase {
         XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "\($0)") }
     }
 
+    /// A cancelled run is told apart from a failed one by its own task, with
+    /// no record kept per job: it ends without an error on anyone, and the
+    /// queue moves on to the next job.
+    func testACancelledRunEndsQuietlyAndTheQueueMovesOn() async throws {
+        let engine = ParkedEngine(parksEveryRun: false)
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let queue = makeQueue(engine: engine, diarizer: MockDiarization())
+        var states: [JobState] = []
+        queue.onJobStateChange = { _, _, new in states.append(new) }
+        engine.parkNextRun()
+        let first = try makeJob(title: "Cancelled")
+        let second = try makeJob(title: "Next")
+        queue.enqueue(first)
+        queue.enqueue(second)
+        await waitFor(engine.isParked, timeout: .seconds(5))
+
+        queue.cancelJob(id: first.id)
+        engine.release()
+        await waitFor(
+            queue.jobs.first { $0.id == second.id }?.state == .done && !queue.isProcessing,
+            timeout: .seconds(10),
+        )
+
+        XCTAssertFalse(states.contains(.error), "a cancelled run was reported as a failure: \(states)")
+        XCTAssertNil(queue.jobs.first { $0.id == first.id })
+        XCTAssertTrue(queue.pipelineRuns.isEmpty, "a finished run is still recorded")
+    }
+
     // MARK: - Fixture
 
     private struct Fixture {

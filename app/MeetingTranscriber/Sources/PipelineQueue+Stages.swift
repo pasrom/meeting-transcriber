@@ -196,12 +196,7 @@ extension PipelineQueue {
         // nor the output folder, and leaving it behind a nil engine would strand
         // a job that only wants one LLM call until the marking dies with the
         // session.
-        if await resumeProtocolOnly(job) {
-            // Same reason the `catch` blocks below clear it: an id left behind
-            // is what tells a later generic error apart from a cancellation.
-            cancelledJobIDs.remove(job.id)
-            return true
-        }
+        if await resumeProtocolOnly(job) { return true }
 
         guard let engine, let outputDir else {
             logger.warning("Processing dependencies not configured — skipping")
@@ -254,17 +249,13 @@ extension PipelineQueue {
                 finalTranscript: finalTranscript, transcription: transcription,
                 ctx: ctx, workDir: workDir, outputDir: outputDir,
             )
-        } catch is CancellationError {
-            // Cleared here too, not only in the branch below. The set is what
-            // tells a later generic error apart from a cancellation, so an ID
-            // left in it outlives the job it described for the rest of the
-            // session. Nothing threw this out of a stage until the echo
-            // cancellation did, which is what made the leak reachable.
-            cancelledJobIDs.remove(ctx.jobID)
-            logger.info("Job \(ctx.jobID) cancelled")
-            // Job already removed by cancelJob()
         } catch {
-            if cancelledJobIDs.remove(ctx.jobID) != nil {
+            // This run's task is cancelled only when its own job is cancelled
+            // or removed, so the task's flag is the record of it. A stage
+            // stopped by the cancellation may still report a failure of its
+            // own rather than `CancellationError`, which must not read as a
+            // pipeline error. The job is already gone either way.
+            if error is CancellationError || Task.isCancelled {
                 logger.info("Job \(ctx.jobID) cancelled")
             } else {
                 logger.error("Pipeline error for job \(ctx.jobID): \(error.localizedDescription, privacy: .public)")
