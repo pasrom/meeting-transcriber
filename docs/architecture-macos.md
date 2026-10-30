@@ -104,7 +104,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/AudioSettingsView.swift` | Microphone device · VAD (enabled + threshold) · Per-Channel Indicator |
 | `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Vocabulary section · Live transcription (PoC) toggle |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Speaker Naming (open the naming window automatically, how long unnamed meetings wait) · Mic Speaker Name · Known Voices · Recognition Stats · Experimental: Diarization Tuning |
-| `Settings/OutputSettingsView.swift` | LLM provider · notes language · output folder · custom prompt |
+| `Settings/OutputSettingsView.swift` | LLM provider · notes language · output folder · recording retention · custom prompt |
 | `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics |
 | `Settings/AboutSettingsView.swift` | Version · bundle identifier · build date · ffmpeg status · project link · Updates |
 | `Settings/HelpBadge.swift` / `Settings/SettingsHelp.swift` | Reusable "?" help-popover badge + its shared copy, used across Settings sections |
@@ -176,6 +176,11 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `ProtocolOpener.swift` | Opens a job's target, preferring a running Notion desktop app |
 | `Settings/NotionExportSettingsView.swift`, `Settings/NotionExportSettingsModel.swift` | Notion settings UI and its connection and schema state |
 | `PipelineQueue+Recovery.swift` | Snapshot restore for `PipelineQueue` |
+| `PipelineQueue+Retention.swift` | The queue's side of recording retention: records what stage 3 moved, marks a recording due once its output is written, runs passes with the tracks its unfinished jobs hold |
+| `PipelineController+Retention.swift` | When retention passes run (launch, hourly, after a rebuild, once the settings settle), and the pass before a queue is built |
+| `RecordingRetention.swift` | Runs retention passes: decides on the main actor, deletes off it via `RecordingFileDeleter`, rechecks each delete |
+| `RecordingRetentionPolicy.swift` | Pure decision per registry entry: delete, keep (with the reason) or drop |
+| `RecordingRetentionRegistry.swift` | The list of relocated recordings retention may delete (`retained_recordings.json`), the only thing the cleaner acts on |
 | `PipelineQueue+OrphanRecovery.swift` | Orphaned-recording recovery for `PipelineQueue`: the staging scan and the jobs it creates |
 | `PipelineQueue+EchoBleed.swift` | Warns when a dual-source recording carries the same speech on both tracks (loudspeaker bleeding into the microphone) — measurement half of the echo mitigation (issue #581) |
 | `PipelineQueue+EchoCancellation.swift` | Removes the far end from the microphone track before anything reads it — cancellation half of the echo mitigation, the other branch of `EchoRemedy` |
@@ -788,7 +793,7 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 | **Audio** | Microphone · VAD · Echo · Per-Channel Indicator | `settings` | `audioDevices` |
 | **Transcription** | Engine + per-engine options + status | `settings`, three engines | — |
 | **Speakers** | Diarization · Speaker Identity · Known Voices · Recognition Stats · Experimental: Diarization Tuning | `settings`, `recognitionStatsLog`, `enrollmentDiarizerFactory` | `knownVoicesSheet` |
-| **Output** | LLM Provider · Notes Language · Output Folder · Prompt | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
+| **Output** | LLM Provider · Notes Language · Output Folder · Recording Retention · Prompt | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
 | **Advanced** | Permissions · Diagnostics | — | `micPermission`, `screenRecordingOK`, `accessibilityOK` |
 | **About** | Build identity · Dependencies · Updates | `settings`, `updateChecker?` | — |
 
