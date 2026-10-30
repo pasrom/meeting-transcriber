@@ -359,12 +359,24 @@ PRs are excluded from the self-hosted runner.
    first and the prompt goes with it. `tccutil` can only reset, and the MDM/PPPC
    route is unavailable here (see step 3), so a click is unavoidable.
 
-   Until both are in place the lane **skips loudly and passes**, writing cause
-   and fix to the step summary. Deliberate: an ungranted host would otherwise
-   turn every PR red for a prerequisite unrelated to the change under test, and
-   a silent skip would be worse still, since it would read as coverage. The
-   tolerance is narrow — only the preflight's two missing-grant arms return
-   early; anything failing after them still fails the lane.
+   Until both are in place the lane (and `--naming-switch`, which needs the
+   Accessibility half) **skips and passes**, via `host_skip` in
+   `scripts/lib/e2e-helpers.sh`: cause and fix go to the log and the step
+   summary, a `::warning::` annotation goes on the run page, and the lane is
+   listed in `$RUNNER_TEMP/e2e-host-skips`. Passing is deliberate: an ungranted
+   host would otherwise turn every PR (and every main push, which carries the
+   stable-tag check) red for a prerequisite unrelated to the change under test.
+   A skip nobody sees would be worse still, since it would read as coverage, and
+   that is what happened: both lanes skipped on every main run for a stretch
+   with the step reading green. So the last step of `e2e-app.yml` fails a
+   **scheduled or dispatched** run when that list is not empty: the nightly
+   belongs to no change, and a dispatch is how someone checks a restored grant.
+   Failing at the end rather than in the step keeps every later lane running;
+   the step calls `fail_on_host_skips` from the helper lib. The tolerance is
+   narrow: a lane may skip only on a cause that is certainly the host's. The
+   naming preflights skip only on the driver's explicit `trusted=false` or the
+   specific refusal (a System Events timeout is retried once with a longer
+   window first); anything else fails the lane.
 
 **Launch the app with `open`, never by executing the binary.** TCC answers for
 the process launchd knows, so a bundle started as `"$APP/Contents/MacOS/..." &`

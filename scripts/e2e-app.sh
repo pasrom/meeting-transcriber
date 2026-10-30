@@ -2261,8 +2261,8 @@ run_crash_recovery() {
 # RUNNER PREREQUISITE: the shell running this needs an Accessibility grant
 # (System Settings → Privacy & Security → Accessibility), same one-time,
 # cert-independent shape as the existing mic / screen-recording grants. Checked
-# up front so a missing grant fails with its own message instead of looking like
-# a broken dismiss.
+# up front so a missing grant is reported as a skip with its own message
+# (host_skip) instead of looking like a broken dismiss.
 run_naming_escape() {
     local label="[naming-escape]"
     [ -f "$DEFAULT_FIXTURE" ] || fail "$label: 2-speaker fixture not found: $DEFAULT_FIXTURE"
@@ -2276,8 +2276,19 @@ run_naming_escape() {
     # default 120 s timeout, which reads as a hung lane rather than a missing
     # permission. So the probe wraps the *same* operation the lane performs in a
     # short explicit timeout and treats the timeout as the diagnosis.
-    local probe
-    probe="$(osascript -e 'tell application "System Events" to key code 53' 2>&1)" || true
+    local probe tcc_timeout="${E2E_TCC_PROMPT_TIMEOUT:-10}"
+    case "$tcc_timeout" in
+        ''|*[!0-9]*) fail "$label: E2E_TCC_PROMPT_TIMEOUT must be a positive whole number of seconds, got '$tcc_timeout'" ;;
+    esac
+    # Base 10 explicitly: a leading zero would otherwise read as octal below.
+    tcc_timeout=$((10#$tcc_timeout))
+    [ "$tcc_timeout" -gt 0 ] \
+        || fail "$label: E2E_TCC_PROMPT_TIMEOUT must be a positive whole number of seconds, got '${E2E_TCC_PROMPT_TIMEOUT}'"
+    # The first Apple Event to System Events, so the one that raises the
+    # prompt: it honours the same setup knob as the probe below.
+    probe="$(osascript -e "with timeout of ${tcc_timeout} seconds" \
+        -e 'tell application "System Events" to key code 53' \
+        -e 'end timeout' 2>&1)" || true
     case "$probe" in
         *"not allowed"*|*"assistive"*|*"1002"*)
             # SKIP for the same reason the Automation arm skips: this is a host
@@ -2286,27 +2297,44 @@ run_naming_escape() {
             # The two grants are separate and can be half-configured — Automation
             # granted, Accessibility not — so both arms need the same treatment
             # or the lane just moves its red one step later.
-            log "$label: SKIP — this host may drive System Events but not post keystrokes."
             log "$label: cause: $probe"
-            log "$label: fix: System Settings → Privacy & Security → Accessibility, enable the entry for the shell that runs this lane (it is usually already listed, unchecked)."
-            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-                {
-                    echo "### naming-escape lane skipped"
-                    echo
-                    echo "This host has Automation but is missing the **Accessibility** grant, so the real-Escape assertion did not run."
-                    echo "Enable the runner's shell under System Settings → Privacy & Security → Accessibility, then this lane gates normally."
-                } >> "$GITHUB_STEP_SUMMARY"
-            fi
+            host_skip naming-escape "This host may drive System Events but is missing the Accessibility grant, so the real-Escape assertion did not run. Fix: System Settings → Privacy & Security → Accessibility, enable the entry for the process that runs this lane (for CI, the runner's node binary; see the e2e-architecture skill)."
             return 0 ;;
     esac
     # The probe's window is short by default so a missing grant is reported in
     # seconds rather than waited out. For the one-time setup run it has to be
     # long enough for a human to answer the prompt it raises, hence the knob:
     # E2E_TCC_PROMPT_TIMEOUT=300 bash scripts/e2e-app.sh --naming-escape
-    local tcc_timeout="${E2E_TCC_PROMPT_TIMEOUT:-10}"
-    probe="$(osascript -e "with timeout of ${tcc_timeout} seconds" \
-        -e 'tell application "System Events" to get name of first process whose frontmost is true' \
-        -e 'end timeout' 2>&1)" || true
+    local probe_status attempt
+    # A timeout is what a missing Automation grant looks like, but a busy
+    # System Events looks the same, so a timeout is retried once with three
+    # times the window before it is taken as the grant. A connection that
+    # dropped (-609) or a System Events not running yet (-600) is transient
+    # and retried once too, then fails. A definite refusal (-1743) needs no
+    # retry, and any other error fails the lane.
+    local timeout_retried="" transient_retried=""
+    for attempt in 1 2 3; do
+        probe_status=0
+        probe="$(osascript -e "with timeout of ${tcc_timeout} seconds" \
+            -e 'tell application "System Events" to get name of first process whose frontmost is true' \
+            -e 'end timeout' 2>&1)" || probe_status=$?
+        case "$probe" in
+            *"timed out"*|*"-1712"*)
+                [ -z "$timeout_retried" ] || break
+                timeout_retried=1
+                # Three times the window, capped at 60 s (the setup knob may
+                # already be minutes long), but never shorter than the first.
+                local longer=$((tcc_timeout * 3 > 60 ? 60 : tcc_timeout * 3))
+                tcc_timeout=$((longer > tcc_timeout ? longer : tcc_timeout))
+                log "$label: System Events did not answer; retrying once with ${tcc_timeout}s" ;;
+            *"-609"*|*"-600"*)
+                [ -z "$transient_retried" ] || break
+                transient_retried=1
+                log "$label: System Events was not reachable ($probe); retrying once"
+                sleep 2 ;;
+            *) break ;;
+        esac
+    done
     case "$probe" in
         *"timed out"*|*"-1712"*|*"not authori"*|*"-1743"*)
             # SKIP, not FAIL. The grant can only be given by clicking Allow in
@@ -2315,19 +2343,12 @@ run_naming_escape() {
             # reason unrelated to the change under test. Failing after this point
             # still fails: only the missing prerequisite is tolerated, and it is
             # reported loudly enough that nobody mistakes it for coverage.
-            log "$label: SKIP — this host cannot drive System Events (probe window ${tcc_timeout}s)."
             log "$label: cause: $probe"
-            log "$label: fix: System Settings → Privacy & Security → Automation, allow the runner's shell to control System Events (and Accessibility for keystrokes). Both prompt on first use, so run this lane once by hand in the GUI session and click Allow."
-            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-                {
-                    echo "### naming-escape lane skipped"
-                    echo
-                    echo "This host is missing the **Automation** grant, so the real-Escape assertion did not run."
-                    echo "Grant it once in the GUI session (System Settings → Privacy & Security → Automation), then this lane gates normally."
-                } >> "$GITHUB_STEP_SUMMARY"
-            fi
+            host_skip naming-escape "This host cannot drive System Events within ${tcc_timeout}s: the Automation grant is missing, so the real-Escape assertion did not run. Fix: System Settings → Privacy & Security → Automation, allow the process that runs this lane to control System Events, and grant it Accessibility for keystrokes (for CI, the runner's node binary; see the e2e-architecture skill, runner setup step 6). Both prompt on first use, so run this lane once by hand in the GUI session and click Allow."
             return 0 ;;
     esac
+    [ "$probe_status" -eq 0 ] \
+        || fail "$label: the System Events preflight failed for a reason that is not a missing grant (exit $probe_status): $probe"
     log "$label: frontmost process is '$probe'"
 
     local fixture_dir fixture_copy
@@ -2710,19 +2731,18 @@ run_naming_switch() {
 
     # Preflight the one grant this lane needs. SKIP rather than FAIL, for the
     # reason the Escape lane gives: only a person at the GUI can grant it, so a
-    # red here would blame every PR for a host prerequisite. Only this arm
-    # returns early; anything failing after it fails the lane.
-    if ! "$driver" trusted 2>/dev/null | grep -q 'trusted=true'; then
-        log "$label: SKIP — this process may not use Accessibility, so no keystroke can reach the dialog."
-        log "$label: fix: System Settings → Privacy & Security → Accessibility; it is the same grant the --naming-escape lane needs (see the e2e-architecture skill for which entry works for CI)."
-        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-            {
-                echo "### naming-switch lane skipped"
-                echo
-                echo "This host is missing the **Accessibility** grant for the runner, so the typing-after-switch assertion did not run."
-                echo "Grant it once in the GUI session (System Settings → Privacy & Security → Accessibility), then this lane gates normally."
-            } >> "$GITHUB_STEP_SUMMARY"
-        fi
+    # red here would blame every PR for a host prerequisite. Only the driver's
+    # explicit answer (exit 3, trusted=false) is the missing grant; a crash or
+    # any other output fails the lane, as does anything after this arm.
+    local trust trust_status=0
+    trust="$("$driver" trusted 2>&1)" || trust_status=$?
+    case "$trust_status:$trust" in
+        0:*"trusted=true"*) ;;
+        3:*"trusted=false"*) ;;
+        *) fail "$label: the Accessibility preflight did not answer (exit $trust_status): $trust" ;;
+    esac
+    if [ "$trust_status" -eq 3 ]; then
+        host_skip naming-switch "This process may not use Accessibility, so no keystroke can reach the dialog and the typing-after-switch assertion did not run. Fix: System Settings → Privacy & Security → Accessibility; it is the same grant the --naming-escape lane needs (see the e2e-architecture skill for which entry works for CI)."
         return 0
     fi
 

@@ -367,9 +367,10 @@ jobs:
       # unfocused path is the one the fix nearly shipped broken.
       # RUNNER PREREQUISITE: the runner shell needs an Accessibility grant, a
       # one-time setup step alongside the mic / screen-recording grants (see the
-      # e2e-architecture skill). The driver preflights it and fails with its own
-      # message, so a missing grant reads as a missing grant rather than as a
-      # broken dismiss.
+      # e2e-architecture skill). The driver preflights it and, when it is
+      # missing, skips: green, with a warning annotation, and recorded for the
+      # host-skip gate at the end of this job, which turns a scheduled or
+      # dispatched run red.
       # PLACEMENT: cheap and non-level-sensitive, so it sits next to the other
       # naming lane and still ahead of crash-recovery.
       - name: Run live-recording E2E driver (speaker-naming escape)
@@ -394,7 +395,8 @@ jobs:
       # name into the speaker DB (read over RPC, no ~/Downloads dependency).
       # Keystrokes go through scripts/drive-naming-field.swift (AX + CGEvent),
       # which needs the Accessibility grant only, not Automation; the driver
-      # preflights it and skips loudly when it is missing. Switching via the
+      # preflights it and skips when it is missing, reported like the Escape
+      # lane's skip above. Switching via the
       # picker (not resolving the first job) is load-bearing: resolving it drops
       # the picker, shifts the view's slot, and SwiftUI rebuilds it with fresh
       # fields so the defect cannot show. Measured on the unfixed build.
@@ -491,7 +493,8 @@ jobs:
         run: bash scripts/e2e-app.sh --no-build --crash-recovery
 
       # Best-effort: capture the simulator's stdout for post-mortem if
-      # the driver failed before tearing it down.
+      # the driver failed before tearing it down. Above the host-skip gate, so
+      # a run that failed only there does not upload a log nobody needs.
       - name: Upload simulator log
         if: failure()
         uses: actions/upload-artifact@v7
@@ -499,6 +502,16 @@ jobs:
           name: meeting-simulator.log
           path: /tmp/e2e-app-sim.log
           if-no-files-found: ignore
+
+      # Host-skip gate: lanes that could not run for a host condition pass on
+      # PR and push runs with a warning, and this fails a scheduled or
+      # dispatched run instead, at the end so no later lane is lost. Why:
+      # the e2e-architecture skill, runner setup step 6.
+      - name: Fail a scheduled or dispatched run when a lane skipped for the host
+        if: >-
+          always() &&
+          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        run: source scripts/lib/e2e-helpers.sh && fail_on_host_skips
 
       - name: Cleanup signing keychain
         if: always() && env.E2E_SIGNING_KEYCHAIN != ''

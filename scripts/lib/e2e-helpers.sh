@@ -115,6 +115,40 @@ die() {
     exit 1
 }
 
+# host_skip <lane> <summary> — the lane could not run its assertion for a host
+# condition only a person can fix; only a cause that is certainly the host's
+# may come here. Returns 0 (the lane passes); in CI it also annotates, writes
+# the step summary and lists the lane for fail_on_host_skips. Rationale: the
+# e2e-architecture skill, runner setup step 6.
+host_skip() {
+    local lane="$1" summary="$2"
+    echo "[$lane]: SKIP — $summary"
+    [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
+    echo "::warning title=$lane lane skipped::$summary"
+    # Guarded: GITHUB_ACTIONS alone (exported by hand, or under act) does not
+    # promise these, and `set -u` would turn the skip into a failure.
+    # A write that fails must not turn the skip into a failure either; a lost
+    # entry in the skip list is reported, since the gate reads nothing else.
+    [ -z "${GITHUB_STEP_SUMMARY:-}" ] \
+        || printf '### %s lane skipped\n\n%s\n' "$lane" "$summary" 2>/dev/null >>"$GITHUB_STEP_SUMMARY" || true
+    if [ -n "${RUNNER_TEMP:-}" ] && ! echo "$lane" 2>/dev/null >>"$RUNNER_TEMP/e2e-host-skips"; then
+        echo "::error title=$lane skip not recorded::could not write $RUNNER_TEMP/e2e-host-skips, so the scheduled-run gate will not see this skip"
+    fi
+    return 0
+}
+
+# fail_on_host_skips — the body of e2e-app.yml's last step on scheduled and
+# dispatched runs: exit 1, with an error per lane, when any lane of this job
+# called host_skip.
+fail_on_host_skips() {
+    local skips="${RUNNER_TEMP:-}/e2e-host-skips" lane
+    [ -s "$skips" ] || return 0
+    while read -r lane; do
+        echo "::error title=$lane lane skipped::a host condition kept this lane from running its assertion (see the lane's warning above and the e2e-architecture skill)"
+    done <"$skips"
+    return 1
+}
+
 # Assert that a process matching `$pattern` is running. Exits 1 with a
 # clear error if not. Intended for polling loops that would otherwise
 # burn their full timeout if the app crashed mid-poll — the loop just
