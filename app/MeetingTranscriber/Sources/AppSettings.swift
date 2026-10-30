@@ -145,6 +145,14 @@ enum OpenAISamplingParameter: String {
     /// switching an override on is itself a change for them.
     static let initialOverride = 1.0
 
+    /// UserDefaults key the override is stored under.
+    var defaultsKey: String {
+        switch self {
+        case .temperature: "openAITemperature"
+        case .topP: "openAITopP"
+        }
+    }
+
     /// The range the OpenAI API accepts for this parameter.
     var range: ClosedRange<Double> {
         switch self {
@@ -599,6 +607,36 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(openAIModel, forKey: "openAIModel") }
     }
 
+    /// Sampling overrides for the OpenAI-compatible provider. Nil (the
+    /// default) leaves the key out of the request so the server's own default
+    /// applies; a set value is clamped into the API's range on write.
+    var openAITemperature: Double? {
+        didSet { storeSamplingOverride(\.openAITemperature, .temperature) }
+    }
+
+    var openAITopP: Double? {
+        didSet { storeSamplingOverride(\.openAITopP, .topP) }
+    }
+
+    /// Normalize a just-written sampling override and persist it (nil removes
+    /// the key). Reassigns only on change, because under @Observable the write
+    /// re-enters the observer and an unconditional one would recurse forever.
+    /// Persists here either way, so storage does not depend on that re-entry.
+    private func storeSamplingOverride(
+        _ keyPath: ReferenceWritableKeyPath<AppSettings, Double?>,
+        _ parameter: OpenAISamplingParameter,
+    ) {
+        let normalized = self[keyPath: keyPath].flatMap(parameter.normalized)
+        if normalized != self[keyPath: keyPath] { self[keyPath: keyPath] = normalized }
+        defaults.set(normalized, forKey: parameter.defaultsKey)
+    }
+
+    private static func loadSamplingOverride(
+        _ defaults: UserDefaults, _ parameter: OpenAISamplingParameter,
+    ) -> Double? {
+        (defaults.object(forKey: parameter.defaultsKey) as? Double).flatMap(parameter.normalized)
+    }
+
     var openAIAPIKeyPlacement: OpenAIAPIKeyPlacement {
         didSet { defaults.set(openAIAPIKeyPlacement.rawValue, forKey: "openAIAPIKeyPlacement") }
     }
@@ -766,6 +804,8 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         openAIEndpoint = defaults.object(forKey: "openAIEndpoint") as? String
             ?? Self.defaultOpenAIEndpoint
         openAIModel = defaults.object(forKey: "openAIModel") as? String ?? "llama3.1"
+        openAITemperature = Self.loadSamplingOverride(defaults, .temperature)
+        openAITopP = Self.loadSamplingOverride(defaults, .topP)
         openAIAPIKeyPlacement = defaults.string(forKey: "openAIAPIKeyPlacement")
             .flatMap(OpenAIAPIKeyPlacement.init(rawValue:)) ?? .bearerToken
         openAIAPIKeyHeaderName = defaults.string(forKey: "openAIAPIKeyHeaderName") ?? OpenAIAPIKeyPlacement.defaultHeaderName

@@ -745,6 +745,16 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertEqual(generator.apiKeyHeaderName, "x-api-key")
     }
 
+    func testMakeProtocolGeneratorOpenAIPassesSamplingOverridesFromSettings() throws {
+        settings.protocolProvider = .openAICompatible
+        settings.openAITemperature = 0.3
+        let state = makeAppState()
+
+        let generator = try XCTUnwrap(state.pipeline.makeProtocolGenerator() as? OpenAIProtocolGenerator)
+        XCTAssertEqual(generator.temperature, 0.3)
+        XCTAssertNil(generator.topP, "an unset override must reach the generator as nil")
+    }
+
     #if !APPSTORE
         func testMakeProtocolGeneratorClaudeCLI() {
             settings.protocolProvider = .claudeCLI

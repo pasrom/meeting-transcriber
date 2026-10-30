@@ -368,6 +368,8 @@ final class PipelineController {
                 apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
                 apiKeyPlacement: settings.openAIAPIKeyPlacement,
                 apiKeyHeaderName: settings.openAIAPIKeyHeaderName,
+                temperature: settings.openAITemperature,
+                topP: settings.openAITopP,
             )
 
         case .none:
