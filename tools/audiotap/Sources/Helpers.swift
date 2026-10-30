@@ -77,6 +77,30 @@ func writeAllToFileHandle(_ fd: Int32, _ ptr: UnsafeRawPointer, count: Int) {
     }
 }
 
+/// Resolve a device UID to its current `AudioDeviceID`, or
+/// `kAudioObjectUnknown` when the device is gone. Plain CoreAudio, no engine
+/// involved: the mic restart policy asks "is my device still there" without
+/// going anywhere near the calls that can wedge, and the app-audio tap build
+/// finds the output device its aggregate was bound to by this UID, rather than
+/// asking for the default output again and possibly getting another device.
+func deviceIDForUID(_ uid: String) -> AudioDeviceID {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    )
+    var deviceID: AudioDeviceID = kAudioObjectUnknown
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    var cfUID: Unmanaged<CFString>? = Unmanaged.passUnretained(uid as CFString)
+    let qualifierSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject),
+        &address, qualifierSize, &cfUID,
+        &size, &deviceID,
+    )
+    return deviceID
+}
+
 /// Get the UID of the current default output device.
 func getDefaultOutputDeviceUID() -> String? {
     var address = AudioObjectPropertyAddress(

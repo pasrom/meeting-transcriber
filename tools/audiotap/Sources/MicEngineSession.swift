@@ -191,7 +191,7 @@ final class MicEngineSession: MicEngineSessionProviding {
     /// the one place that difference can still be seen.
     private func pin(deviceUID: String?, on inputNode: AVAudioInputNode) -> MicDevicePinOutcome {
         guard let uid = deviceUID else { return .notRequested }
-        var deviceID = Self.deviceIDForUID(uid)
+        var deviceID = deviceIDForUID(uid)
         guard deviceID != kAudioObjectUnknown else { return .unresolvedUID(uid) }
         let audioUnit = inputNode.audioUnit! // swiftlint:disable:this force_unwrapping
         let status = AudioUnitSetProperty(
@@ -245,7 +245,7 @@ final class MicEngineSession: MicEngineSessionProviding {
         guard let pinned, let now = Self.configuration(of: pinned.unit) else { return nil }
         return MicConfigurationChangeReading(
             atStart: pinned.atStart, now: now, isRunning: engine.isRunning,
-            pinnedDevicePresent: Self.deviceIDForUID(pinned.uid) == pinned.atStart.deviceID,
+            pinnedDevicePresent: deviceIDForUID(pinned.uid) == pinned.atStart.deviceID,
         )
     }
 
@@ -290,27 +290,5 @@ final class MicEngineSession: MicEngineSessionProviding {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             _ = retained
         }
-    }
-
-    /// Resolve a device UID to its current `AudioDeviceID`, or
-    /// `kAudioObjectUnknown` when the device is gone. Plain CoreAudio, no engine
-    /// involved, so the restart policy can ask "is my device still there" without
-    /// going anywhere near the calls that can wedge.
-    static func deviceIDForUID(_ uid: String) -> AudioDeviceID {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        )
-        var deviceID: AudioDeviceID = kAudioObjectUnknown
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        var cfUID: Unmanaged<CFString>? = Unmanaged.passUnretained(uid as CFString)
-        let qualifierSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address, qualifierSize, &cfUID,
-            &size, &deviceID,
-        )
-        return deviceID
     }
 }

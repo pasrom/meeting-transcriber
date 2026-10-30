@@ -25,7 +25,7 @@ extension MicCaptureHandler {
     /// restart.
     func handleDeviceChange(fromConfigurationChange: Bool = false) {
         let isDeviceAvailable = selectedDeviceUID
-            .map { MicEngineSession.deviceIDForUID($0) != kAudioObjectUnknown } ?? false
+            .map { deviceIDForUID($0) != kAudioObjectUnknown } ?? false
         // A capture that stalled for lack of audio released its engine and is
         // waiting for exactly this: a new device is the one thing that may
         // bring it back (see `+Progress`).
@@ -301,7 +301,7 @@ extension MicCaptureHandler {
     /// The device a restart should aim at right now, or nil to take the default.
     func currentRestartTarget() -> String? {
         guard let uid = selectedDeviceUID else { return nil }
-        return MicEngineSession.deviceIDForUID(uid) != kAudioObjectUnknown ? uid : nil
+        return deviceIDForUID(uid) != kAudioObjectUnknown ? uid : nil
     }
 }
 
