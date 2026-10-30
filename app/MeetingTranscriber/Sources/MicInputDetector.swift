@@ -11,13 +11,13 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MicInpu
 ///
 /// Complements `PowerAssertionDetector` for call apps whose in-call power
 /// assertions are absent, unnamed, or undocumented (WeChat, Tencent Meeting,
-/// FaceTime, WhatsApp): a call ALWAYS captures the mic, so
+/// FaceTime, WhatsApp, Slack): a call ALWAYS captures the mic, so
 /// `kAudioProcessPropertyIsRunningInput` flipping true on a watched bundle ID
 /// is a reliable signal.
 ///
 /// Precision is deliberately traded for coverage, and the cost is real: any
 /// watched app holding the mic across `confirmationCount` polls starts a
-/// recording, so a WeChat or WhatsApp voice message longer than roughly
+/// recording, so a WeChat or WhatsApp voice message (or a Slack clip) longer than roughly
 /// `pollInterval * confirmationCount` (about 6 s at the defaults) looks like a
 /// call. There is no minimum-duration filter downstream to catch that. What
 /// limits the blast radius today: every one of these apps is off by default,
@@ -77,6 +77,12 @@ class MicInputDetector: MeetingDetecting {
         // belongs to the browser detection channel.
         MicPattern(appName: "FaceTime", bundleIDs: ["com.apple.FaceTime", "com.apple.avconferenced"]),
         MicPattern(appName: "WhatsApp", bundleIDs: ["net.whatsapp.WhatsApp"]),
+        // Slack Huddles. Not measured on a real huddle: Slack is Electron, so
+        // the mic is assumed to be held by a helper such as
+        // `com.tinyspeck.slackmacgap.helper`, hence `matchesHelpers`. Slack
+        // also holds the mic while recording a voice or video clip, so a long
+        // clip looks like a huddle and records, as a WhatsApp voice message does.
+        MicPattern(appName: "Slack", bundleIDs: ["com.tinyspeck.slackmacgap"], matchesHelpers: true),
     ]
 
     /// The `defaultPatterns` subset selected by the user's "Apps to Watch"
@@ -139,8 +145,8 @@ class MicInputDetector: MeetingDetecting {
     }
 
     func checkOnce() -> DetectedMeeting? {
-        // All four toggles default to off, so most installs run this detector
-        // with an empty pattern set. Skip the whole round then: no Core Audio
+        // Every one of these toggles defaults to off, so most installs run
+        // this detector with an empty pattern set. Skip the whole round then: no Core Audio
         // enumeration every poll, and no diagnostic naming every mic-using
         // bundle on machines that never opted into this channel.
         guard !patterns.isEmpty else { return nil }

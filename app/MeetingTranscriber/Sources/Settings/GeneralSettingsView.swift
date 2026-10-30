@@ -43,6 +43,8 @@ struct GeneralSettingsView: View {
                 Toggle("Tencent Meeting", isOn: $settings.watchTencentMeeting)
                 Toggle("FaceTime", isOn: $settings.watchFaceTime)
                 Toggle("WhatsApp", isOn: $settings.watchWhatsApp)
+                Toggle("Slack", isOn: $settings.watchSlack)
+                    .accessibilityIdentifier(A11yID.watchSlackToggle)
                 customApps
                 Toggle("Browser Web Meetings", isOn: $settings.watchBrowserMeetings)
                     .accessibilityIdentifier(A11yID.watchBrowserToggle)

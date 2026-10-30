@@ -48,15 +48,15 @@ final class MeetingPatternsTests: XCTestCase {
     func testAllPatternsContainsEveryKnownApp() {
         // teams, zoom, webex, simulator, browserMeetings (issue #503),
         // plus the mic-input-detected call apps: wechat, tencentMeeting,
-        // faceTime, whatsApp.
-        XCTAssertEqual(AppMeetingPattern.all.count, 9)
+        // faceTime, whatsApp, slack.
+        XCTAssertEqual(AppMeetingPattern.all.count, 10)
     }
 
     func testByNameLookup() {
         XCTAssertNotNil(AppMeetingPattern.byName["microsoft teams"])
         XCTAssertNotNil(AppMeetingPattern.byName["zoom"])
         XCTAssertNotNil(AppMeetingPattern.byName["webex"])
-        XCTAssertNil(AppMeetingPattern.byName["slack"])
+        XCTAssertNil(AppMeetingPattern.byName["discord"])
     }
 }
 

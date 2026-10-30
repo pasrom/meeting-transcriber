@@ -148,7 +148,15 @@ extension AppMeetingPattern {
         meetingPatterns: [],
     )
 
-    static let all: [AppMeetingPattern] = [teams, zoom, webex, simulator, browserMeetings, wechat, tencentMeeting, faceTime, whatsApp]
+    static let slack = AppMeetingPattern(
+        appName: "Slack",
+        ownerNames: ["Slack"],
+        meetingPatterns: [],
+    )
+
+    static let all: [AppMeetingPattern] = [
+        teams, zoom, webex, simulator, browserMeetings, wechat, tencentMeeting, faceTime, whatsApp, slack,
+    ]
 
     static let byName: [String: AppMeetingPattern] = {
         var dict: [String: AppMeetingPattern] = [:]

@@ -175,7 +175,7 @@ final class MicInputDetectorTests: XCTestCase {
     }
 
     func testPatternsWatchingFiltersBySelection() {
-        let all = MicInputDetector.patterns(watching: ["WeChat", "Tencent Meeting", "FaceTime", "WhatsApp"])
+        let all = MicInputDetector.patterns(watching: ["WeChat", "Tencent Meeting", "FaceTime", "WhatsApp", "Slack"])
         XCTAssertEqual(all.count, MicInputDetector.defaultPatterns.count)
         let none = MicInputDetector.patterns(watching: [])
         XCTAssertTrue(none.isEmpty)

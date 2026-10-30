@@ -482,7 +482,7 @@ class PowerAssertionDetector: MeetingDetecting {
     /// Two sources, because an app can be known to this detector, to
     /// `MicInputDetector`, or to both: the bound assertion patterns here, plus
     /// every `AppMeetingPattern.ownerNames`, which is where the mic-detected
-    /// call apps (WeChat, WhatsApp, FaceTime, Tencent Meeting) are declared.
+    /// call apps (WeChat, WhatsApp, FaceTime, Tencent Meeting, Slack) are declared.
     /// WhatsApp in particular is Electron and so a plausible holder of the very
     /// assertion the open pattern keys on.
     ///
