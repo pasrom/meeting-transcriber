@@ -27,6 +27,21 @@ extension XCTestCase {
         return path
     }
 
+    /// Waits, for up to five seconds, for a fake to have written its pid to
+    /// `pidFile`, which it does once it has got as far as the test needs it
+    /// to be before acting on it. The pid itself, not the file: the shell
+    /// creates the file before it writes, and a fake stopped in between
+    /// leaves one that is empty. Gives up rather than failing, since a fake
+    /// that never started leaves nothing to read, which the assertion on it
+    /// then reports. For suites off the main actor, where `waitFor` is not
+    /// callable.
+    func waitForPID(pidFile: URL) async throws {
+        let writtenBy = Date().addingTimeInterval(5)
+        while readPID(pidFile) == nil, Date() < writtenBy {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     /// The process whose pid `pidFile` holds has exited and been reaped.
     func assertProcessGone(pidFile: URL, file: StaticString = #filePath, line: UInt = #line) throws {
         let pid = try XCTUnwrap(readPID(pidFile), "the fake process never started", file: file, line: line)

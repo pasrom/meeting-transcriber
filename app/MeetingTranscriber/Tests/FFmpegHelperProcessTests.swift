@@ -7,9 +7,6 @@ import XCTest
 /// stop by themselves after three seconds, past `bound`, so a broken bound
 /// fails these tests instead of hanging them.
 final class FFmpegHelperProcessTests: XCTestCase {
-    /// The limit for runs expected to time out: long enough for a fake
-    /// started on a loaded machine to set its trap and write its pid first.
-    private static let shortTimeout: TimeInterval = 0.5
     private static let longTimeout: TimeInterval = 2
     private static let grace: TimeInterval = 0.15
     private static let bound: TimeInterval = 2
@@ -137,7 +134,10 @@ final class FFmpegHelperProcessTests: XCTestCase {
     // MARK: - Timeout
 
     /// An ffmpeg that ignores SIGTERM is killed at the limit, and the import
-    /// fails only once it has exited.
+    /// fails only once it has exited. The limit runs on a clock the test
+    /// moves once the fake has set its trap, which the pid written after it
+    /// shows: in real time it could pass first on a loaded machine, and the
+    /// SIGTERM would then end a fake not yet ignoring it.
     func testLoadKillsAnFFmpegThatIgnoresSIGTERMAtTheTimeout() async throws {
         let folder = try makeTempDirectory(prefix: "ffmpeg-process")
         let pidFile = folder.appendingPathComponent("ffmpeg.pid")
@@ -146,9 +146,14 @@ final class FFmpegHelperProcessTests: XCTestCase {
         echo $$ > '\(pidFile.path)'
         exec sleep 3
         """)
+        let timeout: TimeInterval = 0.5
+        let clock = ManualClock()
+        let run = Task { try await Self.load(script: script, timeout: timeout, clock: clock) }
+        try await waitForPID(pidFile: pidFile)
         let start = Date()
 
-        let message = await failureMessage { try await Self.load(script: script, timeout: Self.shortTimeout) }
+        await clock.advance(by: .seconds(timeout))
+        let message = await failureMessage { try await run.value }
 
         XCTAssertEqual(message?.hasPrefix("timed out"), true, "got \(String(describing: message))")
         XCTAssertLessThan(Date().timeIntervalSince(start), Self.bound, "the import outlasted its limit")
@@ -174,10 +179,7 @@ final class FFmpegHelperProcessTests: XCTestCase {
         exec sleep 3
         """)
         let run = Task { try await Self.load(script: script, timeout: 30) }
-        let startedBy = Date().addingTimeInterval(5)
-        while readPID(pidFile) == nil, Date() < startedBy {
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        try await waitForPID(pidFile: pidFile)
         let start = Date()
 
         run.cancel()
@@ -193,10 +195,11 @@ final class FFmpegHelperProcessTests: XCTestCase {
 
     private static func load(
         script: String, timeout: TimeInterval, drainGrace: TimeInterval = FFmpegHelperProcessTests.grace,
+        clock: any Clock<Duration> = SuspendingClock(),
     ) async throws -> Loaded {
         try await FFmpegHelper.loadAudioWithFFmpeg(
             url: URL(fileURLWithPath: "/dev/null"), executable: script,
-            timeout: timeout, terminationGrace: grace, drainGrace: drainGrace,
+            timeout: timeout, terminationGrace: grace, drainGrace: drainGrace, clock: clock,
         )
     }
 

@@ -43,7 +43,7 @@
             let run: (outcome: BoundedProcess.Outcome, output: (text: String, resultEvent: ResultEventInfo?, stderr: Data))
             do {
                 run = try await ProcessOutput.run(
-                    BoundedProcess(process, terminationGrace: terminationGrace),
+                    BoundedProcess(process, terminationGrace: terminationGrace, clock: clock),
                     timeout: timeout,
                     onStop: { stdin.close(flags: .stop) },
                     ending: [stdout.end, stderr.end],

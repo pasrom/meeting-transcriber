@@ -30,6 +30,10 @@
         /// (`ProcessOutput.defaultDrainGrace` in production).
         let outputDrainGrace: TimeInterval
 
+        /// What `timeout` is measured on; see `BoundedProcess.init`. The
+        /// `--help` probe keeps the suspending clock.
+        let clock: any Clock<Duration>
+
         init(
             claudeBin: String,
             language: String,
@@ -37,6 +41,7 @@
             timeout: TimeInterval = Self.timeoutSeconds,
             terminationGrace: TimeInterval = BoundedProcess.defaultTerminationGrace,
             outputDrainGrace: TimeInterval = ProcessOutput.defaultDrainGrace,
+            clock: any Clock<Duration> = SuspendingClock(),
         ) {
             self.claudeBin = claudeBin
             self.language = language
@@ -44,6 +49,7 @@
             self.timeout = timeout
             self.terminationGrace = terminationGrace
             self.outputDrainGrace = outputDrainGrace
+            self.clock = clock
         }
 
         static let timeoutSeconds: TimeInterval = 600

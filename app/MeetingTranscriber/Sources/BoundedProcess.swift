@@ -30,13 +30,21 @@ final class BoundedProcess: Sendable {
 
     let process: Process
     private let terminationGrace: TimeInterval
+    private let clock: any Clock<Duration>
     private let state = OSAllocatedUnfairLock(initialState: State())
 
     /// Installs the process's termination handler; set nothing else on
-    /// `terminationHandler` afterwards.
-    init(_ process: Process, terminationGrace: TimeInterval = defaultTerminationGrace) {
+    /// `terminationHandler` afterwards. The limit of `run` is measured on
+    /// `clock`: the suspending clock, so time asleep does not count, or one
+    /// a test moves itself so the limit passes at a point of its choosing.
+    init(
+        _ process: Process,
+        terminationGrace: TimeInterval = defaultTerminationGrace,
+        clock: any Clock<Duration> = SuspendingClock(),
+    ) {
         self.process = process
         self.terminationGrace = terminationGrace
+        self.clock = clock
         let state = state
         process.terminationHandler = { _ in
             let waiters = state.withLock { current in
@@ -50,10 +58,10 @@ final class BoundedProcess: Sendable {
         }
     }
 
-    /// Starts the process and waits for it to exit. At `timeout` (on the
-    /// suspending clock, so time asleep does not count), or when the calling
-    /// task is cancelled, the process is stopped and `onStop` runs. The wait
-    /// itself ignores cancellation: it lasts until the process is gone.
+    /// Starts the process and waits for it to exit. At `timeout` on the
+    /// clock given at init, or when the calling task is cancelled, the
+    /// process is stopped and `onStop` runs. The wait itself ignores
+    /// cancellation: it lasts until the process is gone.
     ///
     /// Returns `.timedOut` whenever the process was still running at the
     /// limit, even if it then exits with status 0: what a stopped process
@@ -67,9 +75,9 @@ final class BoundedProcess: Sendable {
         let stopRun: @Sendable () -> Void = { [self] in
             if stop() { onStop() }
         }
-        let timer = Task.detached {
+        let timer = Task.detached { [clock] in
             do {
-                try await Task.sleep(for: .seconds(timeout), clock: .suspending)
+                try await clock.sleep(for: .seconds(timeout))
             } catch {
                 return
             }

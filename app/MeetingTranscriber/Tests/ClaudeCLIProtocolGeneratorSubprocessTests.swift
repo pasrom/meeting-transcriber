@@ -50,7 +50,7 @@
             exec sleep 3
             """)
 
-            await assertTimesOut(script: script)
+            try await assertTimesOut(script: script, pidFile: pidFile)
 
             try assertProcessGone(pidFile: pidFile)
             try await assertReaped(childFile)
@@ -69,7 +69,7 @@
             exec sleep 3
             """)
 
-            await assertTimesOut(script: script)
+            try await assertTimesOut(script: script, pidFile: pidFile)
 
             try assertProcessGone(pidFile: pidFile)
             try await assertReaped(childFile)
@@ -86,7 +86,7 @@
             exec sleep 3
             """)
 
-            await assertTimesOut(script: script)
+            try await assertTimesOut(script: script, pidFile: pidFile)
 
             try assertProcessGone(pidFile: pidFile)
         }
@@ -107,7 +107,7 @@
             exec sleep 3
             """)
 
-            await assertTimesOut(script: script, transcript: Self.largeTranscript)
+            try await assertTimesOut(script: script, pidFile: pidFile, transcript: Self.largeTranscript)
 
             try assertProcessGone(pidFile: pidFile)
         }
@@ -122,7 +122,7 @@
             exec sleep 3
             """)
 
-            await assertTimesOut(script: script, transcript: Self.largeTranscript)
+            try await assertTimesOut(script: script, pidFile: pidFile, transcript: Self.largeTranscript)
 
             try assertProcessGone(pidFile: pidFile)
         }
@@ -139,7 +139,7 @@
             exit 0
             """)
 
-            let (result, elapsed) = await outcome(script: script, timeout: Self.longTimeout)
+            let (result, elapsed) = await Self.outcome(script: script, timeout: Self.longTimeout)
 
             XCTAssertEqual(try result.get(), "Protocol body")
             XCTAssertLessThan(elapsed, Self.bound, "the read waited for the child, not for the CLI")
@@ -154,7 +154,7 @@
             \(Self.replyLine)
             """)
 
-            let (result, _) = await outcome(script: script, timeout: Self.longTimeout)
+            let (result, _) = await Self.outcome(script: script, timeout: Self.longTimeout)
 
             XCTAssertEqual(try result.get(), "Protocol body")
         }
@@ -168,7 +168,7 @@
             exit 3
             """)
 
-            let (result, elapsed) = await outcome(script: script, timeout: Self.longTimeout)
+            let (result, elapsed) = await Self.outcome(script: script, timeout: Self.longTimeout)
 
             switch result {
             case let .failure(ProtocolError.cliFailed(code, message)):
@@ -193,12 +193,9 @@
                 run: "touch '\(ranFile.path)'",
                 help: "echo $$ > '\(probeFile.path)'; exec sleep 3",
             )
-            let generator = makeGenerator(script: script, timeout: 30)
+            let generator = Self.makeGenerator(script: script, timeout: 30)
             let run = Task { try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false) }
-            let startedBy = Date().addingTimeInterval(5)
-            while readPID(probeFile) == nil, Date() < startedBy {
-                try await Task.sleep(for: .milliseconds(20))
-            }
+            try await waitForPID(pidFile: probeFile)
             let start = Date()
 
             run.cancel()
@@ -221,12 +218,9 @@
             echo $$ > '\(pidFile.path)'
             exec sleep 3
             """)
-            let generator = makeGenerator(script: script, timeout: 30)
+            let generator = Self.makeGenerator(script: script, timeout: 30)
             let run = Task { try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false) }
-            let startedBy = Date().addingTimeInterval(5)
-            while readPID(pidFile) == nil, Date() < startedBy {
-                try await Task.sleep(for: .milliseconds(20))
-            }
+            try await waitForPID(pidFile: pidFile)
             let start = Date()
 
             run.cancel()
@@ -241,10 +235,22 @@
 
         /// Runs `generate` against `script` and asserts that it fails with
         /// the timeout, well before the fake CLI would have stopped by itself.
+        /// The limit runs on a clock moved once the fake has written its pid
+        /// to `pidFile`, the last thing each fake does before it sleeps: in
+        /// real time the limit could pass first on a loaded machine, and the
+        /// SIGTERM would then end a fake before it had set its trap or
+        /// written the pid the assertions read.
         private func assertTimesOut(
-            script: String, transcript: String = "Speaker 1: hello", file: StaticString = #filePath, line: UInt = #line,
-        ) async {
-            let (result, elapsed) = await outcome(script: script, timeout: Self.shortTimeout, transcript: transcript)
+            script: String, pidFile: URL, transcript: String = "Speaker 1: hello",
+            file: StaticString = #filePath, line: UInt = #line,
+        ) async throws {
+            let clock = ManualClock()
+            async let run = Self.outcome(script: script, timeout: Self.shortTimeout, transcript: transcript, clock: clock)
+            try await waitForPID(pidFile: pidFile)
+            let start = Date()
+            await clock.advance(by: .seconds(Self.shortTimeout))
+            let (result, _) = await run
+            let elapsed = Date().timeIntervalSince(start)
             switch result {
             case .failure(ProtocolError.timeout):
                 break
@@ -257,10 +263,11 @@
 
         /// Runs `generate` against `script` and reports how it ended and how
         /// long it took.
-        private func outcome(
+        private static func outcome(
             script: String, timeout: TimeInterval, transcript: String = "Speaker 1: hello",
+            clock: any Clock<Duration> = SuspendingClock(),
         ) async -> (result: Result<String, any Error>, elapsed: TimeInterval) {
-            let generator = makeGenerator(script: script, timeout: timeout)
+            let generator = makeGenerator(script: script, timeout: timeout, clock: clock)
             let start = Date()
             let result: Result<String, any Error>
             do {
@@ -271,10 +278,12 @@
             return (result, Date().timeIntervalSince(start))
         }
 
-        private func makeGenerator(script: String, timeout: TimeInterval) -> ClaudeCLIProtocolGenerator {
+        private static func makeGenerator(
+            script: String, timeout: TimeInterval, clock: any Clock<Duration> = SuspendingClock(),
+        ) -> ClaudeCLIProtocolGenerator {
             ClaudeCLIProtocolGenerator(
                 claudeBin: script, language: "German", timeout: timeout,
-                terminationGrace: Self.grace, outputDrainGrace: Self.grace,
+                terminationGrace: grace, outputDrainGrace: grace, clock: clock,
             )
         }
 

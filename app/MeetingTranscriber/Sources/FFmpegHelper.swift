@@ -94,12 +94,14 @@ enum FFmpegHelper {
     /// non-zero exit or a run stopped at `timeout`, `CancellationError` when
     /// cancelled, and `AudioMixerError.ffmpegNotAvailable` when ffmpeg cannot
     /// be started. ffmpeg has exited before the temporary WAV is removed.
+    /// `clock` is what `timeout` is measured on; see `BoundedProcess.init`.
     static func loadAudioWithFFmpeg(
         url: URL,
         executable: String,
         timeout: TimeInterval = timeoutSeconds,
         terminationGrace: TimeInterval = BoundedProcess.defaultTerminationGrace,
         drainGrace: TimeInterval = ProcessOutput.defaultDrainGrace,
+        clock: any Clock<Duration> = SuspendingClock(),
     ) async throws -> (samples: [Float], sampleRate: Int) {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ffmpeg_\(UUID().uuidString).wav")
@@ -122,7 +124,7 @@ enum FFmpegHelper {
         let run: (outcome: BoundedProcess.Outcome, output: Data)
         do {
             run = try await ProcessOutput.run(
-                BoundedProcess(process, terminationGrace: terminationGrace),
+                BoundedProcess(process, terminationGrace: terminationGrace, clock: clock),
                 timeout: timeout,
                 ending: [stderr.end],
                 drainGrace: drainGrace,

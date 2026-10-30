@@ -11,12 +11,20 @@ final class BoundedProcessTests: XCTestCase {
     }
 
     /// A process that ignores SIGTERM is killed once the grace period has
-    /// passed, and the run reports the timeout only after it has exited.
+    /// passed, and the run reports the timeout only after it has exited. The
+    /// limit passes once the process has set its trap, which the pid written
+    /// after it shows; in real time it could pass first on a loaded machine,
+    /// and the SIGTERM would then end a process not yet ignoring it.
     func testRunKillsAProcessThatIgnoresSIGTERMAtTheTimeout() async throws {
-        let process = Self.shell("trap '' TERM; exec sleep 3")
+        let (process, pidFile) = shellIgnoringSIGTERM()
+        let timeout: TimeInterval = 0.2
+        let clock = ManualClock()
+        let run = Task { try await BoundedProcess(process, terminationGrace: 0.15, clock: clock).run(timeout: timeout) }
+        try await waitForPID(pidFile: pidFile)
         let start = Date()
 
-        let outcome = try await BoundedProcess(process, terminationGrace: 0.15).run(timeout: 0.2)
+        await clock.advance(by: .seconds(timeout))
+        let outcome = try await run.value
 
         XCTAssertEqual(outcome, .timedOut)
         XCTAssertFalse(process.isRunning)
@@ -27,17 +35,12 @@ final class BoundedProcessTests: XCTestCase {
 
     /// Cancelling stops the process, and the run still returns only once it
     /// has exited. The process ignores SIGTERM, so it outlives the
-    /// cancellation by the grace period; the ready file is written after the
-    /// trap is set, so the cancel cannot come before it.
+    /// cancellation by the grace period; the pid is written after the trap
+    /// is set, so the cancel cannot come before it.
     func testCancellingRunStopsTheProcessAndWaitsForItsExit() async throws {
-        let ready = FileManager.default.temporaryDirectory.appendingPathComponent("bounded-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: ready) }
-        let process = Self.shell("trap '' TERM; touch '\(ready.path)'; exec sleep 3")
+        let (process, pidFile) = shellIgnoringSIGTERM()
         let run = Task { try await BoundedProcess(process, terminationGrace: 0.15).run(timeout: 30) }
-        let startedBy = Date().addingTimeInterval(5)
-        while !FileManager.default.fileExists(atPath: ready.path), Date() < startedBy {
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        try await waitForPID(pidFile: pidFile)
         let start = Date()
 
         run.cancel()
@@ -52,6 +55,14 @@ final class BoundedProcessTests: XCTestCase {
     func testLabelShowsAFractionOnlyWhenThereIsOne() {
         XCTAssertEqual(BoundedProcess.label(for: 300), "300")
         XCTAssertEqual(BoundedProcess.label(for: 0.2), "0.2")
+    }
+
+    /// A shell that ignores SIGTERM and then sleeps, with the file it
+    /// writes its pid to once the trap is set, so a test can wait for that
+    /// before signalling it.
+    private func shellIgnoringSIGTERM() -> (process: Process, pidFile: URL) {
+        let pidFile = makeTempFile(suffix: ".pid")
+        return (Self.shell("trap '' TERM; echo $$ > '\(pidFile.path)'; exec sleep 3"), pidFile)
     }
 
     private static func shell(_ command: String) -> Process {
