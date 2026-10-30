@@ -159,6 +159,35 @@ final class LateRerunCancelTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(engine.sawCancellation), "the cancelled job's run kept going uncancelled")
     }
 
+    /// A re-run whose diarizer ignores cancellation still comes back after the
+    /// job is gone. It must not bring the job's naming data back, neither in
+    /// memory nor as a sidecar on disk.
+    func testALateRerunFinishingAfterCancelWritesNoNamingData() async throws {
+        let fixture = try await makeJobAwaitingNaming()
+        let queue = fixture.queue, diarizer = fixture.diarizer
+        XCTAssertFalse(namingSidecars().isEmpty, "test premise: the first run wrote a naming sidecar")
+
+        diarizer.parkNextRun()
+        queue.completeSpeakerNaming(jobID: fixture.jobA, result: .rerun(2))
+        await waitFor { await diarizer.gate.hasWaiter }
+        // Taken before the cancel, which drops them from the session's record.
+        let rerun = try XCTUnwrap(queue.naming.lateWork[fixture.jobA]?.values, "test premise: re-run is tracked")
+
+        queue.cancelJob(id: fixture.jobA)
+        XCTAssertNil(queue.speakerNamingDataByJob[fixture.jobA], "test premise: cancel dropped the naming data")
+        XCTAssertTrue(namingSidecars().isEmpty, "test premise: cancel deleted the naming sidecar")
+
+        await diarizer.gate.open()
+        // Run to completion rather than for a fixed time, so a slow runner
+        // cannot assert before the re-run had its chance to write.
+        for task in rerun {
+            await task.value
+        }
+
+        XCTAssertNil(queue.speakerNamingDataByJob[fixture.jobA], "re-run recreated naming data for a cancelled job")
+        XCTAssertEqual(namingSidecars(), [], "re-run wrote a naming sidecar for a cancelled job")
+    }
+
     // MARK: - Fixture
 
     private struct Fixture {

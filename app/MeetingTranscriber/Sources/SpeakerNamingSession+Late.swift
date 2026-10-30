@@ -21,7 +21,9 @@ extension SpeakerNamingSession {
     }
 
     /// Cancel every late-naming task still running for `jobID`. Called when
-    /// the job is removed or cancelled.
+    /// the job is removed or cancelled. The tasks still re-check the job after
+    /// each await, because a step that ignores cancellation returns all the
+    /// same.
     func cancelLateWork(jobID: UUID) {
         lateWork.removeValue(forKey: jobID)?.values.forEach { $0.cancel() }
     }
@@ -206,6 +208,11 @@ extension SpeakerNamingSession {
                 isDualSource: namingData.isDualSource,
                 speakerCount: speakerCount, title: title,
             )
+            // The job can be cancelled while the diarizer runs, and a diarizer
+            // that ignores cancellation still returns. Everything below writes
+            // for this job: naming data, its sidecar, the transcript. Writing it
+            // for a job that is gone leaves an orphaned entry and file behind.
+            guard delegate.job(withID: jobID) != nil else { return }
 
             // Dual-track always yields a combined result (the merge, or the
             // app-only / mic-only single-track fallback); single-source sets it
@@ -257,6 +264,9 @@ extension SpeakerNamingSession {
                 completeSpeakerNaming(jobID: jobID, result: result, source: .dialog)
             }
         } catch {
+            // A cancelled job ends here when its diarizer honours cancellation.
+            // Nothing failed, and there is no job left to roll back.
+            guard delegate.job(withID: jobID) != nil else { return }
             logger.error("Late re-diarization failed: \(error.localizedDescription, privacy: .public)")
             delegate.updateJobState(id: jobID, to: .speakerNamingPending)
         }
