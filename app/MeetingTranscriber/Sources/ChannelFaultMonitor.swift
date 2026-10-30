@@ -41,6 +41,14 @@ enum ChannelFault: String, Equatable {
     /// (issues #724, #706). Unlike `gaveUp` nothing is stuck: a device change
     /// brings it back, which is what the message has to say.
     case stalled
+
+    /// Buffers keep arriving and carry energy, but for the sensor's whole
+    /// window nearly all of it sat below one 16-bit step, a floor rather than
+    /// the call (issue #699). App channel only, from `AppNoiseFloorSensor`. Reported like
+    /// `digitalSilence` and in its place: a tap of a silent meeting app
+    /// delivers exact zeros, which are that report's, so a floor that never
+    /// rises says the tap is not reading the meeting app at all.
+    case noiseFloor
 }
 
 /// Decides whether one capture channel has failed, from what the capture layer
@@ -142,7 +150,8 @@ struct ChannelFaultMonitor {
     ///     a chance to pass.
     ///   - corroborated: whether the recording is known to be capturing
     ///     anything at all right now, i.e. whether the *other* channel carried
-    ///     speech inside the window. Gates `digitalSilence` only: zeroes are
+    ///     speech inside the window. Gates `digitalSilence` and `noiseFloor`
+    ///     only: zeroes are
     ///     also what a healthy channel carries when its source is silent, and
     ///     a recording where nothing at all is happening belongs to
     ///     `SilentRecordingMonitor`.
@@ -158,6 +167,9 @@ struct ChannelFaultMonitor {
     ///   - stall: whether this channel's capture is released for lack of
     ///     audio, and how often it was. Defaulted because only the microphone
     ///     stalls.
+    ///   - noiseFloor: whether the capture layer's noise-floor sensor holds
+    ///     that this channel carries only a level below one 16-bit step.
+    ///     Defaulted because only the app channel has that sensor.
     mutating func update(
         ages: ChannelSignalAges,
         gaveUp: Bool,
@@ -165,6 +177,7 @@ struct ChannelFaultMonitor {
         corroborated: Bool,
         rebuildsExhausted: Bool = false,
         stall: MicCaptureStall = MicCaptureStall(),
+        noiseFloor: Bool = false,
     ) -> ChannelFault? {
         // First, and without waiting for the window: this is already terminal
         // when the flag flips, and the window exists to rule out states that
@@ -235,11 +248,21 @@ struct ChannelFaultMonitor {
         // The watchdog report already said this channel is silent, with more
         // in it; a plain silence report after it would say less. A channel
         // that then stops delivering altogether is a different failure, which
-        // is why only this arm is suppressed.
+        // is why only this arm is suppressed. The noise floor is a silence
+        // report too, under the same corroboration and the same latch; exact
+        // silence keeps its own, more specific message when both hold.
         let energyAge = min(ages.secondsSinceLastEnergy ?? elapsedSinceStart, observed)
-        guard energyAge >= window, corroborated, watchdogReport != .reported else { return nil }
+        let digitallySilent = energyAge >= window
+        // The sensor counts exact zeros too. A channel with no non-zero
+        // sample across the sensor's window is exact silence, which waits for
+        // its own window even when the sensor tripped first (a Warn-after
+        // above that window).
+        let floorOnly = noiseFloor
+            && (ages.secondsSinceLastEnergy.map { $0 < AppNoiseFloorLimits.windowSeconds } ?? false)
+        let fault: ChannelFault? = digitallySilent ? .digitalSilence : (floorOnly ? .noiseFloor : nil)
+        guard let fault, corroborated, watchdogReport != .reported else { return nil }
         reportedSilence = true
-        return .digitalSilence
+        return fault
     }
 
     mutating func reset() {

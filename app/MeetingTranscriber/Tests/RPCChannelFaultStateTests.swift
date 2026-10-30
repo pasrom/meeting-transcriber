@@ -113,12 +113,30 @@
             XCTAssertNil(health.appLevelDBFS)
         }
 
+        /// The sensor's live reading (issue #699), beside the latched fault:
+        /// the fault waits for the microphone to corroborate, the reading
+        /// does not, so a driver can see the sensor without a live call.
+        func testTheSnapshotCarriesTheLiveNoiseFloorReading() throws {
+            let state = try makeRPCTestState()
+            XCTAssertFalse(state.rpcStateSnapshot().channelHealth.appNoiseFloorOnly)
+            let recorder = MockRecorder()
+            recorder.appCarriesOnlyNoiseFloor = true
+            state.channelHealth.simulateStartForTests()
+
+            state.channelHealth.applyTick(recorder: recorder, now: t0)
+
+            let health = state.rpcStateSnapshot().channelHealth
+            XCTAssertTrue(health.appNoiseFloorOnly)
+            XCTAssertNil(health.appFault, "uncorroborated, so not reported")
+        }
+
         func testTheInactiveSnapshotCarriesNoFault() {
             let inactive = RPCStateSnapshot.ChannelHealth.inactive
             XCTAssertNil(inactive.micFault)
             XCTAssertNil(inactive.appFault)
             XCTAssertNil(inactive.micSecondsSinceLastBuffer)
             XCTAssertNil(inactive.micStallCount)
+            XCTAssertFalse(inactive.appNoiseFloorOnly)
         }
     }
 #endif

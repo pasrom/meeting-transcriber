@@ -102,6 +102,11 @@ final class ChannelHealthController {
     /// `@ObservationIgnored` like the ages: only the RPC snapshot reads it.
     @ObservationIgnored private(set) var micStallCount: Int?
 
+    /// The app tap's noise-floor verdict as of the last tick (issue #699).
+    /// Live and uncorroborated, unlike `appFault`. `@ObservationIgnored`
+    /// like the ages: written every tick, read only by the RPC snapshot.
+    @ObservationIgnored private(set) var appNoiseFloorOnly = false
+
     /// Per-channel "is this channel still delivering" decision, evaluated on
     /// every tick. Separate from `channelHealthMonitor`, which answers the
     /// louder-than-the-other question that drives the tint; see
@@ -271,6 +276,7 @@ final class ChannelHealthController {
         micLevelDBFS = nil
         appLevelDBFS = nil
         micStallCount = nil
+        appNoiseFloorOnly = false
         firstTickAt = nil
         lastSpeechAt.removeAll()
     }
@@ -295,6 +301,7 @@ final class ChannelHealthController {
         micLevelDBFS = mic
         appLevelDBFS = app
         micStallCount = recorder.micCaptureStall.count
+        appNoiseFloorOnly = recorder.appCarriesOnlyNoiseFloor
         // The monitor's own threshold, not a copy of its default: the init
         // allows a different one, and a second constant could then disagree
         // with the episode the tint is drawn from.
@@ -428,6 +435,9 @@ final class ChannelHealthController {
         case .app: appFaultMonitor.update(
                 ages: ages, gaveUp: gaveUp, elapsedSinceStart: elapsedSinceStart,
                 corroborated: corroborated, rebuildsExhausted: rebuildsExhausted,
+                // Only the app tap has the noise-floor sensor (issue #699).
+                // Read once per tick, so `/state` and the fault agree.
+                noiseFloor: appNoiseFloorOnly,
             )
         }
     }

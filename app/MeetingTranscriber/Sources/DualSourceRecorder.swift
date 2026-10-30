@@ -75,6 +75,10 @@ class DualSourceRecorder: RecordingProvider {
         captureSession?.appSilentTrackWatchdogGaveUp ?? false
     }
 
+    var appCarriesOnlyNoiseFloor: Bool {
+        captureSession?.appCarriesOnlyNoiseFloor ?? false
+    }
+
     var micCaptureStall: MicCaptureStall {
         captureSession?.micCaptureStall ?? MicCaptureStall()
     }

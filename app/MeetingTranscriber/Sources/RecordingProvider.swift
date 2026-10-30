@@ -43,6 +43,10 @@ protocol RecordingProvider {
     /// give-up: the channel still captures. Default false.
     var appSilentTrackWatchdogGaveUp: Bool { get }
 
+    /// The app tap's noise-floor verdict (issue #699), see
+    /// `AppNoiseFloorSensor`. Default false.
+    var appCarriesOnlyNoiseFloor: Bool { get }
+
     /// Whether the microphone is released because it went without audio for
     /// the capture layer's whole budget, and how many times it was (issues
     /// #724, #706). Unlike a give-up it can clear: a device change brings the
@@ -96,6 +100,10 @@ extension RecordingProvider {
     }
 
     var appSilentTrackWatchdogGaveUp: Bool {
+        false
+    }
+
+    var appCarriesOnlyNoiseFloor: Bool {
         false
     }
 

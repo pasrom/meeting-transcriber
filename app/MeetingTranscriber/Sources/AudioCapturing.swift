@@ -24,6 +24,7 @@ protocol AudioCapturing: AnyObject {
     var micCaptureGaveUp: Bool { get }
     var micCaptureStartTimedOut: Bool { get }
     var appSilentTrackWatchdogGaveUp: Bool { get }
+    var appCarriesOnlyNoiseFloor: Bool { get }
     var micCaptureStall: MicCaptureStall { get }
 
     /// How long each channel has gone without a buffer, and without one

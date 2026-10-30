@@ -280,6 +280,7 @@
                 micSilent: channelHealth.micSilentActive,
                 appSilent: channelHealth.appSilentActive,
                 recordingSilent: channelHealth.recordingSilentActive,
+                appNoiseFloorOnly: channelHealth.appNoiseFloorOnly,
                 micFault: channelHealth.micFault?.rawValue,
                 appFault: channelHealth.appFault?.rawValue,
                 micLevelDBFS: channelHealth.micLevelDBFS,

@@ -165,6 +165,22 @@ extension ChannelHealthController {
                 + "\(SystemSettingsPaths.soundOutput). Changing the output inside the meeting app "
                 + "does not help. The recording continues."
 
+        // Neither digital-silence arm fits: buffers carry energy, so
+        // `everCarriedSignal` is true without the call ever having been in
+        // them, and it is not a permission problem, since a tap that may not
+        // hear the app delivers exact zeros. What fixed it in issue #699 was
+        // making the device the meeting app plays through the system output,
+        // which also rebuilds the tap. "Usually", because one field case is
+        // all the evidence there is for the cause.
+        case (.app, .noiseFloor, _):
+            "The app-audio channel has carried almost nothing for "
+                + "\(Int(AppNoiseFloorLimits.windowSeconds)) seconds, at most a faint noise floor, "
+                + "while the microphone carries audio. Set the system output, in Control Center "
+                + "or in \(SystemSettingsPaths.soundOutput), to the device the meeting app plays "
+                + "through. Changing the output inside the meeting app does not "
+                + "help. A silent meeting app records as exact silence, so a floor like this "
+                + "usually means the tap is not hearing the meeting app's output device."
+
         case (.app, .digitalSilence, false):
             "The app-audio channel has delivered only silence since this recording started, "
                 + "while the microphone carries audio. Check that Meeting Transcriber is enabled "
@@ -178,8 +194,9 @@ extension ChannelHealthController {
                 + "still has permission to use the microphone."
 
         // The microphone's watchdog stalls rather than reporting this; if it
-        // ever does, it is still a microphone delivering zeros.
-        case (.mic, .digitalSilence, _), (.mic, .rebuildsExhausted, _):
+        // ever does, it is still a microphone delivering zeros. It has no
+        // noise-floor sensor either; the arm only keeps the switch exhaustive.
+        case (.mic, .digitalSilence, _), (.mic, .rebuildsExhausted, _), (.mic, .noiseFloor, _):
             "The microphone is delivering silence, not quiet audio. "
                 + "Check the mute switch on your headset or input device, and the input mute "
                 + "in macOS. A meeting app's own mute button does not cause this."

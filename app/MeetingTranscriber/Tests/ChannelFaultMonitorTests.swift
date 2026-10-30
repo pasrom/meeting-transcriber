@@ -33,6 +33,7 @@ final class ChannelFaultMonitorTests: XCTestCase {
         XCTAssertEqual(ChannelFault.gaveUp.rawValue, "gaveUp")
         XCTAssertEqual(ChannelFault.rebuildsExhausted.rawValue, "rebuildsExhausted")
         XCTAssertEqual(ChannelFault.stalled.rawValue, "stalled")
+        XCTAssertEqual(ChannelFault.noiseFloor.rawValue, "noiseFloor")
     }
 
     // MARK: - A microphone that stalled

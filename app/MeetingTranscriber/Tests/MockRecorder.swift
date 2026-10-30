@@ -50,6 +50,9 @@ class MockRecorder: RecordingProvider {
     /// Whether the silent-track watchdog stopped rebuilding (issue #672).
     /// Default false, matching the protocol's default.
     var appSilentTrackWatchdogGaveUp = false
+    /// Whether the app tap carries only a sub-step noise floor (issue #699).
+    /// Default false, matching the protocol's default.
+    var appCarriesOnlyNoiseFloor = false
     /// Whether the microphone stalled for lack of audio (issues #724, #706).
     var micCaptureStall = MicCaptureStall()
 

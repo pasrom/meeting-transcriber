@@ -32,6 +32,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         var micCaptureGaveUp = false
         var micCaptureStartTimedOut = false
         var appSilentTrackWatchdogGaveUp = false
+        var appCarriesOnlyNoiseFloor = false
         var micCaptureStall = MicCaptureStall()
         var appSignalAges: ChannelSignalAges = .unknown
         var micSignalAges: ChannelSignalAges = .unknown
@@ -253,6 +254,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         // the give-up under this name fails.
         session.micCaptureStartTimedOut = true
         session.appSilentTrackWatchdogGaveUp = true
+        session.appCarriesOnlyNoiseFloor = true
         session.appSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 1, secondsSinceLastEnergy: 2)
         session.micSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 3, secondsSinceLastEnergy: 4)
 
@@ -265,6 +267,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         XCTAssertFalse(recorder.micCaptureGaveUp)
         XCTAssertFalse(recorder.micCaptureStartTimedOut)
         XCTAssertFalse(recorder.appSilentTrackWatchdogGaveUp)
+        XCTAssertFalse(recorder.appCarriesOnlyNoiseFloor)
         // Never opened, not "opened and long silent": the fault monitor reads
         // the two apart, so the no-session answer has to be the absent one.
         XCTAssertEqual(recorder.appSignalAges, .unknown)
@@ -282,6 +285,10 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         session.appCaptureGaveUp = false
         XCTAssertTrue(recorder.appSilentTrackWatchdogGaveUp)
         session.appCaptureGaveUp = true
+        XCTAssertTrue(recorder.appCarriesOnlyNoiseFloor)
+        // Its own flag too: every other app flag above is also true.
+        session.appCarriesOnlyNoiseFloor = false
+        XCTAssertFalse(recorder.appCarriesOnlyNoiseFloor)
         XCTAssertEqual(recorder.appSignalAges.secondsSinceLastBuffer, 1)
         XCTAssertEqual(recorder.appSignalAges.secondsSinceLastEnergy, 2)
         XCTAssertEqual(recorder.micSignalAges.secondsSinceLastBuffer, 3)

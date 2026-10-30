@@ -158,10 +158,16 @@
             /// without screenshot OCR.
             let recordingSilent: Bool
 
+            /// The app tap's noise-floor verdict (issue #699), live and
+            /// uncorroborated: `appFault` says "noiseFloor" only once the
+            /// microphone showed the call is live, and keeps saying it after
+            /// this clears.
+            let appNoiseFloorOnly: Bool
+
             /// The capture fault reported for each channel in this recording:
             /// "noBuffers", "digitalSilence", "gaveUp", "rebuildsExhausted"
-            /// (the app channel only), "stalled" (the microphone only), or
-            /// absent when the channel is fine.
+            /// and "noiseFloor" (the app channel only), "stalled" (the
+            /// microphone only), or absent when the channel is fine.
             /// Distinct from `micSilent` / `appSilent`, which say only that
             /// one channel is quieter than the other and are true of a muted
             /// microphone, a quiet room and a dead tap alike.
@@ -192,6 +198,7 @@
                 micSilent: false,
                 appSilent: false,
                 recordingSilent: false,
+                appNoiseFloorOnly: false,
                 micFault: nil,
                 appFault: nil,
                 micLevelDBFS: nil,
