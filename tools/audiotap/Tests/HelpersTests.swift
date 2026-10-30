@@ -199,4 +199,13 @@ final class HelpersTests: XCTestCase {
         let result = getProcessBundleID(AudioObjectID.max)
         XCTAssertNil(result)
     }
+
+    func testDeviceIDForUIDAnswersUnknownForEitherStringStorage() {
+        // A UID of 15 bytes or fewer bridges to a fresh CFString the call has to
+        // keep alive itself; a longer one bridges to the String's own storage.
+        // Neither names a device, so both answer kAudioObjectUnknown, the short
+        // one without the HAL reading a string that was already freed.
+        XCTAssertEqual(deviceIDForUID("no-such-device"), kAudioObjectUnknown)
+        XCTAssertEqual(deviceIDForUID("no-such-device-with-a-long-uid"), kAudioObjectUnknown)
+    }
 }

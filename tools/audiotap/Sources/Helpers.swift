@@ -91,13 +91,19 @@ func deviceIDForUID(_ uid: String) -> AudioDeviceID {
     )
     var deviceID: AudioDeviceID = kAudioObjectUnknown
     var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-    var cfUID: Unmanaged<CFString>? = Unmanaged.passUnretained(uid as CFString)
+    // A UID of 15 bytes or fewer bridges to a fresh CFString that nothing else
+    // holds, and `passUnretained` does not hold it either, so without the
+    // extended lifetime it can be freed before the HAL reads the qualifier.
+    let cfUID = uid as CFString
+    var qualifier: Unmanaged<CFString>? = .passUnretained(cfUID)
     let qualifierSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-    AudioObjectGetPropertyData(
-        AudioObjectID(kAudioObjectSystemObject),
-        &address, qualifierSize, &cfUID,
-        &size, &deviceID,
-    )
+    _ = withExtendedLifetime(cfUID) {
+        AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address, qualifierSize, &qualifier,
+            &size, &deviceID,
+        )
+    }
     return deviceID
 }
 
