@@ -54,7 +54,8 @@ public class AudioCaptureSession {
     /// Set when the opt-in silent-track watchdog stopped rebuilding the app tap
     /// because its rebuilds did not restore signal (issue #672). Not terminal,
     /// unlike `appCaptureGaveUp`: the channel still captures, it captures
-    /// zeros. Read from the same polling path.
+    /// zeros. Read from the same polling path. Never cleared: whether it is
+    /// still news is decided by the fault monitor that reads it, not here.
     public private(set) var appSilentTrackWatchdogGaveUp = false
 
     /// Whether the microphone is released for lack of audio, and how often it
