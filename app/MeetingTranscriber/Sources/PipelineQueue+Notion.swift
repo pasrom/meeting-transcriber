@@ -223,6 +223,9 @@ extension PipelineQueue {
         do {
             try FileManager.default.removeItem(at: path)
             jobs[index].protocolPath = nil
+            // Only after a successful export: the page is the output now, so
+            // the missing local file must not keep the audio for good.
+            recordingRetention?.registry.markOutputExported(jobID: jobID)
             persistNotionExportChange(jobID: jobID)
         } catch {
             let shortID = PipelineJob.shortID(for: jobID)

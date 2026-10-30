@@ -39,6 +39,10 @@ final class AccidentalNamingAcceptTests: XCTestCase {
             jobs[id]?.state = newState
         }
 
+        func finishWithAcceptedAutoNames(jobID: UUID) {
+            updateJobState(id: jobID, to: .done, error: nil)
+        }
+
         func addWarning(id _: UUID, _ message: String) {
             warnings.append(message)
         }

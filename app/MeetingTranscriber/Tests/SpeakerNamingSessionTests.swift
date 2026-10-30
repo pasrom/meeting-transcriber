@@ -352,6 +352,10 @@ final class SpeakerNamingSessionTests: XCTestCase {
             recorder.transitions.append(newState)
         }
 
+        func finishWithAcceptedAutoNames(jobID: UUID) {
+            updateJobState(id: jobID, to: .done, error: nil)
+        }
+
         func addWarning(id _: UUID, _: String) {}
 
         func setNamingMetadata(

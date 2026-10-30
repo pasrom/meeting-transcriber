@@ -969,10 +969,9 @@ extension PipelineQueue {
         // writes already names the new locations. That ordering is the whole
         // fix: a quit during the protocol call must leave a snapshot the restore
         // can still find the audio by.
-        recordRelocatedAudio(
-            jobID: ctx.jobID,
-            Self.persistAudioToOutput(ctx: ctx, outputDir: recordingsDir, stagingDir: stagingDir),
-        )
+        let (relocated, moved) = Self.persistAudioToOutput(ctx: ctx, outputDir: recordingsDir, stagingDir: stagingDir)
+        recordRelocatedAudio(jobID: ctx.jobID, relocated)
+        registerRelocatedAudio(jobID: ctx.jobID, moved: moved, root: outputDir)
 
         // --- Persist 16kHz audio for re-diarization (move instead of copy to avoid double I/O) ---
         // Replacing, because a job run a second time keeps its stem and the
@@ -1048,6 +1047,19 @@ extension PipelineQueue {
         jobID: UUID, transcript: String, title: String, protocolsDir: URL,
         speakerNames: [String] = [],
     ) async throws(CancellationError) {
+        try await generateProtocol(
+            jobID: jobID, transcript: transcript, title: title, protocolsDir: protocolsDir,
+            speakerNames: speakerNames, transcriptIsTheOutputWithoutAProvider: true,
+        )
+    }
+
+    /// `transcriptIsTheOutputWithoutAProvider: false` for a run that was
+    /// started with a provider: resumed after the provider was switched off,
+    /// it still owes a protocol, so its transcript does not stand in for one.
+    func generateProtocol( // swiftlint:disable:this function_parameter_count
+        jobID: UUID, transcript: String, title: String, protocolsDir: URL,
+        speakerNames: [String], transcriptIsTheOutputWithoutAProvider: Bool,
+    ) async throws(CancellationError) {
         // No generator and no LLM call for a job that is already gone.
         try ensureStillQueued(jobID)
         guard let job = job(withID: jobID) else { return }
@@ -1055,6 +1067,7 @@ extension PipelineQueue {
             // No protocol, so no export, but an export that is switched on and
             // cannot run is still worth a reason on the job.
             resolveNotionExport(jobID: jobID)
+            if transcriptIsTheOutputWithoutAProvider { markOutputWritten(jobID: jobID, output: job.transcriptPath) }
             return
         }
         let shortID = PipelineJob.shortID(for: jobID)
@@ -1122,6 +1135,7 @@ extension PipelineQueue {
         // the queue moves on while the export runs, so this is what a quit or a
         // failed export falls back on. A successful Notion-only export removes it.
         let savedLocally = saveProtocolLocally(markdown, basename: basename, jobID: jobID, protocolsDir: protocolsDir)
+        if savedLocally { markOutputWritten(jobID: jobID, output: self.job(withID: jobID)?.protocolPath) }
         if let configuration {
             queueNotionExport(
                 PendingNotionExport(
@@ -1211,26 +1225,18 @@ extension PipelineQueue {
         var done: [ArtifactRenamePlan.Move] = []
         do {
             for move in moves {
-                try fm.moveItem(at: move.from, to: move.to)
+                try moveArtifact(move.from, move.to)
                 done.append(move)
             }
         } catch {
-            var undoFailed = false
-            for move in done.reversed() {
-                do {
-                    try fm.moveItem(at: move.to, to: move.from)
-                } catch {
-                    undoFailed = true
-                    logger
-                        .error(
-                            "[\(shortID, privacy: .public)] ai_title_rename_undo_failed file=\(move.from.lastPathComponent, privacy: .private) error=\(error.localizedDescription, privacy: .private)",
-                        )
-                }
-            }
+            let stuck = undoArtifactMoves(done, shortID: shortID)
+            // Files whose move back failed stay under the new name; the
+            // registry follows exactly those, or it would forget them.
+            recordingRetention?.registry.repoint(jobID: jobID, moves: stuck.map { ($0.from, $0.to) })
             logger.warning("[\(shortID, privacy: .public)] ai_title_rename_failed error=\(error.localizedDescription, privacy: .private)")
             addWarning(
                 id: jobID,
-                undoFailed
+                !stuck.isEmpty
                     ? "Could not rename the output files to the AI meeting title, and some could not be moved back; check the output folder"
                     : "Could not rename the output files to the AI meeting title; the original names were kept",
             )
@@ -1249,9 +1255,27 @@ extension PipelineQueue {
             jobs[idx].recordRelocatedAudio(RelocatedAudioPaths(
                 mix: moved(jobs[idx].mixPath), app: moved(jobs[idx].appPath), mic: moved(jobs[idx].micPath),
             ))
+            recordingRetention?.registry.repoint(jobID: jobID, moves: done.map { (from: $0.from, to: $0.to) })
             saveSnapshot()
         }
         return newStem
+    }
+
+    /// Move `done` back, newest first, and return the moves that could not be
+    /// undone: those files stay under the new name.
+    private func undoArtifactMoves(_ done: [ArtifactRenamePlan.Move], shortID: String) -> [ArtifactRenamePlan.Move] {
+        done.reversed().filter { move in
+            do {
+                try moveArtifact(move.to, move.from)
+                return false
+            } catch {
+                logger
+                    .error(
+                        "[\(shortID, privacy: .public)] ai_title_rename_undo_failed file=\(move.from.lastPathComponent, privacy: .private) error=\(error.localizedDescription, privacy: .private)",
+                    )
+                return true
+            }
+        }
     }
 
     // MARK: - VAD Preprocessing
@@ -1381,9 +1405,13 @@ extension PipelineQueue {
     /// without a `_mix.wav` source) → mix slot is skipped, no persistent mix is
     /// written. `outputDir` here is `<root>/recordings`, reachable because the
     /// queue holds the security scope on the root.
+    ///
+    /// `moved` lists the destinations this run moved this job's audio to; the
+    /// retention registry records exactly these. Imports, files already in the output
+    /// folder and failed moves are never in it.
     nonisolated private static func persistAudioToOutput(
         ctx: JobContext, outputDir: URL, stagingDir: URL,
-    ) -> RelocatedAudioPaths {
+    ) -> (paths: RelocatedAudioPaths, moved: [URL]) {
         let (mixPath, appPath, micPath) = (ctx.mixPath, ctx.appPath, ctx.micPath)
         // Each move below renames-in-place — if two of the three URLs point at
         // the same file, the first move destroys the source for the next one.
@@ -1402,6 +1430,7 @@ extension PipelineQueue {
         let fm = FileManager.default
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
+        var moved: [URL] = []
         // Reuse the job's single basename so the audio copies match the
         // transcript/protocol stems exactly (same meeting-start stamp + shortID).
         func persist(_ src: URL?, _ suffix: String) -> URL? {
@@ -1433,11 +1462,15 @@ extension PipelineQueue {
             // rather than copied, no copy would remain anywhere.
             guard fm.fileExists(atPath: src.path) else {
                 logger.info("Audio already relocated, skipping: \(name, privacy: .private)")
+                // Not reported as moved: the file there may be one the user or
+                // a sync tool put there, and this run cannot show it moved it.
+                // The run that did move it recorded it at the time.
                 return fm.fileExists(atPath: dst.path) ? dst : src
             }
             do {
                 try moveIntoPlace(src, to: dst)
                 logger.info("Audio moved: \(name, privacy: .private)")
+                moved.append(dst)
                 return dst
             } catch {
                 // Error left redacted: a file-move CocoaError embeds the
@@ -1448,10 +1481,11 @@ extension PipelineQueue {
             }
         }
 
-        return RelocatedAudioPaths(
+        let paths = RelocatedAudioPaths(
             mix: persist(mixPath, RecordingFileSuffix.mix),
             app: persist(appPath, RecordingFileSuffix.app),
             mic: persist(micPath, RecordingFileSuffix.mic),
         )
+        return (paths, moved)
     }
 }

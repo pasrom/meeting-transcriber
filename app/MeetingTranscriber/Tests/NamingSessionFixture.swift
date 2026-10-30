@@ -43,6 +43,10 @@ final class NamingSessionMockDelegate: SpeakerNamingSessionDelegate {
         stateTransitions.append((id, newState))
     }
 
+    func finishWithAcceptedAutoNames(jobID: UUID) {
+        updateJobState(id: jobID, to: .done, error: nil)
+    }
+
     func addWarning(id: UUID, _ message: String) {
         warnings.append((id, message))
     }
