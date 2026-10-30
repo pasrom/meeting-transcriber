@@ -203,6 +203,17 @@ PRs are excluded from the self-hosted runner.
   fault bundle a lane leaves at the shared deploy path cannot inject into a
   later launch; `--mic-device-change` asks for its fault with
   `MEETINGTRANSCRIBER_E2E_MIC_FAULT=device-change`. It has no workflow yet: it is run by hand.
+- The `--quit-flush` lane (issue #745) quits the app while a manual recording
+  runs and asserts the recording survives as a job. What it proves, its host
+  guards and its state backup/restore are written at `run_quit_flush` in
+  `e2e-app.sh`. It is **not wired into CI and is run by hand as an admin**: two
+  of its checks read the unified log, which the non-admin runner user cannot
+  read on macOS 26. The lane header gives the two refusals and what wiring it
+  would take. The lane checks the precondition first (`unified_log_unusable`
+  in `scripts/lib/e2e-helpers.sh`) and stops with that reason. Measured in
+  three trial runs on the runner while this lane was being considered for CI:
+  the single-quit cycle passed, and the AppleScript quit reached the app
+  without any extra grant.
 - **One driver at a time.** `e2e-app.sh` refuses to start while another
   `e2e-app.sh` is live (they share the deployed bundle, the RPC port and the
   audio device, and each quits the other's app at launch, so neither result

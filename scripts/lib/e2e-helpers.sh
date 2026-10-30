@@ -743,6 +743,55 @@ snapshot_new_job_ids() {
 # orphan check that relies on it could report a false "none left".
 MT_LOG_STREAM_PREDICATE="subsystem CONTAINS 'com.meetingtranscriber'"
 
+# unified_log_unusable <stream|show> [log-binary] — whether this user cannot
+# use the unified log the way the --quit-flush lane needs (its header says why
+# that rules out a non-admin user on macOS 26).
+#   stream  a one-second `log stream` must run;
+#   show    an entry written through `logger` just before must come back, so a
+#           `log show` that answers but returns nothing also counts.
+# Prints a one-line reason unless usable. Status 0: refused for want of
+# permission (the macOS 26 non-admin case); 1: usable; 2: unknown mode; 3: any
+# other failure (a failed write, an empty answer, an unrecognised error), which
+# is not that host property. For tests: the binary is the second
+# argument, and UNIFIED_LOG_PROBE_LOGGER and UNIFIED_LOG_PROBE_SLEEP replace the
+# logger command and the wait between reads.
+unified_log_unusable() {
+    local mode="$1" bin="${2:-/usr/bin/log}" out="" token i
+    case "$mode" in
+        stream)
+            out="$("$bin" stream --predicate 'process == "mt-e2e-log-probe"' --timeout 1 2>&1)" && return 1
+            ;;
+        show)
+            token="mt-e2e-log-probe-$$-$RANDOM"
+            if ! "${UNIFIED_LOG_PROBE_LOGGER:-logger}" -t mt-e2e-log-probe "$token"; then
+                echo "could not write the probe entry with logger"
+                return 3
+            fi
+            # The entry can take a moment to become visible: up to five reads.
+            # The predicate names logger's process, so `log`'s own record of
+            # this invocation (which carries the token) is not returned.
+            for i in 1 2 3 4 5; do
+                [ "$i" -eq 1 ] || sleep "${UNIFIED_LOG_PROBE_SLEEP:-1}"
+                out="$("$bin" show --last 1m --style compact \
+                    --predicate "process == \"logger\" AND eventMessage CONTAINS \"$token\"" 2>&1)" || break
+                grep -q -- "$token" <<<"$out" && return 1
+                out="log show answered but did not return an entry written a moment before"
+            done
+            ;;
+        *) echo "unknown mode '$mode'"; return 2 ;;
+    esac
+    # The refusal line, not the filter banner `log` prints before it; a
+    # placeholder when the banner was all there was.
+    local line
+    if line="$(grep -m1 -E 'Must be admin|Could not open|not permitted' <<<"$out")"; then
+        echo "$line"
+        return 0
+    fi
+    line="$(grep -v '^Filtering the log data' <<<"$out" | grep -m1 . || true)"
+    echo "${line:-<no output>}"
+    return 3
+}
+
 # second_quit_outcome <trace> <osascript-output> — which of the two measured
 # answers a second AppleScript quit, sent while the first was held open, got.
 # <trace> is AppKit's and the Apple Event log of the quit (`log show --style

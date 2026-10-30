@@ -206,7 +206,7 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        reply; which one is logged from AppKit's own log, and
                        either way the held quit must end the app exactly once,
                        leave no app or 'log stream' process, and keep the
-                       recording.
+                       recording. Hand-run only; see the lane header.
                        Does NOT prove that the snapshot flush is what saved the
                        job (a no-op flush stays green) or anything about a
                        logout. Each launch must have exactly one
@@ -829,6 +829,23 @@ _qf_release_lock() {
 }
 
 if [ "$QUIT_FLUSH" = true ]; then
+    # First, before any build, quit, backup or settings change: the unified-log
+    # precondition (see the lane header). Both modes are checked so both
+    # reasons come out at once.
+    _qf_refused="" _qf_failed=""
+    for _qf_mode in stream show; do
+        _qf_status=0
+        _qf_reason="$(unified_log_unusable "$_qf_mode")" || _qf_status=$?
+        case "$_qf_status" in
+            1) ;;
+            0) _qf_refused="$_qf_refused 'log $_qf_mode': $_qf_reason;" ;;
+            *) _qf_failed="$_qf_failed 'log $_qf_mode': $_qf_reason;" ;;
+        esac
+    done
+    [ -z "$_qf_refused" ] \
+        || fail "--quit-flush: this user ($(id -un)) may not read the unified log:$_qf_refused$_qf_failed it needs an admin user on macOS 26 (see the lane header)."
+    [ -z "$_qf_failed" ] \
+        || fail "--quit-flush: the unified log probe failed:$_qf_failed the lane needs the log (see the lane header); retry, or check logd."
     MT_LIVE_LOCK="${MT_LIVE_LOCK:-/tmp/mt-live-lock}"
     mkdir "$MT_LIVE_LOCK" 2>/dev/null \
         || fail "--quit-flush: the live lock $MT_LIVE_LOCK is held (since $(stat -f '%Sm' "$MT_LIVE_LOCK" 2>/dev/null)). Someone else is using the live app on this host; aborting without touching anything."
@@ -3701,6 +3718,15 @@ run_echo_cancel() {
 }
 
 # --- quit-flush lane (issue #745) -------------------------------------------
+#
+# NOT wired into CI; run by hand. On macOS 26 the non-admin runner user can
+# neither `log stream` ("Must be admin to run 'stream' command") nor `log show`
+# ("Could not open local log store: Operation not permitted"), and two of the
+# checks below read the unified log: the persistent-log streamer counts and the
+# AppKit trace of the double quit. Wiring it needs an admin runner or
+# assertions that do not read the log. The lane checks that precondition before
+# it changes anything, and stops with that message rather than failing later
+# as an app regression.
 #
 # A quit has to finish the recording in progress, hand it to the pipeline and
 # wait for the snapshot write that hand-over produces before the process exits.

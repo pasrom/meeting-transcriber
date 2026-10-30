@@ -459,4 +459,66 @@ else
     bad a_cycle_failing_after_its_recording_started_still_restores "status $status: $out; queue $(cat "$CYC/ipc/pipeline_queue.json" 2>&1); $(find "$CYC" -maxdepth 2 2>&1 | tr '\n' ' ')"
 fi
 
+# --- unified_log_unusable ----------------------------------------------------
+# Stubs for /usr/bin/log: the two refusals measured on the macOS 26 runner for
+# a non-admin user (stream after a filter banner on stdout, so the reason must
+# be the refusal line, not the first line), one that works (for `show` it
+# answers with logger's compact line for the token in its predicate), a `show`
+# that answers with nothing, and a refusal the probe does not know by name.
+cat >"$TMP/log-refused" <<'EOF'
+#!/bin/bash
+echo "Filtering the log data using \"process == x\""
+if [ "$1" = stream ]; then
+    echo "log: Must be admin to run 'stream' command" >&2
+else
+    echo "log: Could not open local log store: Operation not permitted" >&2
+fi
+exit 64
+EOF
+cat >"$TMP/log-ok" <<'EOF'
+#!/bin/bash
+echo "Timestamp               Ty Process[PID:TID]"
+[ "$1" = show ] && echo "2026-10-30 22:00:00.000 Df logger[1:2] $(grep -o 'mt-e2e-log-probe-[0-9-]*' <<<"$*")"
+exit 0
+EOF
+cat >"$TMP/log-empty" <<'EOF'
+#!/bin/bash
+echo "Timestamp               Ty Process[PID:TID]"
+exit 0
+EOF
+cat >"$TMP/log-odd" <<'EOF'
+#!/bin/bash
+echo "Filtering the log data using \"process == x\""
+echo "log: something unexpected" >&2
+exit 1
+EOF
+cat >"$TMP/log-banner-only" <<'EOF'
+#!/bin/bash
+echo "Filtering the log data using \"process == x\""
+exit 1
+EOF
+chmod +x "$TMP/log-refused" "$TMP/log-ok" "$TMP/log-empty" "$TMP/log-odd" "$TMP/log-banner-only"
+# Self-contained and quick: no real logger entry, no real waits.
+export UNIFIED_LOG_PROBE_LOGGER=true UNIFIED_LOG_PROBE_SLEEP=0
+
+# expect_probe <name> <mode> <stub> <status> <reason>
+expect_probe() {
+    local name="$1" mode="$2" stub="$3" want_status="$4" want_reason="$5" status=0 reason
+    reason="$(unified_log_unusable "$mode" "$TMP/$stub")" || status=$?
+    if [ "$status" -eq "$want_status" ] && [ "$reason" = "$want_reason" ]; then
+        ok "$name"
+    else
+        bad "$name" "status $status, reason '$reason' (want $want_status, '$want_reason')"
+    fi
+}
+expect_probe stream_refused_reports_the_refusal_line stream log-refused 0 "log: Must be admin to run 'stream' command"
+expect_probe stream_working_is_usable stream log-ok 1 ""
+expect_probe show_refused_reports_the_refusal_line show log-refused 0 "log: Could not open local log store: Operation not permitted"
+expect_probe show_working_is_usable show log-ok 1 ""
+expect_probe show_empty_answer_is_unusable show log-empty 3 "log show answered but did not return an entry written a moment before"
+expect_probe unknown_refusal_skips_the_filter_banner stream log-odd 3 "log: something unexpected"
+expect_probe banner_only_failure_has_a_placeholder_reason stream log-banner-only 3 "<no output>"
+expect_probe unknown_mode_is_a_caller_error tail log-ok 2 "unknown mode 'tail'"
+UNIFIED_LOG_PROBE_LOGGER=false expect_probe show_failed_write_is_reported show log-ok 3 "could not write the probe entry with logger"
+
 echo "$PASSED passed"
