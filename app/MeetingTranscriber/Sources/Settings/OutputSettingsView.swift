@@ -31,6 +31,11 @@ enum OutputSettingsLogic {
     }
 }
 
+enum ConnectionTestResult {
+    case success(String)
+    case failure(String)
+}
+
 struct OutputSettingsView: View {
     @Bindable var settings: AppSettings
 
@@ -43,12 +48,6 @@ struct OutputSettingsView: View {
     @State private var didAttemptConnectionTest = false
     @State private var showResetPromptConfirmation = false
     @State private var hasCustomPrompt = false
-
-    enum ConnectionTestResult {
-        case success(String)
-        case failure(String)
-    }
-
     var body: some View {
         // swiftlint:disable:next closure_body_length
         Form {
@@ -78,6 +77,8 @@ struct OutputSettingsView: View {
                 }
             }
             .accessibilityIdentifier(A11yID.outputFolderSection)
+
+            NotionExportSettingsView(settings: settings)
 
             Section("Meeting Notes") {
                 Toggle("Include full transcript in meeting notes", isOn: $settings.includeFullTranscriptInProtocol)
