@@ -25,6 +25,8 @@ struct SettingsView: View {
     /// True when the pipeline is processing a job — soft hint only.
     var pipelineBusy: Bool = false
     var onSpeakerMutate: (() -> Void)?
+    /// Builds the matcher Known Voices and enrollment edit through.
+    var speakerMatcherFactory: () -> SpeakerMatcher = { SpeakerMatcher() }
 
     @State private var selection: SettingsTab = .general
 
@@ -82,6 +84,7 @@ struct SettingsView: View {
                 namingDialogActive: namingDialogActive,
                 pipelineBusy: pipelineBusy,
                 onSpeakerMutate: onSpeakerMutate,
+                matcherFactory: speakerMatcherFactory,
             )
 
         case .output:

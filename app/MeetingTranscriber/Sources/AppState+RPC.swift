@@ -32,6 +32,36 @@
         }
     }
 
+    extension SpeakerActionOutcome {
+        init(_ result: SpeakerMatcher.RenameResult) {
+            self = switch result {
+            case .renamed: .ok
+            case .merged: .merged
+            case .noop: .noop
+            case .notFound: .notFound
+            case .notSaved: .notSaved
+            case .replacedCorruptDB: .dbReset
+            }
+        }
+
+        init(_ result: SpeakerMatcher.EditResult) {
+            self = switch result {
+            case .applied: .ok
+            case .notFound: .notFound
+            case .notSaved: .notSaved
+            case .replacedCorruptDB: .dbReset
+            }
+        }
+
+        /// Whether the action wrote a change, so cached speaker names are stale.
+        var changedDB: Bool {
+            switch self {
+            case .ok, .merged, .dbReset: true
+            case .noop, .notFound, .invalid, .notSaved: false
+            }
+        }
+    }
+
     extension PipelineQueue {
         /// Build the RPC pipeline-queue status from inside `PipelineQueue`, so the
         /// counter reads are single-hop `self.` accesses. Constructing this
@@ -367,34 +397,26 @@
             speakerMatcherFactory: (() -> SpeakerMatcher)? = nil,
         ) -> SpeakerDBActions {
             let speakerMatcherFactory = speakerMatcherFactory
-                ?? { [speakersDB = pipeline.speakersDB] in SpeakerMatcher(dbPath: speakersDB) }
+                ?? SpeakerMatcher.factory(dbPath: pipeline.speakersDB, notifier: notifier)
+            let refreshingIfChanged: @MainActor (SpeakerActionOutcome) -> SpeakerActionOutcome = { [weak self] outcome in
+                if outcome.changedDB { self?.pipeline.queue.refreshKnownSpeakerNames() }
+                return outcome
+            }
             return SpeakerDBActions(
-                rename: { [weak self] from, to in
-                    let result = speakerMatcherFactory().renameSpeaker(from: from, to: to)
-                    let outcome: SpeakerActionOutcome = switch result {
-                    case .renamed: .ok
-                    case .merged: .merged
-                    case .noop: .noop
-                    case .notFound: .notFound
-                    }
-                    if outcome != .notFound { self?.pipeline.queue.refreshKnownSpeakerNames() }
-                    return outcome
+                rename: { from, to in
+                    refreshingIfChanged(.init(speakerMatcherFactory().renameSpeaker(from: from, to: to)))
                 },
-                delete: { [weak self] name in
-                    let removed = speakerMatcherFactory().deleteSpeaker(name: name)
-                    if removed { self?.pipeline.queue.refreshKnownSpeakerNames() }
-                    return removed ? .ok : .notFound
+                delete: { name in
+                    refreshingIfChanged(.init(speakerMatcherFactory().deleteSpeaker(name: name)))
                 },
-                merge: { [weak self] from, into in
-                    let merged = speakerMatcherFactory().mergeSpeakers(from: from, into: into)
-                    if merged { self?.pipeline.queue.refreshKnownSpeakerNames() }
-                    return merged ? .ok : .notFound
+                merge: { from, into in
+                    refreshingIfChanged(.init(speakerMatcherFactory().mergeSpeakers(from: from, into: into)))
                 },
                 seed: { [weak self] name in
                     let embedding = (0 ..< Self.seedEmbeddingDimension).map { _ in
                         Float.random(in: -1 ... 1)
                     }
-                    speakerMatcherFactory().mutateDB { stored in
+                    let mutation = speakerMatcherFactory().mutateDB { stored in
                         stored.append(StoredSpeaker(
                             name: name,
                             embeddings: [embedding],
@@ -408,6 +430,7 @@
                             isSynthetic: true,
                         ))
                     }
+                    guard mutation.saved else { return .notSaved }
                     self?.pipeline.queue.refreshKnownSpeakerNames()
                     return .ok
                 },

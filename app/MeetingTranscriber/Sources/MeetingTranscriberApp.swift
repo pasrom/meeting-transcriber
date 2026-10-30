@@ -303,6 +303,11 @@ struct MeetingTranscriberApp: App {
                 namingDialogActive: appState.pipeline.queue.pendingSpeakerNaming != nil,
                 pipelineBusy: appState.pipeline.queue.isProcessing,
                 onSpeakerMutate: appState.pipeline.queue.refreshKnownSpeakerNames,
+                // The pipeline's file and the app's notifier, so Known Voices
+                // and enrollment edit the same DB and report through one channel.
+                speakerMatcherFactory: SpeakerMatcher.factory(
+                    dbPath: appState.pipeline.speakersDB, notifier: appState.notifier,
+                ),
             )
         }
         .windowResizability(.contentSize)

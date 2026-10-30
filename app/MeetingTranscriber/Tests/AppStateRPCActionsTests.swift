@@ -152,6 +152,40 @@
             XCTAssertEqual(entry.centroid?.count, AppState.seedEmbeddingDimension)
         }
 
+        // MARK: - unreadable DB
+
+        /// A DB that could not be read must not answer `ok` for a seed that
+        /// was never written, nor `notFound` for a speaker that may well be
+        /// in the unread file.
+        func test_actionsOnUnreadableDB_reportNotSaved() throws {
+            seedSpeaker(name: "Alice")
+            seedSpeaker(name: "Bob")
+            try makeUnreadable(dbPath)
+            let blocked = state.makeSpeakerDBActions { [dbPath] in
+                SpeakerMatcher(dbPath: dbPath) { _ in }
+            }
+
+            XCTAssertEqual(blocked.seed("Carol"), .notSaved)
+            XCTAssertEqual(blocked.rename("Alice", "Alicia"), .notSaved)
+            XCTAssertEqual(blocked.delete("Alice"), .notSaved)
+            XCTAssertEqual(blocked.merge("Alice", "Bob"), .notSaved)
+        }
+
+        /// An action that found the DB undecodable replaced it with an empty
+        /// one: not a 404 for a name that may be in the set-aside copy, and a
+        /// change the cached names must follow.
+        func test_renameOnUndecodableDB_reportsResetAndRefreshesCache() throws {
+            try Data("not json".utf8).write(to: dbPath)
+            let actions = state.makeSpeakerDBActions { [dbPath] in
+                SpeakerMatcher(dbPath: dbPath, onDBProblem: { _ in }, settleBeforeReread: {})
+            }
+
+            let outcome = actions.rename("Alice", "Alicia")
+
+            XCTAssertEqual(outcome, .dbReset)
+            XCTAssertTrue(outcome.changedDB, "the file was replaced, so cached names must refresh")
+        }
+
         // MARK: - speaker database from the environment
 
         /// A state reads and changes the speaker database its environment

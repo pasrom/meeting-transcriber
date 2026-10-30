@@ -313,7 +313,7 @@ final class PipelineController {
                     useAITitleForFilenames: settings.useAITitleForFilenames,
                 )
             },
-            speakerMatcherFactory: { [speakersDB] in SpeakerMatcher(dbPath: speakersDB) },
+            speakerMatcherFactory: SpeakerMatcher.factory(dbPath: speakersDB, notifier: notifier),
             vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
             recognitionStatsLog: RecognitionStatsLog(path: queueEnvironment.recognitionStatsLog),
             terminologyNormalizer: { [weak settings] in

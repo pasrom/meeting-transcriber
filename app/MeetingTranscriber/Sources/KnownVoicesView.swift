@@ -310,14 +310,58 @@ struct KnownVoicesView: View {
         guard case let .rename(from, value) = modal else { return }
         modal = nil
         guard let trimmed = KnownVoicesFormatting.trimmedRenameValue(value) else { return }
-        performRename(from: from, to: trimmed)
-        selection = trimmed
+        select(after: performRename(from: from, to: trimmed), applied: trimmed)
     }
 
-    func performRename(from: String, to: String) {
-        matcher.renameSpeaker(from: from, to: to)
-        reload()
-        onMutate?()
+    /// What an edit did, as far as this view is concerned.
+    enum EditEffect: Equatable {
+        case applied
+        /// Nothing to do (name not found, same name). The DB is unchanged.
+        case unchanged
+        /// Could not be saved; the matcher notifies the user. The list is not
+        /// reloaded, since an unusable DB would read as empty: it keeps
+        /// showing the names the user knows, and the selection stays valid.
+        case notSaved
+        /// The DB was undecodable and was replaced by an empty one, set aside
+        /// by the matcher (which notifies the user). The list is now empty.
+        case dbReset
+    }
+
+    @discardableResult
+    func performRename(from: String, to: String) -> EditEffect {
+        let effect: EditEffect = switch matcher.renameSpeaker(from: from, to: to) {
+        case .renamed, .merged: .applied
+        case .notFound, .noop: .unchanged
+        case .notSaved: .notSaved
+        case .replacedCorruptDB: .dbReset
+        }
+        return finishEdit(effect)
+    }
+
+    private func finishEdit(_ result: SpeakerMatcher.EditResult) -> EditEffect {
+        let effect: EditEffect = switch result {
+        case .applied: .applied
+        case .notFound: .unchanged
+        case .notSaved: .notSaved
+        case .replacedCorruptDB: .dbReset
+        }
+        return finishEdit(effect)
+    }
+
+    private func finishEdit(_ effect: EditEffect) -> EditEffect {
+        if effect != .notSaved { reload() }
+        if effect == .applied || effect == .dbReset { onMutate?() }
+        return effect
+    }
+
+    /// Move the selection to `applied` after a successful edit, drop it when
+    /// the DB was reset, and leave it otherwise.
+    private func select(after effect: EditEffect, applied: String?) {
+        switch effect {
+        case .applied: selection = applied
+        case .dbReset: selection = nil
+        case .unchanged, .notSaved: break
+        }
     }
 
     private func startMerge() {
@@ -328,26 +372,24 @@ struct KnownVoicesView: View {
     private func applyMerge() {
         guard case let .merge(from, dst) = modal, !dst.isEmpty else { return }
         modal = nil
-        performMerge(from: from, into: dst)
-        selection = dst
+        select(after: performMerge(from: from, into: dst), applied: dst)
     }
 
-    func performMerge(from: String, into: String) {
-        matcher.mergeSpeakers(from: from, into: into)
-        reload()
-        onMutate?()
+    @discardableResult
+    func performMerge(from: String, into: String) -> EditEffect {
+        finishEdit(matcher.mergeSpeakers(from: from, into: into))
     }
 
     private func applyDelete() {
         guard case let .delete(name) = modal else { return }
         modal = nil
-        performDelete(name: name)
-        if selection == name { selection = nil }
+        let effect = performDelete(name: name)
+        guard effect != .applied || selection == name else { return }
+        select(after: effect, applied: nil)
     }
 
-    func performDelete(name: String) {
-        matcher.deleteSpeaker(name: name)
-        reload()
-        onMutate?()
+    @discardableResult
+    func performDelete(name: String) -> EditEffect {
+        finishEdit(matcher.deleteSpeaker(name: name))
     }
 }

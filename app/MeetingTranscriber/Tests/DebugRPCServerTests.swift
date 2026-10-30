@@ -286,6 +286,36 @@
         }
 
         @MainActor
+        func testRouteSeedSpeakerNotSavedReturns503() async throws {
+            let stub = StubSpeakerActions()
+            stub.seedOutcome = .notSaved
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"name":"Alice"}"#.utf8)
+            let response = await server.route(authedJSONRequest(path: "/action/seedSpeaker", body: body))
+            XCTAssertEqual(response.status, 503)
+            let message = try XCTUnwrap(String(data: response.body, encoding: .utf8))
+            XCTAssertTrue(message.contains("speaker database"), message)
+        }
+
+        @MainActor
+        func testRouteRenameSpeakerOnResetDBReturns409() async throws {
+            let stub = StubSpeakerActions()
+            stub.renameOutcome = .dbReset
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"from":"A","to":"B"}"#.utf8)
+            let response = await server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            XCTAssertEqual(response.status, 409)
+            let message = try XCTUnwrap(String(data: response.body, encoding: .utf8))
+            XCTAssertTrue(message.contains("set aside"), message)
+        }
+
+        @MainActor
         func testRouteRenameSpeakerCollisionReturnsMerged() async throws {
             let stub = StubSpeakerActions()
             stub.renameOutcome = .merged

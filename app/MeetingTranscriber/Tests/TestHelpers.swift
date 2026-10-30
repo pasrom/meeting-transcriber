@@ -21,6 +21,18 @@ func appSourceText(_ name: String, file: StaticString = #filePath) throws -> Str
 // MARK: - Temp-Directory / Temp-File Helpers
 
 extension XCTestCase {
+    /// Make an existing file unreadable (mode 000), restoring it on teardown
+    /// so the temp directory can be removed even when an assertion throws.
+    /// Skips as root, which reads a mode-000 file regardless.
+    func makeUnreadable(_ url: URL) throws {
+        try XCTSkipIf(geteuid() == 0, "root reads a mode-000 file, so it is not unreadable")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        let path = url.path
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        }
+    }
+
     /// Create a unique temp directory under `FileManager.default.temporaryDirectory`
     /// and register an automatic cleanup with `addTeardownBlock`. The dir is
     /// removed regardless of whether tearDown is async, sync, or absent.

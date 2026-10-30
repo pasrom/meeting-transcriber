@@ -801,14 +801,20 @@ final class SpeakerMatcherTests: XCTestCase {
 
     // MARK: - Corrupt DB & Edge Cases
 
-    func testLoadDBCorruptJSONReturnsEmpty() throws {
-        // Write invalid JSON to dbPath — loadDB should return empty, not crash
+    func testLoadDBCorruptJSONReadsEmptyAndLeavesFileInPlace() throws {
+        // Invalid JSON reads as empty for read-only callers, but the file is
+        // kept as-is: only a mutation may move it aside, never a read.
+        // Mutation behaviour is pinned in SpeakerMatcherPersistenceTests.
         let garbage = Data("{ not valid json !!!".utf8)
         try garbage.write(to: dbPath)
 
         let matcher = SpeakerMatcher(dbPath: dbPath)
         let loaded = matcher.loadDB()
         XCTAssertTrue(loaded.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: dbPath), garbage)
+        if case .undecodable = matcher.readDB() {} else {
+            XCTFail("a present but undecodable DB must read as undecodable, not missing")
+        }
     }
 
     func testLoadDBEmptyFileReturnsEmpty() throws {
@@ -973,9 +979,9 @@ final class SpeakerMatcherTests: XCTestCase {
             StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]]),
             StoredSpeaker(name: "Speaker B", embeddings: [[0, 1, 0]]),
         ])
-        XCTAssertTrue(matcher.deleteSpeaker(name: "Speaker A"))
+        XCTAssertEqual(matcher.deleteSpeaker(name: "Speaker A"), .applied)
         XCTAssertEqual(matcher.allSpeakerNames(), ["Speaker B"])
-        XCTAssertFalse(matcher.deleteSpeaker(name: "Speaker A"))
+        XCTAssertEqual(matcher.deleteSpeaker(name: "Speaker A"), .notFound)
     }
 
     func testMergeSpeakersCombinesMetrics() {
@@ -994,7 +1000,7 @@ final class SpeakerMatcherTests: XCTestCase {
             ),
         ])
 
-        XCTAssertTrue(matcher.mergeSpeakers(from: "Speaker A", into: "Speaker B"))
+        XCTAssertEqual(matcher.mergeSpeakers(from: "Speaker A", into: "Speaker B"), .applied)
         let stored = matcher.loadDB()
         XCTAssertEqual(stored.count, 1)
         XCTAssertEqual(stored[0].name, "Speaker B")
@@ -1011,7 +1017,7 @@ final class SpeakerMatcherTests: XCTestCase {
     func testMergeSpeakersMissingSourceReturnsFalse() {
         let matcher = SpeakerMatcher(dbPath: dbPath)
         matcher.saveDB([StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]])])
-        XCTAssertFalse(matcher.mergeSpeakers(from: "missing", into: "Speaker A"))
+        XCTAssertEqual(matcher.mergeSpeakers(from: "missing", into: "Speaker A"), .notFound)
     }
 
     func testMergeCentroidsBothNilReturnsNil() {
