@@ -11,19 +11,21 @@ final class AggregateRunStateTests: XCTestCase {
         running: ProcessOutputState.Reading<Bool>,
         outputID: ProcessOutputState.Reading<AudioObjectID> = .value(145),
         outputRate: ProcessOutputState.Reading<Int> = .value(24000),
+        inputStreams: ProcessOutputState.Reading<Int> = .value(1),
     ) -> AggregateRunState {
         AggregateRunState(
             aggregateID: 211,
             isRunning: running,
             defaultOutputDeviceID: outputID,
             defaultOutputRate: outputRate,
+            inputStreams: inputStreams,
         )
     }
 
     func testAHealthyReadRendersEveryField() {
         XCTAssertEqual(
             state(running: .value(false)).summary,
-            "aggregate=211 running=false defaultOutput=145 defaultOutputRate=24000",
+            "aggregate=211 running=false defaultOutput=145 defaultOutputRate=24000 inputStreams=1",
         )
     }
 
@@ -46,6 +48,20 @@ final class AggregateRunStateTests: XCTestCase {
         let state = AggregateRunProbe.read(aggregateID: AudioObjectID(kAudioObjectUnknown))
         guard case .failed = state.isRunning else {
             XCTFail("a missing aggregate must not report a running state")
+            return
+        }
+    }
+
+    func testAPresentDeviceAnswersItsInputStreamCount() throws {
+        // The `.value` branch through the real HAL: a device that exists
+        // answers a count, 0 included, rather than refusing the input scope.
+        // On most Macs the default output (the built-in speakers) is
+        // output-only, the layout the "tap is last" rule was first measured on.
+        guard case let .value(deviceID) = defaultOutputDeviceReading(), deviceID != kAudioObjectUnknown else {
+            throw XCTSkip("no default output device on this machine")
+        }
+        guard case .value = inputStreamCountReading(deviceID: deviceID) else {
+            XCTFail("a present device must answer its input stream count")
             return
         }
     }

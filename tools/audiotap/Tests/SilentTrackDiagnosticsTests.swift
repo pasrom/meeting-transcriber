@@ -221,6 +221,7 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
             device: AggregateRunState(
                 aggregateID: 211, isRunning: .value(false),
                 defaultOutputDeviceID: .value(145), defaultOutputRate: .value(24000),
+                inputStreams: .value(1),
             ),
         )))
     }

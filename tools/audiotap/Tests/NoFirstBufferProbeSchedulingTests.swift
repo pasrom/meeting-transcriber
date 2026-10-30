@@ -66,6 +66,7 @@ final class NoFirstBufferProbeSchedulingTests: XCTestCase {
                     isRunning: .value(false),
                     defaultOutputDeviceID: .value(7),
                     defaultOutputRate: .value(48000),
+                    inputStreams: .value(1),
                 ))
             },
             sink: { reason, _ in reasons.append(reason) },

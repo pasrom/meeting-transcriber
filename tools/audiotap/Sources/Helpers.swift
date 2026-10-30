@@ -242,6 +242,22 @@ func nominalSampleRateReading(deviceID: AudioObjectID) -> ProcessOutputState.Rea
     return .value(Int(rate))
 }
 
+/// How many input streams `deviceID` exposes, as a reading: on the private
+/// aggregate, how many buffers its IOProc hands over per callback (issue #803).
+/// Sized with `GetPropertyDataSize` alone, the ids are not needed; a device
+/// that is gone answers a status, not 0.
+func inputStreamCountReading(deviceID: AudioObjectID) -> ProcessOutputState.Reading<Int> {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyStreams,
+        mScope: kAudioObjectPropertyScopeInput,
+        mElement: kAudioObjectPropertyElementMain,
+    )
+    var size: UInt32 = 0
+    let status = AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size)
+    guard status == noErr else { return .failed(status) }
+    return .value(Int(size) / MemoryLayout<AudioStreamID>.size)
+}
+
 /// Resolve the AudioObjectID of the system default input or output device.
 /// Folds both "could not ask" and "no default device" into nil, which is what
 /// every caller here wants; `defaultDeviceReading` keeps them apart.

@@ -17,6 +17,15 @@ import Foundation
 /// Bluetooth headset changes rate under the aggregate without changing the
 /// default output device, so nothing else notices it moved.
 ///
+/// The input stream count is how many buffers the IOProc gets per callback:
+/// `1` is the tap alone, more is an output device with inputs of its own ahead
+/// of the tap (see `AppAudioCapture.tapBufferIndex`, issue #803). The
+/// `Aggregate input layout:` line names the same count at tap build; this one
+/// is taken on every probe after the device started (start, the no-first-buffer
+/// probes, watchdog checks, zero runs, stop), so a headset that gains an input
+/// stream without changing the default output device (an HFP profile switch)
+/// shows as two different numbers.
+///
 /// Reuses `ProcessOutputState.Reading` rather than declaring its own, so "could
 /// not ask" renders the same way in both diagnostics and a reader does not have
 /// to learn two spellings of the same idea.
@@ -25,11 +34,13 @@ struct AggregateRunState: Equatable, Sendable {
     let isRunning: ProcessOutputState.Reading<Bool>
     let defaultOutputDeviceID: ProcessOutputState.Reading<AudioObjectID>
     let defaultOutputRate: ProcessOutputState.Reading<Int>
+    let inputStreams: ProcessOutputState.Reading<Int>
 
     var summary: String {
         "aggregate=\(aggregateID) running=\(isRunning.rendered) "
             + "defaultOutput=\(defaultOutputDeviceID.rendered) "
-            + "defaultOutputRate=\(defaultOutputRate.rendered)"
+            + "defaultOutputRate=\(defaultOutputRate.rendered) "
+            + "inputStreams=\(inputStreams.rendered)"
     }
 }
 
@@ -57,6 +68,7 @@ enum AggregateRunProbe {
             isRunning: isRunningReading(aggregateID),
             defaultOutputDeviceID: device,
             defaultOutputRate: rate,
+            inputStreams: inputStreamCountReading(deviceID: aggregateID),
         )
     }
 
