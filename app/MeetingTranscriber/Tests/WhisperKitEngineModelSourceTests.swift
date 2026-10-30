@@ -92,6 +92,35 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
         return recorder
     }
 
+    /// The one-time migration runs in `prepare`, and the lookup must wait for it:
+    /// a locator that ran first would see the model halfway through being moved,
+    /// or not yet moved, and send the load into a download.
+    func testPrepareFinishesBeforeTheLocalLookup() async throws {
+        let engine = WhisperKitEngine()
+        let local = try makeTempDirectory(prefix: "wk-local")
+        var order: [String] = []
+        let pipe = try await makeIdlePipe()
+        engine.installModelSourceForTesting(
+            WhisperKitModelSource(
+                locateLocal: { _ in
+                    order.append("locate")
+                    return local
+                },
+                download: { _, _ in throw URLError(.networkConnectionLost) },
+                makePipe: { _, _ in pipe },
+                prepare: { _ in
+                    await Task.yield()
+                    order.append("prepare")
+                },
+            ),
+        )
+
+        await engine.loadModel()
+
+        XCTAssertEqual(engine.modelState, .loaded)
+        XCTAssertEqual(order, ["prepare", "locate"])
+    }
+
     /// The load-bearing test. A complete local snapshot must produce a loaded engine
     /// without a single Hub call, so the download step is wired to throw the very
     /// error the reporter saw: if it runs at all, the test fails.

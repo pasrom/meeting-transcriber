@@ -1,7 +1,7 @@
 import Foundation
 import WhisperKit
 
-/// The three steps `WhisperKitEngine.loadModel()` takes to reach a usable pipe,
+/// The steps `WhisperKitEngine.loadModel()` takes to reach a usable pipe,
 /// named so a test can observe which of them ran. Production resolves every step
 /// against WhisperKit itself. Why the local step comes first is written down once,
 /// on `WhisperKitLocalSnapshot`.
@@ -18,6 +18,17 @@ struct WhisperKitModelSource {
     /// copy the locator waved through but CoreML cannot use still fails into the
     /// download.
     let makePipe: (String, URL) async throws -> WhisperKit
+    /// Awaited before `locateLocal`, for one-time work on the model's files that
+    /// must not run on the main actor: the Hub origin moves a copy earlier builds
+    /// left in Documents (`WhisperKitModelMigration`). Nothing by default.
+    var prepare: (String) async -> Void = { _ in }
+
+    /// `prepare`, then `locateLocal`: the lookup waits for the one-time work, so it
+    /// never sees a model folder halfway through being moved.
+    func prepareAndLocate(_ variant: String) async -> URL? {
+        await prepare(variant)
+        return locateLocal(variant)
+    }
 
     /// The folder as WhisperKit needs it. Named and separate because the conversion
     /// is load-bearing and wrong by default. `WhisperKitConfig` takes a `String` and
@@ -145,6 +156,9 @@ struct WhisperKitModelSource {
             },
             makePipe: { variant, folder in
                 try await WhisperKit(pipeConfig(variant: variant, folder: folder))
+            },
+            prepare: { variant in
+                await WhisperKitModelMigration.migrateIfNeeded(repoID: repoID, variant: variant)
             },
         )
     }

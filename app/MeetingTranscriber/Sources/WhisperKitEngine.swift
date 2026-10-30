@@ -129,7 +129,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         origin: WhisperKitModelOrigin,
         source: WhisperKitModelSource,
     ) async -> Bool {
-        guard let localFolder = source.locateLocal(variant) else { return false }
+        guard let localFolder = await source.prepareAndLocate(variant) else { return false }
         do {
             try await adoptPipe(variant: variant, origin: origin, from: localFolder, source: source)
             return true
