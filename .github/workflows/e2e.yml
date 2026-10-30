@@ -63,11 +63,10 @@ jobs:
       )
     runs-on: [self-hosted, macOS, ARM64]
     # Cold-cache runs download multi-GB models (WhisperKit ~1 GB,
-    # Parakeet ~50 MB); hot runs <10 min. 30 min job
-    # budget covers worst-case cold download. The `Run E2E tests` step
-    # below has a 25 min step-timeout so a hang surfaces as `timed_out`
-    # — see docs/plans/.local/open/2026-05-11-job-timeout-visibility.md.
-    timeout-minutes: 30
+    # Parakeet ~50 MB); hot runs <10 min. The runner-home pre-warm (20 min)
+    # and the `Run E2E tests` step (25 min) each carry a step-timeout so a
+    # hang surfaces as `timed_out`; the job budget holds both.
+    timeout-minutes: 50
     env:
       E2E_ENABLED: "1"
 
@@ -90,12 +89,28 @@ jobs:
 
       # No actions/cache here: the self-hosted Mini has persistent disk
       # between runs, so the SPM `.build` directory and the on-disk model
-      # caches (~/Library/Application Support/MeetingTranscriber/huggingface,
-      # ~/Library/Application Support/FluidAudio) are already populated. actions/cache would re-download
+      # caches are already populated. actions/cache would re-download
       # via HTTPS on hit and waste the multi-GB upload on miss — the
       # latter timed out the post-action on a real run (5.6 GB → GitHub).
+      #
+      # Those caches are in the runner's own test home (see the action). The
+      # run is serial, so a cold home would not race, but the test step's 25
+      # min are sized for warm models: the pre-warm fetches them in a step of
+      # its own instead, bounded separately and reusing this lane's build, and
+      # is a file check once warm. It fetches every pre-warmed model, also for
+      # a dispatch narrowed to one engine: a one-time cost per runner home.
+      - id: home
+        uses: ./.github/actions/runner-home
+        timeout-minutes: 20
+        with:
+          prewarm: "true"
+
+      # RunnerHomeIsolationTests is added to the filter so this lane, too,
+      # fails if it ever runs in the account's real home.
       - name: Run E2E tests
         timeout-minutes: 25
+        env:
+          CFFIXED_USER_HOME: ${{ steps.home.outputs.home }}
         run: |
           cd app/MeetingTranscriber
-          swift test --filter '${{ steps.filter.outputs.filter }}'
+          swift test --filter '${{ steps.filter.outputs.filter }}|RunnerHomeIsolationTests'

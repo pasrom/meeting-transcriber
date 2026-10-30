@@ -386,17 +386,31 @@ jobs:
       )
     runs-on: [self-hosted, macOS, ARM64]
     # Generous next to the 3 min observed, but the same budget as TSan keeps
-    # a cold-cache build from being the thing that turns the gate red.
-    timeout-minutes: 20
+    # a cold-cache build from being the thing that turns the gate red: the
+    # pre-warm and test steps carry 20 min each, and the job adds room for
+    # checkout and the cancel step. The pre-warm's share is spent only on a
+    # cold runner; a hang in either step ends as that step's `timed_out`.
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: write
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/verify-xcode
+      # Own step so its cold run (an unsanitized build plus about 1 GB of
+      # model downloads, once per runner and dependency set) is bounded and
+      # fails as `timed_out`, not as an opaque job cancellation. Warm, it is a
+      # file check.
+      - id: home
+        uses: ./.github/actions/runner-home
+        timeout-minutes: 20
+        with:
+          prewarm: "true"
       - uses: ./.github/actions/sanitizer-tests
+        timeout-minutes: 20
         with:
           sanitizer-flag: "--sanitize=address"
+          user-home: ${{ steps.home.outputs.home }}
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure
@@ -432,18 +446,27 @@ jobs:
     # ~7 min wall-clock observed for the app package alone; the AudioTapLib
     # step adds roughly 1.5 to 2.5 min, most of it waiting out real restart
     # deadlines rather than compiling, and the most recent full leg took
-    # 15m13s. 20 min still leaves room for cold-build variance while
-    # surfacing runaways before they cost an hour.
-    timeout-minutes: 20
+    # 15m13s. The test step's 20 min still leaves room for cold-build
+    # variance while surfacing runaways before they cost an hour; the job
+    # budget adds the pre-warm step's own 20 min (see test-asan).
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: write
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/verify-xcode
+      # Own bounded step: see the same step in test-asan.
+      - id: home
+        uses: ./.github/actions/runner-home
+        timeout-minutes: 20
+        with:
+          prewarm: "true"
       - uses: ./.github/actions/sanitizer-tests
+        timeout-minutes: 20
         with:
           sanitizer-flag: "--sanitize=thread"
+          user-home: ${{ steps.home.outputs.home }}
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure

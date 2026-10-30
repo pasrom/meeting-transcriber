@@ -1,0 +1,112 @@
+name: "Per-runner test home"
+description: >
+  Gives a self-hosted job a home folder of its runner's own for the app's test
+  steps, and optionally fills its model caches once. Callers pass the `home`
+  output to their test steps as CFFIXED_USER_HOME; HOME stays the
+  account's. The caller runs
+  actions/checkout and verify-xcode first, and calls this from the workflow,
+  not from inside another composite, so the step can carry `timeout-minutes`.
+
+  Why: the Mini's runners share one OS user with each other and the dev app,
+  so the account's Application Support (app data, WhisperKit and FluidAudio
+  models) and ~/Documents/huggingface are in use by every job at once, and a
+  test's download or migration there failed a concurrent job. Under
+  CFFIXED_USER_HOME, Foundation resolves the home, Application Support,
+  Documents and Caches inside the given folder. Not moved: UserDefaults
+  (cfprefsd still writes to the account's ~/Library/Preferences, which is why
+  DefaultsSuite sweeps there), keychains and TCC grants, all per user.
+
+  Why not HOME too: the Security framework resolves the keychain default and
+  search list through $HOME, and with HOME moved the CI keychain is no longer
+  the default, so every keychain write fails (seen on the Mini; locally no
+  default keychain resolves at all). Left behind on the account's side: the
+  Claude CLI project folder the tests compute from HOME, which no test
+  creates (its name is unique per run, and cleanup only removes it while
+  empty).
+
+  Not covered, on purpose: the e2e-app family of lanes launches the deployed
+  app, which needs the real home's TCC grants, so it still shares models and
+  data with the dev app on the `audio` runner.
+
+  Where: `<runner.tool_cache>/meetingtranscriber-home/<runner.name>`. The tool
+  cache persists between jobs and is not cleaned by actions/checkout; the
+  runner name keeps two runners apart even if they were ever given one tool
+  cache. A runner runs one job at a time. No actions/cache: the disk persists,
+  and uploading the models on a miss is what e2e.yml already found too slow.
+  RunnerHomeIsolationTests fails a self-hosted run that does not use it.
+
+inputs:
+  prewarm:
+    description: >
+      Download the models the suite loads, sequentially, when this home has
+      not been pre-warmed for the current Package.resolved and
+      ModelPreloadTests.swift. Needed before `swift test --parallel`, whose
+      processes race on the Hub client's `*.incomplete` rename when they load
+      one model into a cold folder (see setup-swift-test), and it keeps a
+      serial lane's first run from spending its test budget on downloads.
+    required: false
+    default: "false"
+
+outputs:
+  home:
+    description: "The folder to pass as CFFIXED_USER_HOME."
+    value: ${{ steps.home.outputs.home }}
+
+runs:
+  using: "composite"
+  steps:
+    # The checks live in a script, so a shell test can plant the dangerous
+    # layouts (a test home, or a folder on the way, linked into the account's
+    # home) and show that nothing on the account's side is touched.
+    - name: Create this runner's test home
+      id: home
+      shell: bash
+      env:
+        TOOL_CACHE: ${{ runner.tool_cache }}
+        NAME: ${{ runner.name }}
+      run: |
+        set -euo pipefail
+        home=$("$GITHUB_WORKSPACE/scripts/ci/prepare-runner-home.sh" "$TOOL_CACHE" "$NAME")
+        echo "home=$home" >> "$GITHUB_OUTPUT"
+        echo "Test home: $home"
+
+    # Keyed on the dependency resolution and ModelPreloadTests.swift, so any
+    # change to what that file loads re-arms it (a comment edit there re-arms it
+    # once, which is cheap), plus PREWARM_VERSION for a manual re-run. A test
+    # elsewhere that starts loading a model ModelPreloadTests does not is not
+    # covered: add that model there. One marker per key is kept, so branches on different resolutions
+    # do not alternate re-runs, and the markers live in the home, so deleting
+    # the home re-arms them all. The large default WhisperKit variant is
+    # skipped: no self-hosted lane loads it. Not sanitized, like
+    # setup-swift-test's, so a race in third-party download code cannot fail a
+    # sanitizer leg; that costs one unsanitized build, on cold runs only. A run
+    # cut short keeps the models it finished (each loads local-first next time)
+    # and the build, so a retry only does the rest.
+    - name: Pre-warm the model caches (when cold)
+      if: inputs.prewarm == 'true'
+      shell: bash
+      env:
+        HOME_DIR: ${{ steps.home.outputs.home }}
+        PREWARM_VERSION: "1"
+        KEY: ${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Tests/ModelPreloadTests.swift') }}
+      run: |
+        set -euo pipefail
+        preload="$GITHUB_WORKSPACE/app/MeetingTranscriber/Tests/ModelPreloadTests.swift"
+        if [ ! -f "$preload" ]; then
+          echo "::error::Pre-warm expects $preload — moved or renamed?"
+          exit 1
+        fi
+        marker="$HOME_DIR/.prewarmed-v$PREWARM_VERSION-$KEY"
+        if [ -f "$marker" ]; then
+          echo "Models already pre-warmed for this key"
+          exit 0
+        fi
+        cd "$GITHUB_WORKSPACE/app/MeetingTranscriber"
+        LOG="$RUNNER_TEMP/model-prewarm.log"
+        CFFIXED_USER_HOME="$HOME_DIR" swift test --filter ModelPreloadTests \
+          --skip 'ModelPreloadTests/testPreloadWhisperKitDefault' 2>&1 | tee "$LOG"
+        if ! grep -q "Test Suite 'ModelPreloadTests' passed" "$LOG"; then
+          echo "::error::Pre-warm did not run ModelPreloadTests — renamed, removed, or a download failed?"
+          exit 1
+        fi
+        touch "$marker"

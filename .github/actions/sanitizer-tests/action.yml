@@ -12,6 +12,11 @@ inputs:
   sanitizer-flag:
     description: "The swift test flag: --sanitize=address or --sanitize=thread."
     required: true
+  user-home:
+    description: >
+      The runner's own test home from ./.github/actions/runner-home, passed
+      to the app's test step as CFFIXED_USER_HOME.
+    required: true
 
 runs:
   using: "composite"
@@ -32,6 +37,10 @@ runs:
     # `testOpenAIAPIKeyViaKeychainHelper`. Without `-l` the keychain
     # also doesn't lock on system sleep, irrelevant inside a CI job
     # but defensive.
+    #
+    # The tests' test home does not change this: they keep the account's HOME,
+    # through which the Security framework reads the default and search list
+    # set here (see runner-home for why HOME is not moved).
     - name: Ensure CI keychain is default + in search list + unlocked + no-autolock
       shell: bash
       run: |
@@ -44,6 +53,7 @@ runs:
       shell: bash
       env:
         SANITIZER_FLAG: ${{ inputs.sanitizer-flag }}
+        CFFIXED_USER_HOME: ${{ inputs.user-home }}
       run: |
         cd "$GITHUB_WORKSPACE/app/MeetingTranscriber" || exit 1
         swift test --parallel --skip ModelPreloadTests "$SANITIZER_FLAG"
