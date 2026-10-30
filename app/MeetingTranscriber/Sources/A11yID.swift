@@ -44,6 +44,10 @@ enum A11yID {
         "jobRetryButton.\(index)"
     }
 
+    static func jobNotionRetryButton(_ index: Int) -> String {
+        "jobNotionRetryButton.\(index)"
+    }
+
     /// Menu bar items that answer an open browser consent prompt.
     static let menuRecordPendingConsent = "menuRecordPendingConsent"
     static let menuDeclinePendingConsent = "menuDeclinePendingConsent"
