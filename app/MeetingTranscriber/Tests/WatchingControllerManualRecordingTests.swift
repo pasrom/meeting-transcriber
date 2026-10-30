@@ -70,7 +70,12 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         )
         addTeardownBlock { await controller.stopManualRecording() }
 
-        controller.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
+        // This process's own pid, so the recorded app is alive for as long as
+        // the test runs. The loop's monitor stops a manual recording on its
+        // first poll once the pid is gone, and a made-up pid is gone on most
+        // machines, so with one the assertion on `isManualRecording` below
+        // held only while that poll had not run yet.
+        controller.startManualRecording(pid: getpid(), appName: "Chrome", title: "Standup")
         // Wait for the report, not for `isManualRecording`: the loop sets that
         // inside the start, one statement before the notification, so waiting
         // on it can win the race and read an empty list.
@@ -242,7 +247,10 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         })
         let (loop, _) = makeTestWatchLoop()
         controller.watchLoop = loop
-        try await loop.startManualRecording(pid: 99, appName: "Chrome", title: "Meeting")
+        // Own pid, as above: a loop recording a pid that is gone stops itself
+        // on the monitor's first poll, and the refusal below keys on the loop
+        // still recording.
+        try await loop.startManualRecording(pid: getpid(), appName: "Chrome", title: "Meeting")
         addTeardownBlock {
             await micGate.open()
             await loop.stop()
