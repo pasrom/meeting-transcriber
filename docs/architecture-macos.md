@@ -667,6 +667,7 @@ AppSettings (UserDefaults)
 | Protocols | `~/Library/Application Support/MeetingTranscriber/protocols/` |
 | IPC | `~/.meeting-transcriber/` |
 | Speaker DB | `~/Library/Application Support/MeetingTranscriber/speakers.json` |
+| WhisperKit models | `~/Library/Application Support/MeetingTranscriber/huggingface/` |
 | Pipeline logs | `~/.meeting-transcriber/pipeline_queue.json`, `pipeline_log.jsonl` |
 | AudioTapLib | Linked as SPM library (no separate binary) |
 
