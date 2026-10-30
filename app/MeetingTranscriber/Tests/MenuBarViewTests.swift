@@ -1111,6 +1111,23 @@ final class MenuBarViewTests: XCTestCase {
         XCTAssertFalse(quitCalled)
     }
 
+    func testOpenLastProtocolIsOfferedForACompletedJobWithoutNotion() throws {
+        let dir = try makeTempDirectory(prefix: "menu_open_last_test")
+        let markdown = dir.appendingPathComponent("protocol.md")
+        try "# Protocol".write(to: markdown, atomically: true, encoding: .utf8)
+        let queue = try makeIsolatedQueue()
+        var job = PipelineJob(
+            meetingTitle: "Sprint", appName: "Zoom", mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.protocolPath = markdown
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        let sut = try makeView(status: makeStatus(), pipelineQueue: queue)
+        XCTAssertNoThrow(try sut.inspect().find(button: "Open Last Notes"))
+    }
+
     func testOpenLastProtocolInNotionCallsOpenCallbackWithoutQuitting() throws {
         let queue = try makeIsolatedQueue()
         var job = PipelineJob(
