@@ -14,7 +14,9 @@ import XCTest
 /// decoded-versus-container length are all unobservable with the fixtures we own.
 ///
 /// Rather than commit more binary fixtures, the shapes that are missing are
-/// synthesised here from `AVAudioFile` alone. The expected levels are arithmetic,
+/// synthesised here from `AVAudioFile` alone, except a lying container header,
+/// which is byte-patched into a copy of a committed fixture (`MP4File`) because
+/// no writer will produce one. The expected levels are arithmetic,
 /// not recorded: a 440 Hz sine of amplitude `a` has RMS `a / sqrt(2)`, so the
 /// assertions below are derived values with tolerance, not golden numbers.
 final class AudioImportFidelityTests: XCTestCase {
@@ -238,6 +240,89 @@ final class AudioImportFidelityTests: XCTestCase {
             AudioMixer.rmsDecibels(samples: samples), -40,
             "a discrete channel layout must not decode to silence",
         )
+    }
+
+    /// A container that claims 4.29e9 seconds must decode normally, not size a
+    /// buffer from the claim: see `sampleReservation` for why that aborts.
+    /// (`AVAudioFile` happens to open this patched file, which is why it is fed
+    /// to tier 2 directly.)
+    ///
+    /// The lie sits in the movie-timescale headers (`mvhd`, `tkhd`, `elst`)
+    /// because those are what AVFoundation derives both the asset's and the
+    /// track's duration from when an edit list is present. The same lie in
+    /// `mdhd` alone reaches neither, and `mdhd`'s timescale also times the
+    /// samples. The patch is not invisible to every reader, though: tier 1
+    /// (`AVAudioFile`) reports about 130 fewer source frames for the patched
+    /// copy, which is why the comparison below is between two tier-2 decodes.
+    ///
+    /// Without the guard this test does not fail, it aborts the test process
+    /// on the allocation, since that crash is the regression it pins.
+    func testAVAssetFallbackDecodesFileWhoseContainerClaimsAbsurdDuration() async throws {
+        let source = fixtureURL("sine_440hz_44k.m4a")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: source.path), "Fixture not found")
+        let patched = try makeFileWithAbsurdContainerDuration(from: source)
+
+        // Precondition, so the test cannot pass vacuously if AVFoundation ever
+        // starts sanitising the header: both the asset and its audio track
+        // claim the bogus span, whichever one a decoder sizes itself from.
+        // Opened with the same precise-timing option the code under test uses.
+        let asset = AVURLAsset(url: patched, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        let track = try XCTUnwrap(tracks.first)
+        let assetSeconds = try await CMTimeGetSeconds(asset.load(.duration))
+        let trackSeconds = try await CMTimeGetSeconds(track.load(.timeRange).duration)
+        XCTAssertGreaterThan(assetSeconds, 1e9, "patched header must claim billions of seconds")
+        XCTAssertGreaterThan(trackSeconds, 1e9, "patched header must claim billions of seconds")
+
+        let expected = try await AudioMixer.loadAudioFromAVAsset(url: source).samples.count
+        let samples = try await AudioMixer.loadAudioFromAVAsset(url: patched).samples
+
+        XCTAssertEqual(samples.count, expected, "a lying container duration must not change what is decoded")
+        // Pinned absolutely as well, so both decodes being wrong the same way
+        // cannot pass: the fixture holds one second of audio.
+        XCTAssertEqual(
+            Double(samples.count) / Double(AudioConstants.targetSampleRate), 1.0, accuracy: 0.03,
+            "the patched file must decode to the fixture's one second",
+        )
+        XCTAssertGreaterThan(
+            AudioMixer.rmsDecibels(samples: samples), -40,
+            "the decoded sine must carry signal, not silence",
+        )
+    }
+
+    // MARK: - Byte-patched sources
+
+    /// Copy `source` and rewrite its movie timescale to 1 and every
+    /// movie-timescale duration (`mvhd`, `tkhd`, `elst` segment) to `0xFFFFFFFF`,
+    /// leaving the media header and sample tables intact. Requires version-0
+    /// boxes and one track with one non-empty edit, since the timescale
+    /// rescales every such duration; throws otherwise rather than half-patch.
+    private func makeFileWithAbsurdContainerDuration(from source: URL) throws -> URL {
+        var file = try MP4File(contentsOf: source)
+        let mvhd = try file.box(at: "moov", "mvhd")
+        let tkhd = try file.box(at: "moov", "trak", "tkhd")
+        let elst = try file.box(at: "moov", "trak", "edts", "elst")
+
+        // Payload offset 0 holds the version (top byte) and flags.
+        for box in [mvhd, tkhd, elst] where try file.uint32(atPayloadOffset: 0, in: box) >> 24 != 0 {
+            throw MP4File.FormatError(description: "\(box.type) is not a version-0 box")
+        }
+        let entryCount = try file.uint32(atPayloadOffset: 4, in: elst)
+        guard entryCount == 1 else {
+            throw MP4File.FormatError(description: "expected one edit, found \(entryCount)")
+        }
+        guard try file.uint32(atPayloadOffset: 12, in: elst) != .max else {
+            throw MP4File.FormatError(description: "the edit is empty (media time -1)")
+        }
+
+        try file.put(1, atPayloadOffset: 12, in: mvhd) // timescale
+        try file.put(.max, atPayloadOffset: 16, in: mvhd) // duration
+        try file.put(.max, atPayloadOffset: 20, in: tkhd) // duration (after times, track ID, reserved)
+        try file.put(.max, atPayloadOffset: 8, in: elst) // first segment duration
+
+        let url = makeTempFile(suffix: ".m4a")
+        try file.data.write(to: url)
+        return url
     }
 
     // MARK: - Synthesised sources
