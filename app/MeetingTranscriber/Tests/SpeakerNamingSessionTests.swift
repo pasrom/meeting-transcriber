@@ -364,7 +364,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
             embeddings _: [String: [Float]], speakingTimes _: [String: TimeInterval], jobID _: UUID,
         ) {}
 
-        func generateProtocol(jobID _: UUID, transcript _: String, title _: String, protocolsDir _: URL) async {
+        func generateProtocol(jobID _: UUID, transcript _: String, title _: String, protocolsDir _: URL, speakerNames _: [String]) async {
             recorder.generateProtocolEntered += 1
             await withCheckedContinuation { recorder.protocolGate = $0 }
         }

@@ -361,6 +361,7 @@
                 durationSec: Date().timeIntervalSince(job.enqueuedAt),
                 transcriptPath: job.transcriptPath?.path,
                 protocolPath: job.protocolPath?.path,
+                export: JobExportDTO(job: job),
                 error: job.error,
                 warnings: job.warnings,
                 participants: job.participants,

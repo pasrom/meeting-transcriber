@@ -786,6 +786,23 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertEqual(notifier.calls[0].body, "Sprint Review")
     }
 
+    func testConfigureCallbacksNotionOnlyProtocolFiresProtocolNotification() throws {
+        let tmpDir = try makeTempDirectory(prefix: "appstate_notion_callbacks")
+        let (state, notifier) = makeIsolatedState(logDir: tmpDir)
+        state.pipeline.configureCallbacks()
+        var job = makeJob(title: "Sprint Review")
+        job.recordNotionPage(
+            NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
+            databaseID: "database-1",
+        )
+        job.finishNotionExport(succeeded: true)
+
+        state.pipeline.queue.onJobStateChange?(job, .generatingProtocol, .done)
+
+        XCTAssertEqual(notifier.calls.count, 1)
+        XCTAssertEqual(notifier.calls[0].title, "Meeting Notes Ready")
+    }
+
     /// A voice whose embedding is NaN/Inf is left out of the speaker DB. The
     /// user named that speaker, so they need telling the voice was not kept,
     /// once per job however often the job is confirmed again.

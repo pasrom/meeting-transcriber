@@ -38,7 +38,9 @@ protocol SpeakerNamingSessionDelegate: AnyObject {
     /// Run the LLM protocol generator over a transcript (a queue pipeline stage).
     /// Throws only `CancellationError`, once the job has been cancelled or
     /// removed; nothing is saved for it then.
-    func generateProtocol(jobID: UUID, transcript: String, title: String, protocolsDir: URL) async throws(CancellationError)
+    func generateProtocol(
+        jobID: UUID, transcript: String, title: String, protocolsDir: URL, speakerNames: [String],
+    ) async throws(CancellationError)
     /// Diarize app + mic tracks separately with the shared single-track fallback
     /// (app-only on mic failure, mic-only on app failure; a queue pipeline stage,
     /// reused by the late re-run).
@@ -248,6 +250,7 @@ final class SpeakerNamingSession {
         let canGenerateProtocol = (protocolGeneratorFactory?() != nil)
             && delegate?.job(withID: jobID)?.transcriptPath != nil
 
+        let speakerNames = speakerNamingDataByJob[jobID].map { Array($0.mapping.values) } ?? []
         removeNamingData(jobID: jobID, slug: slug)
 
         // `canGenerateProtocol == true` implies the delegate was alive above
@@ -262,7 +265,7 @@ final class SpeakerNamingSession {
                 delegate.updateJobState(id: jobID, to: .generatingProtocol)
             }
             startLateWork(jobID: jobID) {
-                await self.generateProtocolForExistingJob(jobID: jobID, delegate: delegate)
+                await self.generateProtocolForExistingJob(jobID: jobID, delegate: delegate, speakerNames: speakerNames)
             }
         } else if delegate?.job(withID: jobID)?.state == .speakerNamingPending {
             delegate?.updateJobState(id: jobID, to: .done)

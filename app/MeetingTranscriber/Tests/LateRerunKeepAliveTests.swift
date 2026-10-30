@@ -80,7 +80,7 @@ private final class RecordingDelegate: SpeakerNamingSessionDelegate {
         embeddings _: [String: [Float]], speakingTimes _: [String: TimeInterval], jobID _: UUID,
     ) {}
 
-    func generateProtocol(jobID _: UUID, transcript _: String, title _: String, protocolsDir _: URL) {}
+    func generateProtocol(jobID _: UUID, transcript _: String, title _: String, protocolsDir _: URL, speakerNames _: [String]) {}
 
     func runDualTrackDiarization(
         diarizeProcess _: any DiarizationProvider,

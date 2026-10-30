@@ -23,8 +23,9 @@ extension PipelineQueue {
     /// memory, and the caller has already checked that it holds no unfinished
     /// work.
     ///
-    /// Finished jobs are dropped with their sidecars, exactly as the restore
-    /// drops them. Keeping them looked harmless and is not: the reaper that
+    /// Finished jobs are dropped with their sidecars, except failed Notion
+    /// exports whose local protocol is still needed for a manual retry.
+    /// Keeping every finished job looked harmless and is not: the reaper that
     /// removes a `.done` job after `completedJobLifetime` is a task owned by the
     /// queue the job came from, so an adopted job would carry no reaper, sit in
     /// the list and the snapshot indefinitely, keep its 16 kHz sidecars in the
@@ -40,14 +41,16 @@ extension PipelineQueue {
         // adoption itself writes nothing (see below): a job that had just
         // failed stayed on disk as running and ran again on the next launch.
         var adopted = replaced.jobs
+        let recoveredNotionExports = recoverInterruptedNotionExports(in: &adopted)
         discardFinishedJobs(from: &adopted)
         discardJobsWithMissingAudio(&adopted, interruptedIn: [:])
-        // Count, not equality: both calls above only ever remove, so a
-        // differing count is exactly "something was dropped". `PipelineJob` is
-        // not `Equatable`, and making it so for one bookkeeping line would put
-        // a conformance on a type with two dozen fields.
-        let changed = adopted.count != replaced.jobs.count
+        // Discards change the count; interrupted-export normalization is
+        // tracked separately, without comparing every field on PipelineJob.
+        let changed = adopted.count != replaced.jobs.count || recoveredNotionExports
         jobs = adopted
+        for job in jobs where job.state == .done && job.hasPendingNotionExport {
+            recordTerminalJob(job)
+        }
         // Only when this queue's list differs from what the replaced one held.
         // Every rebuild comes through here once the controller has built a queue
         // itself, including each watch start, and writing an unchanged (usually
@@ -62,10 +65,24 @@ extension PipelineQueue {
     /// decision, not two. It used to be written out at both call sites, held
     /// together only by a comment saying they had to agree.
     private func discardFinishedJobs(from list: inout [PipelineJob]) {
-        let finished = list.filter { $0.state == .done }
+        let finished = list.filter { $0.state == .done && !$0.hasPendingNotionExport }
         guard !finished.isEmpty else { return }
-        list.removeAll { $0.state == .done }
+        list.removeAll { $0.state == .done && !$0.hasPendingNotionExport }
         removeNamingDataOfDiscardedJobs(finished)
+    }
+
+    /// A stopped export is retried manually from its complete local backup.
+    private func recoverInterruptedNotionExports(in list: inout [PipelineJob]) -> Bool {
+        var changed = false
+        for index in list.indices where list[index].state == .done && list[index].notionExportStatus == .inProgress {
+            list[index].finishNotionExport(succeeded: false)
+            Self.noteNotionExportFailure(
+                on: &list[index], reason: Self.notionExportInterruptedReason,
+                backupSaved: list[index].protocolPath != nil,
+            )
+            changed = true
+        }
+        return changed
     }
 
     // MARK: - Snapshot Recovery
@@ -95,6 +112,7 @@ extension PipelineQueue {
         let interruptedStates = Dictionary(loaded.map { ($0.id, $0.state) }) { _, last in last }
 
         protocolResumeDispositions = resumeDispositions(for: loaded)
+        _ = recoverInterruptedNotionExports(in: &loaded)
 
         // Reset active states back to waiting
         for i in loaded.indices {
@@ -139,6 +157,9 @@ extension PipelineQueue {
         }
 
         jobs = loaded
+        for job in jobs where job.state == .done && job.hasPendingNotionExport {
+            recordTerminalJob(job)
+        }
 
         // Rebuild the session's naming cache from disk for
         // .speakerNamingPending jobs.
@@ -190,7 +211,12 @@ extension PipelineQueue {
                 namingDataOnDisk: namingDataOnDisk,
                 transcriptExists: Self.fileExists(job.transcriptPath),
                 hasNamingSlug: job.namingSlug != nil,
-                protocolExists: Self.fileExists(job.protocolPath),
+                // An older local protocol can still exist during a corrected
+                // speaker-name export. It must not complete an interrupted
+                // export without regenerating from the corrected transcript,
+                // unless this run wrote it before the export began.
+                protocolExists: (!job.hasPendingNotionExport || job.hasInterruptedNotionExportWithBackup)
+                    && Self.fileExists(job.protocolPath),
             )
             if disposition != .fullRun { dispositions[job.id] = disposition }
         }
@@ -227,6 +253,10 @@ extension PipelineQueue {
             // Everything is on disk; a second LLM call would only overwrite an
             // identical file.
             protocolResumeDispositions.removeValue(forKey: job.id)
+            if let index = jobs.firstIndex(where: { $0.id == job.id }), jobs[index].hasInterruptedNotionExportWithBackup {
+                jobs[index].finishNotionExport(succeeded: false)
+                recordNotionExportFailure(jobID: job.id, reason: Self.notionExportInterruptedReason)
+            }
             eventLog.append(jobID: job.id, event: "finished_after_restore", from: .waiting, to: .done)
             updateJobState(id: job.id, to: .done)
             return true
@@ -250,6 +280,7 @@ extension PipelineQueue {
             try await generateProtocol(
                 jobID: job.id, transcript: transcript, title: job.meetingTitle,
                 protocolsDir: transcriptPath.deletingLastPathComponent(),
+                speakerNames: job.notionExportSpeakerNames ?? [],
             )
             updateJobState(id: job.id, to: .done)
         } catch {
@@ -275,6 +306,8 @@ extension PipelineQueue {
         _ loaded: inout [PipelineJob], interruptedIn: [UUID: JobState],
     ) {
         let missing = loaded.filter { job in
+            // Export-only retries read the complete Markdown backup, not audio.
+            if job.state == .done, job.hasPendingNotionExport { return false }
             guard let mixPath = job.mixPath else { return false }
             // Exempt, like `.speakerNamingPending`: a job the resume can finish
             // reads its transcript and nothing else, so discarding it for a

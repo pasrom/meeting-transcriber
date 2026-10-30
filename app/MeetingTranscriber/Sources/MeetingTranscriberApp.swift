@@ -114,6 +114,7 @@ struct MeetingTranscriberApp: App {
         _menuProgressUpdater = State(initialValue: updater)
         AppPaths.migrateIfNeeded()
         NotificationManager.shared.setUp()
+        state.pipeline.restorePendingNotionExports()
         // The verdict was taken in `AppLauncher.main()`, before `AppState` was
         // built. It is reported here because this is the first point at which
         // the notification centre is set up (issue #703).

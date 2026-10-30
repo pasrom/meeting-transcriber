@@ -288,6 +288,7 @@
             let durationSec: Double
             let transcriptPath: String?
             let protocolPath: String?
+            let export: JobExportDTO?
             let error: String?
             let warnings: [String]
             let participants: [String]
