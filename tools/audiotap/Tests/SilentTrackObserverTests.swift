@@ -67,13 +67,80 @@ final class SilentTrackObserverTests: XCTestCase {
         // Zeroes from the very first buffer is the signature of a tap that was
         // never allowed to hear the app (issue #524). It is a different failure
         // with a different fix, and reporting it here would bury the one this
-        // observer is for.
+        // observer is for. The one-off reading it does get (below) is not an
+        // edge: it opens no run and counts toward nothing the stop summary
+        // reports.
         var observer = SilentTrackObserver()
-        for buffer in stride(from: 0.01, through: 300.0, by: 10.0) {
-            XCTAssertNil(observer.observe(ages(energy: nil)), "\(buffer)")
+        for _ in 0 ..< 2 * SilentTrackObserver.silentSinceFirstBufferTicks {
+            _ = observer.observe(ages(energy: nil))
         }
         XCTAssertEqual(observer.zeroRuns, 0)
         XCTAssertFalse(observer.inZeroRun)
+    }
+
+    // MARK: - A track that never carried signal (issue #671)
+
+    func testATrackSilentSinceTheFirstBufferIsReadOnceAfterAMinute() {
+        // The zero-run edge needs signal first, so a track at zeros from its
+        // first buffer would otherwise never be read mid-call.
+        var observer = SilentTrackObserver()
+        let ticks = SilentTrackObserver.silentSinceFirstBufferTicks
+        for tick in 1 ..< ticks {
+            XCTAssertNil(observer.observe(ages(energy: nil)), "tick \(tick)")
+        }
+        XCTAssertEqual(observer.observe(ages(energy: nil)), .silentSinceFirstBuffer)
+        for tick in 0 ..< ticks {
+            XCTAssertNil(observer.observe(ages(energy: nil)), "once per recording, tick \(tick)")
+        }
+        XCTAssertEqual(observer.edges, 0, "not an edge: it must not spend the edge cap")
+    }
+
+    func testSignalArrivingAfterItStillOpensAZeroRun() {
+        // The reading changes nothing for the edges: a track that goes quiet
+        // after its late first signal is still the zero-run case.
+        var observer = SilentTrackObserver()
+        for _ in 0 ..< SilentTrackObserver.silentSinceFirstBufferTicks {
+            _ = observer.observe(ages(energy: nil))
+        }
+        XCTAssertNil(observer.observe(ages(energy: 0.5)))
+        XCTAssertEqual(observer.observe(ages(energy: 15)), .enteredZeroRun(afterSignalSeconds: 15))
+        XCTAssertEqual(observer.zeroRuns, 1)
+    }
+
+    func testAnOpenZeroRunIsNeverMisreadAsSilentSinceTheFirstBuffer() {
+        // The publisher's energy stamp never resets, so an open run never sees
+        // a nil energy age today; the observer still must not count such ticks
+        // toward the one-off reading, or a track that carried signal would be
+        // logged as silent since its first buffer.
+        var observer = SilentTrackObserver()
+        _ = observer.observe(ages(energy: 0.5))
+        XCTAssertEqual(observer.observe(ages(energy: 15)), .enteredZeroRun(afterSignalSeconds: 15))
+        for _ in 0 ..< 2 * SilentTrackObserver.silentSinceFirstBufferTicks {
+            XCTAssertNil(observer.observe(ages(energy: nil)))
+        }
+        XCTAssertTrue(observer.inZeroRun)
+    }
+
+    func testOnlyTicksWithBuffersArrivingCountTowardIt() {
+        // No buffers is `noBuffers` and has probes of its own (issue #693).
+        var observer = SilentTrackObserver()
+        let ticks = SilentTrackObserver.silentSinceFirstBufferTicks
+        for _ in 0 ..< ticks {
+            XCTAssertNil(observer.observe(ages(energy: nil, buffer: nil)))
+            XCTAssertNil(observer.observe(ages(energy: nil, buffer: 30)))
+        }
+        for _ in 1 ..< ticks {
+            XCTAssertNil(observer.observe(ages(energy: nil)))
+        }
+        XCTAssertEqual(observer.observe(ages(energy: nil)), .silentSinceFirstBuffer)
+    }
+
+    func testATrackThatCarriedSignalNeverGetsIt() {
+        var observer = SilentTrackObserver()
+        _ = observer.observe(ages(energy: 0.5))
+        for _ in 0 ..< 2 * SilentTrackObserver.silentSinceFirstBufferTicks {
+            XCTAssertNotEqual(observer.observe(ages(energy: 600)), .silentSinceFirstBuffer)
+        }
     }
 
     func testBuffersStoppingIsNotAZeroRun() {

@@ -23,6 +23,10 @@ import Foundation
 /// clock of its own and no timer. That does mean it cannot see a tap whose
 /// IOProc stopped, since the tick is IOProc-driven; that failure is `noBuffers`
 /// and the app layer already reports it.
+///
+/// It also hands out one reading per recording for a track that has been at
+/// exact zeros since its first buffer (`silentSinceFirstBuffer`, issue #671).
+/// That is not an edge and counts toward nothing the stop summary reports.
 struct SilentTrackObserver: Equatable {
     /// How long the track must have been at exact zeros before the run is worth
     /// a log line. Not a rebuild threshold: this only writes to the log, so it
@@ -41,7 +45,18 @@ struct SilentTrackObserver: Equatable {
         case enteredZeroRun(afterSignalSeconds: TimeInterval)
         /// Signal came back after `durationSeconds` of zeros.
         case exitedZeroRun(durationSeconds: TimeInterval)
+        /// The track has carried only exact zeros since its first buffer, for
+        /// about `silentSinceFirstBufferSeconds` of buffers arriving. Once per
+        /// recording, and not an edge (issue #671).
+        case silentSinceFirstBuffer
     }
+
+    /// How long buffers must have arrived with no signal ever before the one-off
+    /// `silentSinceFirstBuffer` reading.
+    static let silentSinceFirstBufferSeconds: TimeInterval = 60
+    /// The same threshold in 5 s ticks, which is what the observer counts.
+    static let silentSinceFirstBufferTicks =
+        Int((silentSinceFirstBufferSeconds / DebugRMSReporter.reportIntervalSeconds).rounded(.up))
 
     private(set) var edges = 0
     private(set) var zeroRuns = 0
@@ -56,10 +71,19 @@ struct SilentTrackObserver: Equatable {
         currentRunPeak > 0
     }
 
+    /// Ticks seen with buffers arriving and no signal ever.
+    private var silentSinceFirstBufferTicksSeen = 0
+
     mutating func observe(_ ages: ChannelSignalAges) -> Event? {
-        // A run already open stays open when this is nil: the transport dying
+        // A run already open stays open when buffers stop: the transport dying
         // is not signal returning.
-        guard let energyAge = ages.zeroRunWhileBuffersArrive else { return nil }
+        guard ages.buffersArrive else { return nil }
+        guard let energyAge = ages.zeroRunWhileBuffersArrive else {
+            // Never a sample of signal. The publisher's energy stamp never
+            // resets, so no open run ever lands here; the check keeps a track
+            // that carried signal from being misread should that ever change.
+            return inZeroRun ? nil : observeSilentSinceFirstBufferTick()
+        }
 
         guard inZeroRun else {
             guard energyAge >= Self.zeroRunThreshold else { return nil }
@@ -74,6 +98,23 @@ struct SilentTrackObserver: Equatable {
         let duration = currentRunPeak
         currentRunPeak = 0
         return emit(.exitedZeroRun(durationSeconds: duration))
+    }
+
+    /// A track that never carried a sample of signal opens no zero run (see
+    /// `zeroRunWhileBuffersArrive`), so without this nothing would read the
+    /// tapped processes between start and stop, and the `start` reading is
+    /// taken before a call's audio is up. Mid-call, `outputDevices` against the
+    /// device line's `defaultOutput` is what can tell a tap denied by TCC
+    /// (issue #524, output still on the default device) from a call that sent
+    /// its far end into a voice-processing device from the first second
+    /// (issue #671); whether the HAL lists that device there is still to be
+    /// seen on a live call. Not an edge: it opens no run, touches no counter
+    /// and does not spend the edge cap. The count passes the threshold once,
+    /// so the reading is once per recording.
+    private mutating func observeSilentSinceFirstBufferTick() -> Event? {
+        silentSinceFirstBufferTicksSeen += 1
+        guard silentSinceFirstBufferTicksSeen == Self.silentSinceFirstBufferTicks else { return nil }
+        return .silentSinceFirstBuffer
     }
 
     /// Counts the edge and hands it back, or swallows it once the cap is
@@ -97,10 +138,16 @@ extension ChannelSignalAges {
     /// `noBuffers`, which the app layer reports, and the content of a
     /// transport that stopped says nothing.
     var zeroRunWhileBuffersArrive: TimeInterval? {
-        guard let energyAge = secondsSinceLastEnergy,
-              let bufferAge = secondsSinceLastBuffer,
-              bufferAge <= SilentTrackObserver.maxBufferAge
-        else { return nil }
-        return energyAge
+        guard buffersArrive else { return nil }
+        return secondsSinceLastEnergy
+    }
+
+    /// Buffers no older than `SilentTrackObserver.maxBufferAge`: the one
+    /// definition of "still arriving". With it true, a nil
+    /// `zeroRunWhileBuffersArrive` means exactly a track that never carried a
+    /// sample, which is how the observer tells the two apart with one branch.
+    var buffersArrive: Bool {
+        guard let bufferAge = secondsSinceLastBuffer else { return false }
+        return bufferAge <= SilentTrackObserver.maxBufferAge
     }
 }

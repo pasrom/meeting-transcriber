@@ -236,6 +236,31 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
         )
     }
 
+    func testATrackSilentSinceTheFirstBufferProbesTheTappedProcesses() throws {
+        // The wiring: the one-off reading for a track that never carried signal
+        // reaches the process-state probe under its own reason (issue #671).
+        guard #available(macOS 14.2, *) else { throw XCTSkip("process taps need macOS 14.2") }
+        // Asserted inside the sink, as `testTheReasonReachesTheSink` does; a
+        // second probe would over-fulfil the expectation and fail the test.
+        let probed = expectation(description: "probed")
+        let capture = AppAudioCapture(
+            pids: [1],
+            outputFileDescriptor: FileHandle.nullDevice.fileDescriptor,
+            attemptBody: nil,
+            silentTrackDiagnostics: SilentTrackDiagnostics(
+                probe: { _, _ in .init(processes: [], device: nil) },
+                sink: { reason, _ in
+                    XCTAssertEqual(reason, "silent since the first buffer")
+                    probed.fulfill()
+                },
+            ),
+        )
+        for _ in 0 ..< 2 * SilentTrackObserver.silentSinceFirstBufferTicks {
+            capture.observeSilentTrack(ages: ages(energy: nil), processes: processes)
+        }
+        wait(for: [probed], timeout: 5)
+    }
+
     func testTheCountersSurviveForTheStopSummary() {
         let diagnostics = SilentTrackDiagnostics(probe: { _, _ in .init(processes: [], device: nil) }, sink: { _, _ in })
         _ = diagnostics.observe(ages(energy: 30.0))

@@ -15,7 +15,8 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// user having turned Verbose Audio Logging on beforehand, which they cannot do
 /// retroactively. A run of exact zeros is that same kind of event, and it is
 /// bounded: two lines per process at start and stop, plus at most
-/// `SilentTrackObserver.maxEdgesPerRecording` edges. The 5 s cadence line stays
+/// `SilentTrackObserver.maxEdgesPerRecording` edges, plus one reading for a
+/// track that has been silent since its first buffer. The 5 s cadence line stays
 /// gated, because 720 lines an hour is not a triage line.
 ///
 /// **Privacy.** These carry pids, executable names, booleans, CoreAudio object
@@ -26,8 +27,11 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// apply.
 @available(macOS 14.2, *)
 extension AppAudioCapture {
-    /// Three call sites drive this, and the reasoning lives here rather than at
-    /// any of them.
+    /// The call sites below drive this, and the reasoning lives here rather
+    /// than at any of them. The scheduled probes for a tap that never delivered
+    /// a first buffer report here too, under the reasons
+    /// `NoFirstBufferProbeSchedule` names (issue #693); the watchdog's own
+    /// checks do not, by design (`reportToSink: false`).
     ///
     /// **At start**, right after `AudioDeviceStart`: a baseline for everything
     /// below, because a tap whose processes were already not running output is a
@@ -35,6 +39,13 @@ extension AppAudioCapture {
     /// a HAL read that hangs cannot hold up the start path (issue #588).
     ///
     /// **On a zero-run edge**, from the 5 s tick.
+    ///
+    /// **Once for a track silent since its first buffer**, from the same tick
+    /// (issue #671). A zero run needs signal first, so without this reading a
+    /// track at zeros from the start was read only at start, before a call's
+    /// audio is up, and at stop, after it ended. Where the processes render
+    /// mid-call is what separates a tap that cannot hear them (issue #524) from
+    /// a far end rendered into a voice-processing device.
     ///
     /// **At stop**, from `stop()` and specifically *not* from `stopCapture()`.
     /// The reading is taken from the processes the last adoption remembered, not
@@ -98,17 +109,42 @@ extension AppAudioCapture {
             // The one moment worth asking the tapped processes what they are
             // doing: whether their output is still running, and whether it went
             // to a device this tap does not follow.
-            silentTrackDiagnostics.probeAsync(
-                processes,
-                aggregateID: silentTrackDiagnostics.lastInstalledAggregateID,
-                reason: "zero run started",
-            )
+            probeTappedProcesses(processes, reason: "zero run started")
 
         case let .exitedZeroRun(durationSeconds):
             logger.info(
                 "App audio: signal returned after \(Self.seconds(durationSeconds), privacy: .public) s of exact zeros",
             )
+
+        case .silentSinceFirstBuffer:
+            // Info, not a warning: a first minute at zeros is also what joining
+            // a call early or a muted far end looks like. The stop line's
+            // `lastEnergyAge=never` is what flags a track that never recovered.
+            // The age is measured from the recording's first buffer, not
+            // derived from the tick count, which stretches with the IOProc.
+            let age = secondsSinceFirstBuffer.map(Self.seconds) ?? "unknown"
+            logger.info(
+                "App audio: track has carried only exact zeros since its first buffer, \(age, privacy: .public) s ago",
+            )
+            probeTappedProcesses(processes, reason: "silent since the first buffer")
         }
+    }
+
+    /// Age of the recording's first app buffer. `appFirstFrameTime` is stamped
+    /// on the write queue, which this runs on, and a restart never overwrites it.
+    private var secondsSinceFirstBuffer: TimeInterval? {
+        guard appFirstFrameTime != 0 else { return nil }
+        return machTicksToSeconds(mach_absolute_time() - appFirstFrameTime)
+    }
+
+    /// The logged process-state reading, against the aggregate the last
+    /// adoption installed.
+    private func probeTappedProcesses(_ processes: [TappedProcess], reason: String) {
+        silentTrackDiagnostics.probeAsync(
+            processes,
+            aggregateID: silentTrackDiagnostics.lastInstalledAggregateID,
+            reason: reason,
+        )
     }
 
     /// One line saying what the app track did over the whole recording, plus the
@@ -130,11 +166,7 @@ extension AppAudioCapture {
         logger.info(
             "App audio at stop: lastBufferAge=\(lastBuffer, privacy: .public) lastEnergyAge=\(lastEnergy, privacy: .public) zeroRuns=\(counters.zeroRuns, privacy: .public) longestZeroRun=\(Self.seconds(counters.longestZeroRun), privacy: .public)\(watchdog, privacy: .public)",
         )
-        silentTrackDiagnostics.probeAsync(
-            silentTrackDiagnostics.lastInstalledProcesses,
-            aggregateID: silentTrackDiagnostics.lastInstalledAggregateID,
-            reason: "stop",
-        )
+        probeTappedProcesses(silentTrackDiagnostics.lastInstalledProcesses, reason: "stop")
     }
 
     /// One decimal place: these are durations in seconds, and the full Double
