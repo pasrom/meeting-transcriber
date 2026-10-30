@@ -526,6 +526,78 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         XCTAssertEqual(recorder.keys, ["max_tokens", "max_completion_tokens"])
     }
 
+    // MARK: - Sampling overrides
+
+    private func makeSamplingGenerator(temperature: Double?, topP: Double?) -> OpenAIProtocolGenerator {
+        OpenAIProtocolGenerator(
+            endpoint: Self.testEndpoint,
+            model: "test-model",
+            language: "German",
+            temperature: temperature,
+            topP: topP,
+            session: makeMockSession(),
+        )
+    }
+
+    func testRequestBodyOmitsSamplingKeysWhenUnset() {
+        let body = makeSamplingGenerator(temperature: nil, topP: nil)
+            .requestBody(messages: [], tokenLimit: .maxTokens)
+
+        XCTAssertNil(body["temperature"], "an unset override must leave the server default in place")
+        XCTAssertNil(body["top_p"])
+        XCTAssertEqual(body["max_tokens"] as? Int, 16000)
+    }
+
+    func testRequestBodyCarriesSamplingKeysWhenSet() {
+        let body = makeSamplingGenerator(temperature: 0.3, topP: 0.9)
+            .requestBody(messages: [], tokenLimit: .maxTokens)
+
+        XCTAssertEqual(body["temperature"] as? Double, 0.3)
+        XCTAssertEqual(body["top_p"] as? Double, 0.9)
+    }
+
+    func testRequestBodyCarriesOnlyTheOverrideThatIsSet() {
+        let body = makeSamplingGenerator(temperature: nil, topP: 0.5)
+            .requestBody(messages: [], tokenLimit: .maxTokens)
+
+        XCTAssertNil(body["temperature"])
+        XCTAssertEqual(body["top_p"] as? Double, 0.5)
+    }
+
+    func testRetryWithMaxCompletionTokensKeepsSamplingOverrides() async throws {
+        final class Recorder: @unchecked Sendable { var bodies: [[String: Any]] = [] }
+        let recorder = Recorder()
+
+        MockURLProtocol.handler = { request in
+            let body = self.requestBody(request)
+            recorder.bodies.append(body)
+            if body["max_tokens"] != nil {
+                return self.mockResponse(
+                    request, status: 400, body: Data(Self.unsupportedMaxTokensBody.utf8),
+                )
+            }
+            return self.mockResponse(request, body: Data(Self.okSSE.utf8))
+        }
+
+        _ = try await makeSamplingGenerator(temperature: 0.2, topP: 0.8)
+            .generate(transcript: "x", title: "t", diarized: false)
+
+        XCTAssertEqual(recorder.bodies.count, 2)
+        for body in recorder.bodies {
+            XCTAssertEqual(body["temperature"] as? Double, 0.2)
+            XCTAssertEqual(body["top_p"] as? Double, 0.8)
+        }
+    }
+
+    func testSamplingParameterNormalizationClampsAndRounds() {
+        XCTAssertEqual(OpenAISamplingParameter.temperature.normalized(2.5), 2)
+        XCTAssertEqual(OpenAISamplingParameter.temperature.normalized(-1), 0)
+        XCTAssertEqual(OpenAISamplingParameter.topP.normalized(1.2), 1)
+        XCTAssertEqual(OpenAISamplingParameter.topP.normalized(0.1 + 0.2), 0.3)
+        XCTAssertNil(OpenAISamplingParameter.temperature.normalized(.nan))
+        XCTAssertNil(OpenAISamplingParameter.topP.normalized(.infinity))
+    }
+
     func testGenerateDoesNotRetryOnUnrelated400() async throws {
         final class Recorder: @unchecked Sendable { var count = 0 }
         let recorder = Recorder()

@@ -130,6 +130,39 @@ enum OpenAIAPIKeyPlacement: String, CaseIterable {
     }
 }
 
+/// A sampling parameter the user may override for the OpenAI-compatible
+/// provider. The raw value is the field name in the chat-completions body. An
+/// override that is not set is left out of the request entirely, so the server
+/// applies its own default (LM Studio and Ollama keep a per-model one) rather
+/// than one invented here.
+enum OpenAISamplingParameter: String {
+    case temperature
+    case topP = "top_p"
+
+    /// Value an override starts at when the user switches it on: the OpenAI
+    /// API's documented default for both. Local servers often default lower
+    /// (Ollama and LM Studio ship around 0.7 to 0.8 for temperature), so
+    /// switching an override on is itself a change for them.
+    static let initialOverride = 1.0
+
+    /// The range the OpenAI API accepts for this parameter.
+    var range: ClosedRange<Double> {
+        switch self {
+        case .temperature: 0 ... 2
+        case .topP: 0 ... 1
+        }
+    }
+
+    /// Clamp a value into `range`, rounded to two decimals so stepping by
+    /// hundredths never sends float residue like 0.7000000000000001.
+    /// Non-finite input yields nil (no override): JSON cannot carry it.
+    func normalized(_ value: Double) -> Double? {
+        guard value.isFinite else { return nil }
+        let clamped = min(max(value, range.lowerBound), range.upperBound)
+        return (clamped * 100).rounded() / 100
+    }
+}
+
 @Observable
 final class AppSettings { // swiftlint:disable:this type_body_length
     /// Backing store. Production callers pass nothing → `.standard`. Tests

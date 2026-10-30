@@ -35,6 +35,10 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     /// `protocolTruncated`. The old name never had to account for that, since the
     /// models that accept it emit no reasoning tokens.
     let maxOutputTokens: Int
+    /// Sampling overrides. Nil means the key is omitted from the request body
+    /// and the server's default applies.
+    let temperature: Double?
+    let topP: Double?
     let session: URLSession
 
     init(
@@ -47,6 +51,8 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         timeoutSeconds: TimeInterval = 600,
         maxTotalSeconds: TimeInterval = 1800,
         maxOutputTokens: Int = 16000,
+        temperature: Double? = nil,
+        topP: Double? = nil,
         session: URLSession = .shared,
     ) {
         self.endpoint = endpoint
@@ -58,6 +64,8 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         self.timeoutSeconds = timeoutSeconds
         self.maxTotalSeconds = maxTotalSeconds
         self.maxOutputTokens = maxOutputTokens
+        self.temperature = temperature
+        self.topP = topP
         self.session = session
     }
 
@@ -106,17 +114,27 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
             && errorBody.contains(TokenLimitParameter.maxTokens.rawValue)
     }
 
-    private func send(
-        messages: [[String: Any]], tokenLimit: TokenLimitParameter,
-    ) async throws -> String {
-        let body: [String: Any] = [
+    /// The chat-completions request body. Shared by the first attempt and the
+    /// `max_completion_tokens` retry, so both carry the same sampling overrides;
+    /// an unset override is omitted rather than sent as a default.
+    func requestBody(messages: [[String: Any]], tokenLimit: TokenLimitParameter) -> [String: Any] {
+        var body: [String: Any] = [
             "model": model,
             "messages": messages,
             "stream": true,
             tokenLimit.rawValue: maxOutputTokens,
         ]
+        if let temperature { body[OpenAISamplingParameter.temperature.rawValue] = temperature }
+        if let topP { body[OpenAISamplingParameter.topP.rawValue] = topP }
+        return body
+    }
 
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
+    private func send(
+        messages: [[String: Any]], tokenLimit: TokenLimitParameter,
+    ) async throws -> String {
+        let bodyData = try JSONSerialization.data(
+            withJSONObject: requestBody(messages: messages, tokenLimit: tokenLimit),
+        )
 
         let requestURL = Self.apiBaseURL(from: endpoint)
             .appendingPathComponent("chat")
