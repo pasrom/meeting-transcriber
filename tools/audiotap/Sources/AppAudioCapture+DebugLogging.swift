@@ -23,8 +23,11 @@ extension AppAudioCapture {
         levelPublisher.publish(level: debugRMS.lastLevelDBFS, hasEnergy: debugRMS.lastBufferHadEnergy)
     }
 
-    /// Sums squares of the interleaved Float32 buffer into the shared RMS reporter.
-    /// Called unconditionally from the IOProc; the dBFS log line is gated separately.
+    /// Sums squares of the interleaved Float32 buffer into the shared RMS
+    /// reporter and the noise-floor sensor. Called unconditionally from the
+    /// IOProc; the dBFS log line is gated separately. The sensor is fed here,
+    /// not only in debug builds or with verbose logging on: it drives a
+    /// user-facing warning.
     func accumulateDebugRMS(data: UnsafeMutableRawPointer, byteCount: Int) {
         let count = byteCount / MemoryLayout<Float>.size
         guard count > 0 else { return }
@@ -37,6 +40,8 @@ extension AppAudioCapture {
         }
         debugRMS.add(sumSq: sumSq, samples: count)
         debugTotalBytes += UInt64(byteCount)
+        let now = watchdogNow
+        noiseFloorSensor.withLock { [sumSq] in $0.observe(sumOfSquares: sumSq, samples: count, now: now) }
     }
 
     /// Drain the 5-s throttle and act on it.

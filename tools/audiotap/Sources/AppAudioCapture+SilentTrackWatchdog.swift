@@ -257,7 +257,8 @@ extension AppAudioCapture {
     }
 
     /// The watchdog's clock: monotonic seconds, from the test seam if set.
-    private var watchdogNow: TimeInterval {
+    /// Also the noise-floor sensor's, so one seam drives both.
+    var watchdogNow: TimeInterval {
         clockOverride?() ?? machTicksToSeconds(mach_absolute_time())
     }
 

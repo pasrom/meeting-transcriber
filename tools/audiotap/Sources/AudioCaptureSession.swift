@@ -373,6 +373,12 @@ public class AudioCaptureSession {
         appCapture?.currentSignalAges ?? .unknown
     }
 
+    /// The app tap's noise-floor verdict (issue #699), false when the channel
+    /// was never opened. See `AppNoiseFloorSensor`.
+    public var appCarriesOnlyNoiseFloor: Bool {
+        appCapture?.carriesOnlyNoiseFloor ?? false
+    }
+
     /// The microphone counterpart of `appSignalAges`.
     public var micSignalAges: ChannelSignalAges {
         micCapture?.currentSignalAges ?? .unknown

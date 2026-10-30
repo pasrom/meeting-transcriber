@@ -78,6 +78,13 @@ public class AppAudioCapture: @unchecked Sendable {
     var debugRMS = DebugRMSReporter()
     var debugTotalBytes: UInt64 = 0
     let levelPublisher = LevelPublisher()
+    /// Fed from the IOProc path (`writeQueue`), read from the main thread's
+    /// poll, hence lock-backed. See `AppNoiseFloorSensor`.
+    let noiseFloorSensor = OSAllocatedUnfairLock(initialState: AppNoiseFloorSensor())
+
+    var carriesOnlyNoiseFloor: Bool {
+        noiseFloorSensor.withLock { $0.isFloorOnly }
+    }
 
     /// Returns the instantaneous app-audio level in dBFS, decayed to -120 if
     /// no buffer arrived in the last 0.5 seconds (e.g. tap died, device
@@ -153,8 +160,9 @@ public class AppAudioCapture: @unchecked Sendable {
     /// nil for the level publisher. Test seam beside `attemptBody`: a minute
     /// of zeros cannot be produced through the real publisher in a unit test.
     let signalAgesOverride: (@Sendable () -> ChannelSignalAges)?
-    /// The watchdog's clock in monotonic seconds, nil for the mach clock. Same
-    /// seam, so a test drives the tick and the rebuild start on one clock.
+    /// The watchdog's and the noise-floor sensor's clock in monotonic seconds,
+    /// nil for the mach clock. Same seam, so a test drives the tick, the
+    /// rebuild start and the sensor's window on one clock.
     let clockOverride: (@Sendable () -> TimeInterval)?
 
     /// - Parameters:
