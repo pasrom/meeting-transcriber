@@ -182,7 +182,9 @@ extension PipelineQueue {
         }
         // Naming data lost — use the normal transition so terminal handling,
         // artifact retention, callbacks, and the durable job record stay in
-        // sync with every other completion path.
+        // sync with every other completion path. It marks no output for
+        // retention: the speakers were never confirmed, so the transcript is
+        // the unconfirmed draft and the audio stays.
         for jobID in missingNamingDataJobIDs {
             updateJobState(id: jobID, to: .done)
         }
@@ -263,6 +265,7 @@ extension PipelineQueue {
                 recordNotionExportFailure(jobID: job.id, reason: Self.notionExportInterruptedReason)
             }
             eventLog.append(jobID: job.id, event: "finished_after_restore", from: .waiting, to: .done)
+            markOutputWritten(jobID: job.id, output: job.protocolPath)
             updateJobState(id: job.id, to: .done)
             return true
         }
@@ -286,6 +289,8 @@ extension PipelineQueue {
                 jobID: job.id, transcript: transcript, title: job.meetingTitle,
                 protocolsDir: transcriptPath.deletingLastPathComponent(),
                 speakerNames: job.notionExportSpeakerNames ?? [],
+                // It was interrupted generating a protocol, so it owes one.
+                transcriptIsTheOutputWithoutAProvider: false,
             )
             updateJobState(id: job.id, to: .done)
         } catch {

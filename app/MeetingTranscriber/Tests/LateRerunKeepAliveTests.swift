@@ -71,6 +71,10 @@ private final class RecordingDelegate: SpeakerNamingSessionDelegate {
         states.entries.append(newState)
     }
 
+    func finishWithAcceptedAutoNames(jobID: UUID) {
+        updateJobState(id: jobID, to: .done, error: nil)
+    }
+
     func addWarning(id _: UUID, _: String) {}
 
     func setNamingMetadata(jobID _: UUID, slug _: String?, usedDiarizerMode _: DiarizerMode?, wroteSidecarsIn _: URL?) {}

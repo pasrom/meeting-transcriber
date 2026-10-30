@@ -17,6 +17,7 @@ protocol SpeakerNamingSessionDelegate: AnyObject {
     /// A value copy of the job, or nil if it is no longer tracked.
     func job(withID id: UUID) -> PipelineJob?
     func updateJobState(id: UUID, to newState: JobState, error: String?)
+    func finishWithAcceptedAutoNames(jobID: UUID)
     func addWarning(id: UUID, _ message: String)
     /// Persist the per-job naming metadata on the (queue-owned) job. `nil`
     /// for either field means "leave unchanged".
@@ -268,7 +269,7 @@ final class SpeakerNamingSession {
                 await self.generateProtocolForExistingJob(jobID: jobID, delegate: delegate, speakerNames: speakerNames)
             }
         } else if delegate?.job(withID: jobID)?.state == .speakerNamingPending {
-            delegate?.updateJobState(id: jobID, to: .done)
+            delegate?.finishWithAcceptedAutoNames(jobID: jobID)
         }
     }
 
