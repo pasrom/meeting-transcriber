@@ -54,6 +54,13 @@ enum DefaultsSuite {
     ///   `UserDefaults(suiteName:)`. Not a domain owned by a real application:
     ///   a later run deletes the file that name maps to.
     static func remove(_ name: String) {
+        // Here, when the test hands the suite over, rather than as a silent
+        // skip in a later sweep, which would leave the file behind with no
+        // record of it.
+        precondition(
+            suiteFile(named: name) != nil,
+            "Not a scratch suite name (see suiteFile(named:)): \(name)",
+        )
         UserDefaults().removePersistentDomain(forName: name)
 
         _ = sweepOnce
@@ -72,6 +79,7 @@ enum DefaultsSuite {
     /// that is recorded there. Never for a suite this process just wrote, which
     /// is what `remove(_:)` is for.
     static func removeSettled(_ name: String) {
+        guard suiteFile(named: name) != nil else { return }
         UserDefaults().removePersistentDomain(forName: name)
         _ = unlinkSuiteFile(named: name)
     }
@@ -82,13 +90,23 @@ enum DefaultsSuite {
     /// process created. Kept outside `~/Library/Preferences` so nothing here has
     /// to read that directory, and under Caches because losing it costs a sweep
     /// rather than correctness.
-    private static let manifestDirectory = FileManager.default.homeDirectoryForCurrentUser
+    private static let manifestDirectory = accountHome
         .appendingPathComponent("Library/Caches/MeetingTranscriber/test-defaults-suites")
 
     /// Where a suite's backing plist lives. The one place that answers this, so
     /// the sweep and the unlink cannot come to disagree about it.
-    static let preferencesDirectory = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Preferences")
+    static let preferencesDirectory = accountHome.appendingPathComponent("Library/Preferences")
+
+    /// The account's home from the user database. Not `homeDirectoryForCurrentUser`:
+    /// under `CFFIXED_USER_HOME`, which the self-hosted CI lanes set, that names the
+    /// redirected home while `cfprefsd` keeps writing suite files into this one.
+    /// The manifests live here too, so every run on the account sweeps the same ones.
+    static let accountHome: URL = {
+        guard let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir else {
+            return FileManager.default.homeDirectoryForCurrentUser
+        }
+        return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+    }()
 
     /// Appends one line to this process's manifest.
     ///
@@ -182,12 +200,29 @@ enum DefaultsSuite {
     /// knows. True also when it never existed, since that is the same outcome.
     @discardableResult
     private static func unlinkSuiteFile(named name: String) -> Bool {
-        guard let file = suiteFile(named: name) else { return true }
+        // A refused name is not gone: its manifest stays rather than recording
+        // a file this helper will not touch as cleaned up.
+        guard let file = suiteFile(named: name) else { return false }
         return unlink(file.path) == 0 || errno == ENOENT
     }
 
-    private static func suiteFile(named name: String) -> URL? {
-        guard !name.isEmpty, !name.contains("/") else { return nil }
+    /// The plist for `name`, or nil unless `name` is shaped like a scratch suite.
+    /// The folder is the account's real preferences, and the names come back from
+    /// manifests on disk, so a damaged or planted manifest must not be able to
+    /// name `.GlobalPreferences` or a real application's domain. A scratch name is
+    /// the shape the tests mint: a dash-separated identifier (the test class,
+    /// maybe a qualifier), an optional pid, and a UUID, as in
+    /// `AppSettingsTests-<pid>-<UUID>` or `WatchSlackTests.<pid>.<UUID>`. A UUID
+    /// tail alone is not enough: `com.example.app.<UUID>` is refused. The one
+    /// name without a UUID is `WatchingControllerFactory-<pid>`.
+    static func suiteFile(named name: String) -> URL? {
+        guard name.wholeMatch(of: scratchName) != nil || name.wholeMatch(of: factoryName) != nil else {
+            return nil
+        }
         return preferencesDirectory.appendingPathComponent("\(name).plist")
     }
+
+    nonisolated(unsafe) private static let scratchName =
+        /[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)*[-.]([0-9]+[-.])?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/
+    nonisolated(unsafe) private static let factoryName = /WatchingControllerFactory-[0-9]+/
 }
