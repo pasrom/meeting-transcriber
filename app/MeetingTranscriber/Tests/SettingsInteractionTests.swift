@@ -126,6 +126,92 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(settings.openAIAPIKeyHeaderName, "x-api-key")
     }
 
+    // MARK: - OpenAI sampling overrides
+
+    private func openAIView(temperature: Double? = nil, topP: Double? = nil) -> (OutputSettingsView, AppSettings) {
+        let settings = makeSettings()
+        settings.protocolProvider = .openAICompatible
+        settings.openAITemperature = temperature
+        settings.openAITopP = topP
+        return (OutputSettingsView(settings: settings), settings)
+    }
+
+    func testOpenAITemperatureToggleSwitchesOverrideOn() throws {
+        let (view, settings) = openAIView()
+
+        try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.openAITemperatureToggle)
+            .find(ViewType.Toggle.self)
+            .tap()
+
+        XCTAssertEqual(settings.openAITemperature, OpenAISamplingParameter.initialOverride)
+    }
+
+    func testOpenAITopPToggleSwitchesOverrideOff() throws {
+        let (view, settings) = openAIView(topP: 0.5)
+
+        try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.openAITopPToggle)
+            .find(ViewType.Toggle.self)
+            .tap()
+
+        XCTAssertNil(settings.openAITopP, "switching the override off must clear it, not keep the last value")
+    }
+
+    func testOpenAITemperatureStepperWritesBack() throws {
+        let (view, settings) = openAIView(temperature: 0.5)
+
+        try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.openAITemperatureValue)
+            .find(ViewType.Stepper.self)
+            .increment()
+
+        XCTAssertEqual(try XCTUnwrap(settings.openAITemperature), 0.55, accuracy: 0.0001)
+    }
+
+    func testOpenAITopPStepperWritesBack() throws {
+        let (view, settings) = openAIView(topP: 0.5)
+
+        try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.openAITopPValue)
+            .find(ViewType.Stepper.self)
+            .decrement()
+
+        XCTAssertEqual(try XCTUnwrap(settings.openAITopP), 0.45, accuracy: 0.0001)
+    }
+
+    func testOpenAITemperatureFieldWritesBack() throws {
+        let (view, settings) = openAIView(temperature: 0.5)
+
+        try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.openAITemperatureValue)
+            .find(ViewType.TextField.self)
+            // The field parses with the current locale, so type what it would show.
+            .setInput(0.2.formatted(.number))
+
+        XCTAssertEqual(settings.openAITemperature, 0.2)
+    }
+
+    func testOpenAITopPFieldWritesBack() throws {
+        let (view, settings) = openAIView(topP: 0.5)
+
+        try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.openAITopPValue)
+            .find(ViewType.TextField.self)
+            .setInput(0.9.formatted(.number))
+
+        XCTAssertEqual(settings.openAITopP, 0.9)
+    }
+
+    func testOpenAISamplingValueRowsOnlyAppearWhenOverridden() throws {
+        let body = try openAIView(temperature: 0.7).0.inspect()
+
+        // The top_p toggle renders, so the missing value row is not a failed lookup.
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.openAITopPToggle))
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.openAITemperatureValue))
+        XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: A11yID.openAITopPValue))
+    }
+
     func testOpenAIAPIKeyHeaderNameControlsOnlyAppearForCustomHeader() throws {
         let settings = makeSettings()
         settings.protocolProvider = .openAICompatible

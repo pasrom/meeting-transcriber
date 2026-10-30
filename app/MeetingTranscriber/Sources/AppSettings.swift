@@ -145,6 +145,13 @@ enum OpenAISamplingParameter: String {
     /// switching an override on is itself a change for them.
     static let initialOverride = 1.0
 
+    var label: String {
+        switch self {
+        case .temperature: "Temperature"
+        case .topP: "Top P"
+        }
+    }
+
     /// UserDefaults key the override is stored under.
     var defaultsKey: String {
         switch self {

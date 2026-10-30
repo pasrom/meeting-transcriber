@@ -180,6 +180,25 @@ struct OutputSettingsView: View {
             }
         }
 
+        SamplingOverrideRow(
+            parameter: .temperature,
+            value: $settings.openAITemperature,
+            toggleID: A11yID.openAITemperatureToggle,
+            valueID: A11yID.openAITemperatureValue,
+        )
+        SamplingOverrideRow(
+            parameter: .topP,
+            value: $settings.openAITopP,
+            toggleID: A11yID.openAITopPToggle,
+            valueID: A11yID.openAITopPValue,
+        )
+        Text("Passed to the server only when switched on. Off leaves the server's own default in place.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        Text("Some servers reject both together, and reasoning models often reject any value.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
         HStack {
             Text("API Key")
             Spacer()
@@ -391,5 +410,52 @@ struct OutputSettingsView: View {
         panel.message = "Choose a folder for protocol output"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         settings.setCustomOutputDir(url)
+    }
+}
+
+/// One optional sampling override: a toggle that switches it on and, while it
+/// is on, a field and stepper for the value. Switching it off clears the value,
+/// so the parameter is left out of the request and the server default applies.
+private struct SamplingOverrideRow: View {
+    let parameter: OpenAISamplingParameter
+    @Binding var value: Double?
+    let toggleID: String
+    let valueID: String
+
+    var body: some View {
+        Toggle("Override \(parameter.label)", isOn: isOverridden)
+            .accessibilityIdentifier(toggleID)
+
+        if value != nil {
+            HStack {
+                Text(parameter.label)
+                Spacer()
+                TextField(parameter.label, value: currentValue, format: .number)
+                    .labelsHidden()
+                    .frame(width: 60)
+                    .multilineTextAlignment(.trailing)
+                Stepper(parameter.label, value: currentValue, in: parameter.range, step: 0.05)
+                    .labelsHidden()
+            }
+            // A container element, so the identifier names the row instead
+            // of being copied onto the label, field and stepper inside it.
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(valueID)
+        }
+    }
+
+    private var isOverridden: Binding<Bool> {
+        Binding(
+            get: { value != nil },
+            set: { value = $0 ? OpenAISamplingParameter.initialOverride : nil },
+        )
+    }
+
+    private var currentValue: Binding<Double> {
+        Binding(
+            // The row only renders while overridden; the fallback just makes it total.
+            get: { value ?? OpenAISamplingParameter.initialOverride },
+            set: { value = $0 },
+        )
     }
 }
