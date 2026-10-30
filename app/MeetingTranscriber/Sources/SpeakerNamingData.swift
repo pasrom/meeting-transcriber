@@ -23,7 +23,7 @@ extension PipelineQueue {
         /// that compares byte-equal to the previous run (same speaker count,
         /// same matcher output) — without a fresh marker, the naming view's
         /// per-presentation reset never fires and consecutive Re-run clicks
-        /// are silently swallowed by the `completedJobID` guard. Excluded
+        /// are silently swallowed by the dialog's answer gate (`NamingAnswerGate`). Excluded
         /// from CodingKeys so disk reloads regenerate it.
         var revision: UUID = .init()
 

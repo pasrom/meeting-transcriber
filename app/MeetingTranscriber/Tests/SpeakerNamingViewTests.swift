@@ -95,7 +95,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
 
     /// Regression test for the multi-job stuck-state bug: when the window
     /// switches to a different `data.jobID`, the per-job guard
-    /// (`completedJobID != data.jobID`) must re-allow taps. The previous
+    /// (`NamingAnswerGate`) must re-allow taps. The previous
     /// global Bool guard would silently swallow every click after the first.
     func testConfirmFiresForEachDistinctJob() throws {
         var jobIDsConfirmed: [UUID] = []

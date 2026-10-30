@@ -111,6 +111,8 @@ enum A11yID {
     static let rerunButton = "rerun-button"
     static let rerunStepper = "rerun-stepper"
     static let rerunModePicker = "rerun-mode-picker"
+    /// Why the session did not take the last answer (`SpeakerNamingRefusal`).
+    static let namingRefusalMessage = "naming-refusal-message"
 
     /// Per-speaker play button (`play-<label>`); the label varies at runtime.
     static func play(_ speakerLabel: String) -> String {

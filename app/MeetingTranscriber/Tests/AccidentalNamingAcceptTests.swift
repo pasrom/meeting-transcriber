@@ -143,12 +143,14 @@ final class AccidentalNamingAcceptTests: XCTestCase {
 
     /// `loadSnapshot` runs `cleanupStalePending()` and *then* posts
     /// `.showSpeakerNaming` for whatever is still pending. Stale cleanup drops
-    /// the naming data synchronously but leaves the job in
-    /// `.speakerNamingPending` for the duration of the async protocol
-    /// generation. That combination is what opens the naming window on a job
-    /// that has no speaker data left to show — and closes it again, without any
-    /// user input, once generation lands.
-    func testStaleCleanupLeavesJobPendingWithNoNamingData() async throws {
+    /// the naming data synchronously. It used to leave the job in
+    /// `.speakerNamingPending` until the async protocol generation started,
+    /// and that combination opened the naming window on a job with no speaker
+    /// data left to show (and, after a Skip in the dialog, kept the window on
+    /// that empty job instead of moving on). Accepting the auto-names now moves
+    /// the job out of `.speakerNamingPending` before it returns, like a
+    /// confirm, so nothing awaiting naming is left without its data.
+    func testStaleCleanupLeavesNoPendingJobWithoutNamingData() async throws {
         let tmp = try makeTempDirectory(prefix: "AccidentalNamingAcceptTests")
         let transcriptPath = tmp.appendingPathComponent("transcript.txt")
         try "] SPEAKER_0: hello".write(to: transcriptPath, atomically: true, encoding: .utf8)
@@ -163,24 +165,16 @@ final class AccidentalNamingAcceptTests: XCTestCase {
 
         // maxAge: -1 makes every pending job stale, standing in for the 24 h
         // default without having to forge `enqueuedAt`.
+        mock.holdProtocolGeneration = true
         session.cleanupStalePending(pendingJobs: [job], maxAge: -1)
 
-        // This is the state `loadSnapshot` observes when it decides whether to
-        // post `.showSpeakerNaming`: still pending, but nothing left to show.
-        // The window therefore opens on the "No speaker data available."
-        // placeholder, with no user action involved.
-        XCTAssertEqual(mock.jobs[job.id]?.state, .speakerNamingPending)
+        // The state `loadSnapshot` observes when it decides whether to post
+        // `.showSpeakerNaming`: no longer pending, so no window on a
+        // placeholder.
+        XCTAssertEqual(mock.jobs[job.id]?.state, .generatingProtocol)
         XCTAssertNil(session.speakerNamingDataByJob[job.id])
 
-        // ...but the pending list drains as soon as generation *starts*, not
-        // when it finishes, because `generateProtocol` flips to
-        // `.generatingProtocol` before awaiting the LLM. The window's
-        // auto-close is wired to that list, so this path cannot hold a window
-        // open for the length of an LLM call. (The wiring itself lives in the
-        // scene and is not exercised here — this pins the state it keys off.)
-        mock.holdProtocolGeneration = true
-        await waitUntil { mock.jobs[job.id]?.state != .speakerNamingPending }
-        XCTAssertEqual(mock.jobs[job.id]?.state, .generatingProtocol)
+        await waitUntil { mock.generateProtocolCallCount == 1 }
         XCTAssertEqual(mock.generateProtocolCallCount, 1)
 
         mock.holdProtocolGeneration = false

@@ -242,10 +242,9 @@ class PipelineQueue {
         set { naming.speakerNamingHandler = newValue }
     }
 
-    /// The currently displayed naming data (first pending item).
+    /// Naming data of the first job awaiting naming, nil when there is none.
     var pendingSpeakerNaming: SpeakerNamingData? {
-        guard let firstPendingJob = pendingSpeakerNamingJobs.first else { return nil }
-        return speakerNamingDataByJob[firstPendingJob.id]
+        speakerNamingData(forJobID: nil)
     }
 
     /// Filesystem slug for a job's persisted artefacts. Thin alias for
@@ -255,10 +254,26 @@ class PipelineQueue {
         SpeakerNamingStore.slug(title: title, jobID: jobID, startTime: startTime)
     }
 
-    /// Returns naming data for a specific job ID, or the first pending job as fallback.
+    /// The job the naming window shows: `preferred` while it is awaiting
+    /// naming, else the first job that is. Only ever a job awaiting naming.
+    /// A selection can outlive that state (a re-run moves its job to
+    /// `.diarizing`, and the window reopens when another job reaches naming),
+    /// and showing that job again would offer a dialog whose answers the
+    /// session no longer takes.
+    func namingJobID(preferring preferred: UUID?) -> UUID? {
+        let pending = pendingSpeakerNamingJobs
+        if let preferred, pending.contains(where: { $0.id == preferred }) { return preferred }
+        return pending.first?.id
+    }
+
+    /// Why the job's last re-run came back with nothing, for the dialog.
+    func lateRerunFailure(forJobID jobID: UUID) -> SpeakerNamingRefusal? {
+        naming.lateRerunFailures[jobID]
+    }
+
+    /// Naming data for the job `namingJobID(preferring:)` picks.
     func speakerNamingData(forJobID jobID: UUID?) -> SpeakerNamingData? {
-        if let jobID, let data = speakerNamingDataByJob[jobID] { return data }
-        return pendingSpeakerNaming
+        namingJobID(preferring: jobID).flatMap { speakerNamingDataByJob[$0] }
     }
 
     /// Diarizer mode used to produce the current `speakerNamingDataByJob`
@@ -276,19 +291,20 @@ class PipelineQueue {
     /// Called by the UI (and the test handler) when the user confirms, skips, or
     /// re-runs speaker naming. Thin forwarder to the naming session, which
     /// always handles "late" completion — the pipeline never blocks on naming.
+    /// Returns why the answer was not taken, nil when it was.
+    @discardableResult
     func completeSpeakerNaming(
         jobID: UUID, result: SpeakerNamingResult, source: RecognitionSource = .dialog,
-    ) {
+    ) -> SpeakerNamingRefusal? {
         naming.completeSpeakerNaming(jobID: jobID, result: result, source: source)
     }
 
     /// Called by the UI when the user confirms or skips speaker naming without a
-    /// specific job in hand — resolves the first pending job (or any stashed
-    /// naming data) and forwards to the session.
+    /// specific job in hand — resolves the first pending job and forwards to
+    /// the session, which takes answers only for a job awaiting naming.
     func completeSpeakerNaming(result: SpeakerNamingResult, source: RecognitionSource = .dialog) {
-        if let jobID = pendingSpeakerNamingJobs.first?.id ?? naming.speakerNamingDataByJob.keys.first {
-            naming.completeSpeakerNaming(jobID: jobID, result: result, source: source)
-        }
+        guard let jobID = pendingSpeakerNamingJobs.first?.id else { return }
+        naming.completeSpeakerNaming(jobID: jobID, result: result, source: source)
     }
 
     /// Default factory for `speakerMatcherFactory`: a matcher that writes to a

@@ -125,6 +125,13 @@ final class AppState {
     var updateChecker: UpdateChecker
     var selectedNamingJobID: UUID?
 
+    /// Pin the naming selection to the job the naming window shows. Unpinned,
+    /// a job reaching naming could switch the window and lose typed names.
+    func pinShownNamingJob() {
+        let shown = pipeline.queue.namingJobID(preferring: selectedNamingJobID)
+        if selectedNamingJobID != shown { selectedNamingJobID = shown }
+    }
+
     /// Transcription-engine concern (the three engine instances, active-engine
     /// selection, and settings → engine language/vocabulary sync), extracted
     /// into its own controller. Read as `engines.activeTranscriptionEngine` by

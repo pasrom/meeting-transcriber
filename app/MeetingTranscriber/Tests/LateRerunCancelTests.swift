@@ -269,6 +269,113 @@ final class LateRerunCancelTests: XCTestCase {
         XCTAssertTrue(queue.pipelineRuns.isEmpty, "a finished run is still recorded")
     }
 
+    // MARK: - One late flow per job
+
+    /// A second Re-run, or a Confirm after a Re-run, arrives while the first
+    /// re-run is still diarizing. It must not start a second late flow for the
+    /// same job: the two would race to write its naming data and state.
+    func testASecondAnswerDuringALateRerunStartsNoSecondFlow() async throws {
+        let fixture = try await makeJobAwaitingNaming()
+        let queue = fixture.queue, diarizer = fixture.diarizer
+
+        diarizer.parkNextRun()
+        queue.completeSpeakerNaming(jobID: fixture.jobA, result: .rerun(2))
+        XCTAssertEqual(
+            queue.jobs.first { $0.id == fixture.jobA }?.state, .diarizing,
+            "the re-run left the job awaiting naming, so the dialog stays open on it",
+        )
+        queue.completeSpeakerNaming(jobID: fixture.jobA, result: .rerun(3))
+        queue.completeSpeakerNaming(jobID: fixture.jobA, result: .confirmed(["SPEAKER_0": "Alice"]))
+
+        XCTAssertEqual(queue.naming.lateWork[fixture.jobA]?.count, 1, "a second late flow was started")
+        XCTAssertEqual(queue.jobs.first { $0.id == fixture.jobA }?.state, .diarizing)
+        await diarizer.gate.open()
+    }
+
+    /// A re-run that cannot start (its audio is gone) changes nothing: the job
+    /// stays awaiting naming with no trip through `.diarizing`, which would
+    /// log a near-zero diarizing stage and close and re-open the dialog.
+    func testARerunThatCannotStartLeavesTheJobWhereItWas() async throws {
+        let fixture = try await makeJobAwaitingNaming()
+        let queue = fixture.queue
+        let recordings = tmpDir.appendingPathComponent("recordings")
+        for name in try FileManager.default.contentsOfDirectory(atPath: recordings.path)
+            where name.hasSuffix(SpeakerNamingStore.mixSuffix) {
+            try FileManager.default.removeItem(at: recordings.appendingPathComponent(name))
+        }
+        var states: [JobState] = []
+        queue.onJobStateChange = { _, _, new in states.append(new) }
+
+        let refusal = queue.completeSpeakerNaming(jobID: fixture.jobA, result: .rerun(2))
+
+        XCTAssertEqual(refusal, .rerunAudioMissing, "the dialog was not told why the re-run did not start")
+        XCTAssertEqual(states, [], "a re-run that could not start moved the job")
+        XCTAssertNil(queue.naming.lateWork[fixture.jobA], "a re-run that could not start left work behind")
+    }
+
+    /// The injected naming handler cannot see a refusal. Its refused answer
+    /// is put on the job as a warning and the auto-names are accepted, rather
+    /// than leaving the job, and anything waiting on it, pending for a day.
+    func testARefusedHandlerAnswerDoesNotLeaveTheJobPending() async throws {
+        let fixture = try await makeJobAwaitingNaming()
+        let queue = fixture.queue
+        let recordings = tmpDir.appendingPathComponent("recordings")
+        for name in try FileManager.default.contentsOfDirectory(atPath: recordings.path)
+            where name.hasSuffix(SpeakerNamingStore.mixSuffix) {
+            try FileManager.default.removeItem(at: recordings.appendingPathComponent(name))
+        }
+        queue.speakerNamingHandler = { _ in .rerun(2) }
+        let data = try XCTUnwrap(queue.speakerNamingDataByJob[fixture.jobA])
+
+        queue.naming.invokeHandler(jobID: fixture.jobA, data: data)
+        await waitFor(queue.naming.lateWork[fixture.jobA] == nil, timeout: .seconds(5))
+
+        let job = try XCTUnwrap(queue.jobs.first { $0.id == fixture.jobA })
+        XCTAssertNotEqual(job.state, .speakerNamingPending, "a refused handler answer left the job pending")
+        XCTAssertTrue(job.warnings.contains(SpeakerNamingRefusal.rerunAudioMissing.message), "\(job.warnings)")
+    }
+
+    /// An answer for a job the queue no longer has resolves nothing, and the
+    /// session drops its in-memory naming for it rather than keeping it for
+    /// the rest of the session.
+    func testAnAnswerForAJobThatIsGoneDropsItsNamingData() async throws {
+        let fixture = try await makeJobAwaitingNaming()
+        let queue = fixture.queue
+        let data = try XCTUnwrap(queue.speakerNamingDataByJob[fixture.jobA])
+        queue.jobs.removeAll { $0.id == fixture.jobA }
+
+        queue.completeSpeakerNaming(jobID: fixture.jobA, result: .confirmed(["SPEAKER_0": "Alice"]))
+
+        XCTAssertNil(queue.speakerNamingDataByJob[data.jobID])
+        XCTAssertNil(queue.naming.lateWork[fixture.jobA])
+    }
+
+    /// A re-run that finishes after its job has moved on must leave the job
+    /// where it is, not drag a finished job back into the naming dialog.
+    func testAStaleLateRerunDoesNotMoveAFinishedJobBack() async throws {
+        let fixture = try await makeJobAwaitingNaming()
+        let queue = fixture.queue, diarizer = fixture.diarizer
+
+        diarizer.parkNextRun()
+        queue.completeSpeakerNaming(jobID: fixture.jobA, result: .rerun(2))
+        await waitFor { await diarizer.gate.hasWaiter }
+        let rerun = try XCTUnwrap(queue.naming.lateWork[fixture.jobA]?.values, "test premise: re-run is tracked")
+        let namingBefore = queue.speakerNamingDataByJob[fixture.jobA]
+
+        // However it got there: the re-run no longer owns the job's state.
+        queue.updateJobState(id: fixture.jobA, to: .done)
+        await diarizer.gate.open()
+        for task in rerun {
+            await task.value
+        }
+
+        XCTAssertEqual(queue.jobs.first { $0.id == fixture.jobA }?.state, .done, "a stale re-run moved the job back")
+        XCTAssertEqual(
+            queue.speakerNamingDataByJob[fixture.jobA]?.mapping, namingBefore?.mapping,
+            "a stale re-run replaced the job's naming data",
+        )
+    }
+
     // MARK: - Fixture
 
     private struct Fixture {

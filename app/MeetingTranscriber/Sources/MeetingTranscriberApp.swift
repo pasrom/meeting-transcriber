@@ -181,7 +181,7 @@ struct MeetingTranscriberApp: App {
                 bringWindowToFront(id: "settings")
             },
             onNameSpeakers: appState.hasPendingSpeakerNamingJobs ? {
-                bringWindowToFront(id: "speaker-naming")
+                showNamingWindow()
             } : nil,
             onProcessFiles: processAudioFiles,
             onDismissJob: { id in appState.pipelineQueue.removeJob(id: id) },
@@ -212,7 +212,7 @@ struct MeetingTranscriberApp: App {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
-            bringWindowToFront(id: "speaker-naming")
+            showNamingWindow()
         }
         .onReceive(NotificationCenter.default.publisher(for: .showSettings)) { _ in
             bringWindowToFront(id: "settings")
@@ -335,17 +335,34 @@ struct MeetingTranscriberApp: App {
 
     // MARK: - Speaker Naming Window
 
-    @ViewBuilder private var speakerNamingContent: some View {
-        if let data = appState.pipeline.queue.speakerNamingData(
-            forJobID: appState.selectedNamingJobID,
-        ) {
-            VStack(spacing: 0) {
-                speakerNamingPicker
-                speakerNamingForm(data: data)
+    /// Open the naming window on a pinned job, from the menu and from
+    /// `.showSpeakerNaming` alike.
+    private func showNamingWindow() {
+        appState.pinShownNamingJob()
+        bringWindowToFront(id: "speaker-naming")
+    }
+
+    private var speakerNamingContent: some View {
+        Group {
+            if let data = appState.pipeline.queue.speakerNamingData(
+                forJobID: appState.selectedNamingJobID,
+            ) {
+                VStack(spacing: 0) {
+                    speakerNamingPicker
+                    speakerNamingForm(data: data)
+                }
+            } else {
+                Text("No speaker data available.")
+                    .padding()
             }
-        } else {
-            Text("No speaker data available.")
-                .padding()
+        }
+        // Whatever opened the window or changed what it shows (a restored
+        // window, an RPC answer for the shown job), the selection follows.
+        .onChange(
+            of: appState.pipeline.queue.namingJobID(preferring: appState.selectedNamingJobID),
+            initial: true,
+        ) { _, _ in
+            appState.pinShownNamingJob()
         }
     }
 
@@ -353,8 +370,7 @@ struct MeetingTranscriberApp: App {
         if appState.pipeline.queue.pendingSpeakerNamingJobs.count > 1 {
             Picker("Meeting", selection: Binding(
                 get: {
-                    appState.selectedNamingJobID
-                        ?? appState.pipeline.queue.pendingSpeakerNamingJobs.first?.id
+                    appState.pipeline.queue.namingJobID(preferring: appState.selectedNamingJobID)
                 },
                 set: { appState.selectedNamingJobID = $0 },
             )) {
@@ -371,21 +387,27 @@ struct MeetingTranscriberApp: App {
     private func speakerNamingForm(
         data: PipelineQueue.SpeakerNamingData,
     ) -> some View {
-        SpeakerNamingView(
+        SpeakerNamingView.answering(
             data: data,
             knownSpeakerNames: appState.pipeline.queue.knownSpeakerNames,
             currentDiarizerMode: appState.pipeline.queue.usedDiarizerMode(forJobID: data.jobID)
                 ?? appState.settings.diarizerMode,
             pendingJobCount: appState.pipeline.queue.pendingSpeakerNamingJobs.count,
             onDismissRequest: { closeWindow(id: "speaker-naming") },
-            onComplete: { result in
-                appState.pipeline.queue.completeSpeakerNaming(jobID: data.jobID, result: result)
-                if appState.pipeline.queue.pendingSpeakerNamingJobs.isEmpty {
-                    closeWindow(id: "speaker-naming")
-                } else {
-                    appState.selectedNamingJobID =
-                        appState.pipeline.queue.pendingSpeakerNamingJobs.first?.id
+            notice: appState.pipeline.queue.lateRerunFailure(forJobID: data.jobID)?.message,
+            // Labelled: `onDismissRequest` is a closure too, and SwiftFormat
+            // and SwiftLint disagree on trailing syntax for the last of two.
+            // swiftlint:disable:next trailing_closure
+            onAnswer: { result in
+                if let refusal = appState.pipeline.queue.completeSpeakerNaming(jobID: data.jobID, result: result) {
+                    return refusal.message
                 }
+                // The next job awaiting naming, pinned; none left closes the
+                // window.
+                appState.selectedNamingJobID = nil
+                appState.pinShownNamingJob()
+                if appState.selectedNamingJobID == nil { closeWindow(id: "speaker-naming") }
+                return nil
             },
         )
     }

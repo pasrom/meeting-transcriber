@@ -140,6 +140,11 @@ final class SpeakerNamingSession {
     /// Internal (not private) because the helpers that fill and cancel it live
     /// in SpeakerNamingSession+Late.swift.
     @ObservationIgnored var lateWork: [UUID: [UUID: Task<Void, Never>]] = [:]
+    /// Why a job's last re-run came back with nothing, for the dialog it
+    /// reopens: the re-run answers after the dialog closed, so the refusal
+    /// cannot travel back as the answer's return value. Cleared by the next
+    /// answer the session takes for the job, and with its naming data.
+    var lateRerunFailures: [UUID: SpeakerNamingRefusal] = [:]
     private var stashedTopCandidates: [UUID: [String: [TopCandidate]]] = [:]
 
     init(
@@ -170,11 +175,32 @@ final class SpeakerNamingSession {
     /// decision came from. An unattributed row would be indistinguishable from
     /// one written before the field existed, which is exactly the ambiguity
     /// this field was added to remove.
+    ///
+    /// Only a job awaiting naming takes an answer. Confirm, re-run and skip all
+    /// move the job out of `.speakerNamingPending` before they return, so a second
+    /// answer for the same job (a double click, Re-run then Confirm, a handler
+    /// answering after the dialog did) finds it elsewhere and is dropped,
+    /// instead of starting a second late flow that races the first. Without a
+    /// delegate there is no state to ask, and the session still drops its own
+    /// data for the job.
+    ///
+    /// Returns why an answer was not taken, nil when it was, so the dialog can
+    /// say so and stay usable rather than wait for a flow that never started.
+    @discardableResult
     func completeSpeakerNaming(
         jobID: UUID, result: SpeakerNamingResult, source: RecognitionSource,
-    ) {
-        guard let data = speakerNamingDataByJob[jobID] else { return }
-        let slug = delegate?.job(withID: jobID)?.namingSlug
+    ) -> SpeakerNamingRefusal? {
+        guard let data = speakerNamingDataByJob[jobID] else { return .notAwaitingNaming }
+        let job = delegate?.job(withID: jobID)
+        if delegate != nil, job?.state != .speakerNamingPending {
+            // A job the queue dropped without the session hearing of it leaves
+            // nothing to resolve; its in-memory naming goes, its files are not
+            // this path's to find.
+            if job == nil { forgetNamingData(jobID: jobID) }
+            return .notAwaitingNaming
+        }
+        let slug = job?.namingSlug
+        lateRerunFailures.removeValue(forKey: jobID)
 
         switch result {
         case let .confirmed(userMapping):
@@ -188,18 +214,14 @@ final class SpeakerNamingSession {
             // pending → generatingProtocol hop is the RPC idempotency contract; a
             // duplicate confirm is rejected before it can double-record. The
             // transcript rewrite + protocol generation happen async below.
-            if delegate?.job(withID: jobID)?.state == .speakerNamingPending {
-                delegate?.updateJobState(id: jobID, to: .generatingProtocol)
-            }
+            delegate?.updateJobState(id: jobID, to: .generatingProtocol)
             startLateWork(jobID: jobID) { await self.reapplySpeakerNames(jobID: jobID, mapping: userMapping) }
 
         case let .rerun(count):
-            startLateWork(jobID: jobID) { await self.lateDiarization(jobID: jobID, speakerCount: count) }
+            return startRerun(jobID: jobID, speakerCount: count, mode: nil)
 
         case let .rerunWithMode(mode, count):
-            startLateWork(jobID: jobID) {
-                await self.lateDiarization(jobID: jobID, speakerCount: count, mode: mode)
-            }
+            return startRerun(jobID: jobID, speakerCount: count, mode: mode)
 
         case .skipped:
             recordRecognition(
@@ -209,20 +231,7 @@ final class SpeakerNamingSession {
             )
             acceptAutoNames(jobID: jobID, slug: slug)
         }
-    }
-
-    /// Re-invoke the injected naming handler after the job reached
-    /// `.speakerNamingPending`. Mirrors the late-rerun re-invocation so the test
-    /// path runs the exact same `completeSpeakerNaming` flow the production UI
-    /// does. Captures `self` strongly for the op duration (bounded); the delegate
-    /// stays weak. No-op when no handler is set (the interactive/production path).
-    func invokeHandler(jobID: UUID, data: SpeakerNamingData) {
-        guard let handler = speakerNamingHandler, delegate?.isStillQueued(jobID) ?? true else { return }
-        startLateWork(jobID: jobID) {
-            let result = await handler(data)
-            // The handler stands in for the dialog, so it reports as the dialog.
-            self.completeSpeakerNaming(jobID: jobID, result: result, source: .dialog)
-        }
+        return nil
     }
 
     /// Skipped or stale-cleanup path: the user accepted (implicitly or by
@@ -245,6 +254,13 @@ final class SpeakerNamingSession {
         // (it resolved the job's transcriptPath); binding it here lets the Task
         // closure hold the queue strongly from spawn (see `delegate`).
         if canGenerateProtocol, let delegate {
+            // Out of `.speakerNamingPending` now, like a confirm, not on the
+            // late task's first turn: until then the job counted as awaiting
+            // naming with its naming data already gone, and the dialog would
+            // offer it again instead of moving on.
+            if delegate.job(withID: jobID)?.state == .speakerNamingPending {
+                delegate.updateJobState(id: jobID, to: .generatingProtocol)
+            }
             startLateWork(jobID: jobID) {
                 await self.generateProtocolForExistingJob(jobID: jobID, delegate: delegate)
             }
@@ -436,9 +452,7 @@ final class SpeakerNamingSession {
     /// the queue writes to, so the only way to reach it with an empty list is a
     /// queue with no output folder, whose store is a no-op anyway.
     func removeNamingData(jobID: UUID, slug: String?, in outputDirs: [URL] = []) {
-        speakerNamingDataByJob.removeValue(forKey: jobID)
-        stashedSuggestedAtDialog.removeValue(forKey: jobID)
-        stashedTopCandidates.removeValue(forKey: jobID)
+        forgetNamingData(jobID: jobID)
         let resolved = outputDirs.isEmpty
             ? (delegate?.job(withID: jobID)?.sidecarOutputDirs ?? [])
             : outputDirs
@@ -446,6 +460,15 @@ final class SpeakerNamingSession {
             store.deleteNamingJSON(slug: slug)
             store.cleanupSidecarFiles(slug: slug)
         }
+    }
+
+    /// The in-memory half of `removeNamingData`: the naming data and the
+    /// recognition stashes, no files.
+    private func forgetNamingData(jobID: UUID) {
+        speakerNamingDataByJob.removeValue(forKey: jobID)
+        lateRerunFailures.removeValue(forKey: jobID)
+        stashedSuggestedAtDialog.removeValue(forKey: jobID)
+        stashedTopCandidates.removeValue(forKey: jobID)
     }
 
     /// Removes only the transcript-bearing segment sidecar. The queue uses this

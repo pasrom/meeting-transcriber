@@ -222,59 +222,108 @@ extension SpeakerNamingSession {
 
     // MARK: - Late Re-diarization
 
-    /// Re-run diarization from persisted 16kHz audio after pipeline completed.
+    /// Start a late re-diarization. The job leaves `.speakerNamingPending` here,
+    /// synchronously, for the same reason a confirm does: the dialog closes on
+    /// the change, and a second answer for the job is refused rather than
+    /// starting a second flow. The re-run puts it back when it finishes or
+    /// fails. One that cannot start at all (no audio, no diarizer) is found
+    /// out first, changes nothing, and returns why.
+    /// Internal (not private) because `completeSpeakerNaming` in
+    /// SpeakerNamingSession.swift calls it.
+    func startRerun(jobID: UUID, speakerCount: Int, mode: DiarizerMode?) -> SpeakerNamingRefusal? {
+        let plan: LateRerunPlan
+        do {
+            plan = try lateRerunPlan(jobID: jobID, mode: mode)
+        } catch {
+            return error
+        }
+        delegate?.updateJobState(id: jobID, to: .diarizing)
+        startLateWork(jobID: jobID) { await self.lateDiarization(plan, speakerCount: speakerCount) }
+        return nil
+    }
+
+    /// What a late re-run works from, resolved before the job leaves
+    /// `.speakerNamingPending` so that a re-run which cannot start changes
+    /// nothing: no stage transition, no closing and re-opening of the dialog.
+    struct LateRerunPlan {
+        /// Held strongly from the moment `startRerun` moves the job to
+        /// `.diarizing` (the per-flow capture `delegate` describes), so the
+        /// re-run always gets to put the job back. Resolved only on the task's
+        /// first turn, a queue gone by then left the job in `.diarizing` for
+        /// good, and the next launch ran it as a full pipeline.
+        let delegate: any SpeakerNamingSessionDelegate
+        let job: PipelineJob
+        let namingData: SpeakerNamingData
+        let slug: String
+        let recordingsDir: URL
+        let diarizer: any DiarizationProvider
+    }
+
+    /// The plan for re-diarizing `jobID`. Throws, and logs, why there is none:
+    /// the dialog tells the user rather than wait for a re-run that never
+    /// started.
     ///
-    /// - Parameters:
-    ///   - jobID: the job to re-diarize.
-    ///   - speakerCount: target speaker count (ignored by the Sortformer and Nemotron 3 modes).
-    ///   - mode: optional override for the diarizer mode. `nil` (default)
-    ///     keeps the original behaviour — re-instantiate the diarizer with
-    ///     the current global setting via `diarizationFactory()`. Non-nil
-    ///     uses `diarizationFactoryWithMode` to instantiate a one-off
-    ///     diarizer in the requested mode, so the user can recover from a
-    ///     wrong-mode-at-recording-time without leaving the naming dialog.
-    func lateDiarization(
-        jobID: UUID,
-        speakerCount: Int,
-        mode: DiarizerMode? = nil,
-    ) async {
-        // Strong per-flow delegate capture (see `delegate`): keeps the queue
-        // alive across the re-diarization await so the rewrite, metadata, and
-        // the return to `.speakerNamingPending` land even if the controller
-        // swaps queues mid-flow.
+    /// `mode` optionally overrides the diarizer mode. `nil` keeps the current
+    /// global setting via `diarizationFactory()`. Non-nil uses
+    /// `diarizationFactoryWithMode` to instantiate a one-off diarizer in the
+    /// requested mode, so the user can recover from a wrong-mode-at-recording
+    /// time without leaving the naming dialog.
+    func lateRerunPlan(jobID: UUID, mode: DiarizerMode?) throws(SpeakerNamingRefusal) -> LateRerunPlan {
         guard let delegate,
               let namingData = speakerNamingDataByJob[jobID],
               let job = delegate.job(withID: jobID),
-              let diarizationFactory,
               let slug = job.namingSlug,
               let recordingsDir = lateRunRecordingsDir(
                   of: job, slug: slug, isDualSource: namingData.isDualSource,
               )
         else {
             logger.warning("Cannot re-diarize: audio not found in any folder this job recorded")
-            return
+            throw .rerunAudioMissing
         }
-        let diarizeProcess = resolveLateDiarizer(mode: mode, defaultFactory: diarizationFactory)
-        guard diarizeProcess.isAvailable else {
+        // After the audio, which is cheap to check and the one the user cannot
+        // fix by choosing another mode.
+        guard let diarizer = diarizationFactory.map({ resolveLateDiarizer(mode: mode, defaultFactory: $0) }),
+              diarizer.isAvailable
+        else {
             logger.warning("Diarization not available for late re-run")
-            return
+            throw .rerunDiarizerUnavailable
         }
+        return LateRerunPlan(
+            delegate: delegate, job: job, namingData: namingData,
+            slug: slug, recordingsDir: recordingsDir, diarizer: diarizer,
+        )
+    }
 
-        delegate.updateJobState(id: jobID, to: .diarizing)
+    /// Re-run diarization from persisted 16kHz audio after pipeline completed.
+    /// `speakerCount` is the target count (ignored by the Sortformer and
+    /// Nemotron 3 modes).
+    func lateDiarization(_ plan: LateRerunPlan, speakerCount: Int) async {
+        let jobID = plan.job.id
+        // Strong per-flow delegate capture (see `delegate`), taken with the
+        // plan: keeps the queue alive across the re-diarization await so the
+        // rewrite, metadata, and the return to `.speakerNamingPending` land
+        // even if the controller swaps queues mid-flow.
+        let delegate = plan.delegate
+        // `startRerun` put the job in `.diarizing`; one that left it before
+        // this task first ran (cancelled, say) is no longer this flow's.
+        guard isStillRerunning(jobID: jobID, delegate: delegate) else { return }
 
         do {
-            let title = job.meetingTitle
+            let title = plan.job.meetingTitle
             let run = try await runLateDiarization(
-                diarizer: diarizeProcess,
-                recording: (dir: recordingsDir, slug: slug, jobID: jobID, micDelay: job.micDelay),
-                isDualSource: namingData.isDualSource,
+                diarizer: plan.diarizer,
+                recording: (dir: plan.recordingsDir, slug: plan.slug, jobID: jobID, micDelay: plan.job.micDelay),
+                isDualSource: plan.namingData.isDualSource,
                 speakerCount: speakerCount, title: title,
             )
             // The job can be cancelled while the diarizer runs, and a diarizer
             // that ignores cancellation still returns. Everything below writes
-            // for this job: naming data, its sidecar, the transcript. Writing it
-            // for a job that is gone leaves an orphaned entry and file behind.
-            guard delegate.job(withID: jobID) != nil else { return }
+            // for this job: naming data, its sidecar, the transcript, and its
+            // return to `.speakerNamingPending`. Writing it for a job that is
+            // gone leaves an orphaned entry and file behind, and for a job
+            // that has moved on (to `.done`, say) it would drag the job back
+            // into the dialog. Only the state this flow put it in is its own.
+            guard isStillRerunning(jobID: jobID, delegate: delegate) else { return }
 
             // Dual-track always yields a combined result (the merge, or the
             // app-only / mic-only single-track fallback); single-source sets it
@@ -282,16 +331,16 @@ extension SpeakerNamingSession {
             guard let combined = run.combined else { throw DiarizationError.notAvailable }
             guard let newNamingData = buildNamingData(
                 jobID: jobID, title: title,
-                diarization: combined, prior: namingData,
+                diarization: combined, prior: plan.namingData,
             ) else {
                 logger.warning("Late re-diarization produced no embeddings")
-                delegate.updateJobState(id: jobID, to: .speakerNamingPending)
+                returnToNaming(jobID: jobID, delegate: delegate, failure: .rerunFoundNoVoices)
                 return
             }
 
             speakerNamingDataByJob[jobID] = newNamingData
             let saved = saveNamingData(
-                newNamingData, slug: slug, in: recordingsDir.deletingLastPathComponent(),
+                newNamingData, slug: plan.slug, in: plan.recordingsDir.deletingLastPathComponent(),
             )
             // Re-segment the saved transcript to match the fresh diarization.
             // A re-run can change the speaker count and segment boundaries, but
@@ -301,7 +350,7 @@ extension SpeakerNamingSession {
             // transcript from its final run.
             rewriteTranscriptFromLateRun(
                 run: run, autoNames: newNamingData.mapping,
-                isDualSource: namingData.isDualSource, slug: slug, jobID: jobID,
+                isDualSource: plan.namingData.isDualSource, slug: plan.slug, jobID: jobID,
             )
             // Track which mode produced this fresh naming data so the next
             // dialog open initialises the mode picker correctly.
@@ -309,15 +358,14 @@ extension SpeakerNamingSession {
             // await outliving another job's `completedJobLifetime` eviction
             // (which shifts the queue's array) can't corrupt a stale index.
             delegate.setNamingMetadata(
-                jobID: jobID, slug: slug, usedDiarizerMode: diarizeProcess.mode,
+                jobID: jobID, slug: plan.slug, usedDiarizerMode: plan.diarizer.mode,
                 // The folder this run wrote to, and only if it landed. For a
                 // job that recorded none that is the queue's own folder, which
                 // nothing had recorded yet.
-                wroteSidecarsIn: saved ? recordingsDir.deletingLastPathComponent() : nil,
+                wroteSidecarsIn: saved ? plan.recordingsDir.deletingLastPathComponent() : nil,
             )
 
-            delegate.updateJobState(id: jobID, to: .speakerNamingPending)
-            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+            returnToNaming(jobID: jobID, delegate: delegate)
 
             // Same hand-off as the first pass, so the re-run's task ends here
             // rather than staying alive until the handler answers.
@@ -325,10 +373,32 @@ extension SpeakerNamingSession {
         } catch {
             // A cancelled job ends here when its diarizer honours cancellation.
             // Nothing failed, and there is no job left to roll back.
-            guard delegate.job(withID: jobID) != nil else { return }
+            guard isStillRerunning(jobID: jobID, delegate: delegate) else { return }
             logger.error("Late re-diarization failed: \(error.localizedDescription, privacy: .public)")
-            delegate.updateJobState(id: jobID, to: .speakerNamingPending)
+            returnToNaming(jobID: jobID, delegate: delegate, failure: .rerunFailed)
         }
+    }
+
+    /// Whether the job is still in the state a re-run put it in. Not merely
+    /// still there: a re-run that outlived its moment must not move a job
+    /// that has since gone on to something else.
+    private func isStillRerunning(jobID: UUID, delegate: any SpeakerNamingSessionDelegate) -> Bool {
+        delegate.isStillQueued(jobID) && delegate.job(withID: jobID)?.state == .diarizing
+    }
+
+    /// Put a re-run's job back in front of the user, with fresh naming or the
+    /// naming it had when the re-run produced nothing to use. Only from
+    /// `.diarizing`, for the reason in `isStillRerunning`. The dialog is
+    /// offered again because starting the re-run closed it.
+    /// `failure` says why the re-run came back with nothing, for the dialog it
+    /// reopens; nil after a re-run that produced fresh naming.
+    private func returnToNaming(
+        jobID: UUID, delegate: any SpeakerNamingSessionDelegate, failure: SpeakerNamingRefusal? = nil,
+    ) {
+        guard isStillRerunning(jobID: jobID, delegate: delegate) else { return }
+        lateRerunFailures[jobID] = failure
+        delegate.updateJobState(id: jobID, to: .speakerNamingPending)
+        NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
     }
 
     /// Resolve the diarizer for a late re-run: a mode override uses the
