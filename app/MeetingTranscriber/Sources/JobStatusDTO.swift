@@ -96,6 +96,27 @@ struct EchoDetectionDTO: Codable, Equatable {
     /// way instead of introducing a second idiom for the same idea.
     var removed: Bool? // swiftlint:disable:this discouraged_optional_boolean
 
+    /// Wall-clock seconds the canceller spent on the microphone track, or nil
+    /// when it never processed it.
+    ///
+    /// Recorded because `removed` answers only half of the question that
+    /// decides whether this feature can default to on. The other half is what
+    /// a run costs against the length of a real meeting, and this is where a
+    /// driver tallying `removed` per job finds it: the stage timing log keeps
+    /// the same number as an `echoCancelling` event, but that log is a local
+    /// file behind the Settings averages, not part of the job a caller reads
+    /// over the API or out of the finished-job store. The two are one clock
+    /// reading (`PipelineQueue.recordEchoCancellationTiming`), never two.
+    ///
+    /// Present for a confirmed run and for a declined one alike, since a
+    /// decline is the run that cost minutes for nothing. Absent on a narrower
+    /// population than `removed` is: a missing model and a run that threw
+    /// write `removed: false` and leave this nil, because nothing was
+    /// processed and a near-zero here would read as a run that cost nothing.
+    /// So `removed: false` with this absent is a run that never got going, and
+    /// with it present a run the self-check or the file swap turned down.
+    var cancellationSeconds: Double?
+
     /// The detector's own result, narrowed to what belongs on a wire and in a
     /// persisted job. The per-window series stays behind: it grows with the
     /// recording, and a caller polling a job does not want it.
@@ -118,6 +139,7 @@ struct EchoDetectionDTO: Codable, Equatable {
         windowsAffected = try container.decode(Int.self, forKey: .windowsAffected)
         suppressedSegments = try container.decodeIfPresent(Int.self, forKey: .suppressedSegments) ?? 0
         removed = try container.decodeIfPresent(Bool.self, forKey: .removed)
+        cancellationSeconds = try container.decodeIfPresent(Double.self, forKey: .cancellationSeconds)
     }
 }
 

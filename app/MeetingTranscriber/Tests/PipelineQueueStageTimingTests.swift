@@ -66,6 +66,12 @@ final class PipelineQueueStageTimingTests: XCTestCase {
     /// and left the cost itself unmeasured, which is the number the feature's
     /// default has to be decided against. It is its own event, and the
     /// transcribing event is what is left once it is taken out.
+    ///
+    /// The job's `echo.cancellationSeconds` is the same clock reading as the
+    /// event. Two clocks around two spans drifted apart by the self-check and
+    /// the file swap, and a driver comparing the per-job number against the
+    /// Settings average would have been comparing measurements of different
+    /// things.
     func testEchoCancellationIsLoggedAsItsOwnStageAndLeftOutOfTranscribing() async throws {
         let (queue, log, dir) = try makeTimedQueue(
             canceller: StubCanceller(medianReduction: 30, delay: .milliseconds(300)),
@@ -73,6 +79,7 @@ final class PipelineQueueStageTimingTests: XCTestCase {
         let tracks = try EchoTestAudio.writeTrackPair(into: dir)
         let job = makeJob()
         queue.insertJobForTesting(job)
+        queue.seedAffectedEchoVerdict(jobID: job.id)
 
         queue.updateJobState(id: job.id, to: .transcribing)
         _ = try await queue.cancelEchoOnMicTrack(
@@ -95,6 +102,8 @@ final class PipelineQueueStageTimingTests: XCTestCase {
             transcribing.wallClockSeconds, echo.wallClockSeconds,
             "the transcribing event must not carry the cancellation run as well",
         )
+        let onJob = try XCTUnwrap(queue.jobs.first?.echo?.cancellationSeconds)
+        XCTAssertEqual(onJob, echo.wallClockSeconds, accuracy: 1e-6, "one clock reading, two homes")
     }
 
     /// No run, no event: a missing model returns before anything is processed,

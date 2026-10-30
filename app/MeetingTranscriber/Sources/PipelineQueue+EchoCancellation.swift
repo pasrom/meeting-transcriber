@@ -84,7 +84,8 @@ extension PipelineQueue {
         }
         // Timed here, between the run's return and the self-check, so the
         // event is the canceller's cost alone and is logged for a declined run
-        // too: it took just as long.
+        // too: it took just as long. The one place the run is timed: the stage
+        // log and the job's `echo.cancellationSeconds` both get this number.
         recordEchoCancellationTiming(jobID: jobID, startedAt: started, micURL: micURL)
 
         // Judged before it is adopted, which is the whole reason the seam hands

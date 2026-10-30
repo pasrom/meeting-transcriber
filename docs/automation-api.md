@@ -392,7 +392,8 @@ Scope and limits:
     "windowsScored": 34,
     "windowsAffected": 21,
     "suppressedSegments": 12,
-    "removed": false
+    "removed": false,
+    "cancellationSeconds": 41.2
   }
 }
 ```
@@ -445,6 +446,18 @@ reports it here.
   could not be put in place. The job's `warnings` carry which one in prose. A
   caller counting how often the feature fails to deliver wants the field; a
   caller diagnosing one recording wants the warning.
+- `cancellationSeconds`: wall-clock seconds the canceller spent on the
+  microphone track, for a confirmed run and for a declined one alike. Absent
+  means the canceller never processed the track, and absent is not `0`: a zero
+  would read as a run that cost nothing. That population is narrower than
+  `removed`'s: a missing model and a run that failed write `"removed": false`
+  and leave this key out, so `false` without it is a run that never got going,
+  and `false` with it is a run the self-check or the file swap turned down.
+  The same number is logged locally as the `echoCancelling` stage event behind
+  the Settings processing averages; this field is its per-job home, the one a
+  caller tallying `removed` reads in the same object. Together they are the two
+  numbers a decision to default the feature on rests on: how often it delivers,
+  and what it costs against the length of a recording.
 
 **The two remedies do not compose, and cancellation wins.** Cancellation removes
 the far end from the microphone audio; the dedup drops microphone transcript

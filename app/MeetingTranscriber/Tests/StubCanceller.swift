@@ -75,6 +75,15 @@ extension PipelineQueue {
             echoCancellationEnabled: { true }, echoCancellerFactory: factory,
         )
     }
+
+    /// A verdict to hang a cancellation outcome on. Every real call site has
+    /// one: the stage only reaches cancellation on an `.affected` verdict,
+    /// which is recorded before it runs.
+    func seedAffectedEchoVerdict(jobID: UUID) {
+        recordEchoVerdict(jobID: jobID, EchoDetectionDTO(EchoBleedDetector.Result(
+            windowScores: [EchoBleedDetector.WindowScore(correlation: 0.9, lagSeconds: 0.015)],
+        )))
+    }
 }
 
 extension EchoTestAudio {

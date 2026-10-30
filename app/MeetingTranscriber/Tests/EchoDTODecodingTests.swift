@@ -95,6 +95,35 @@ final class EchoDTODecodingTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(EchoDetectionDTO.self, from: data), original)
     }
 
+    /// A verdict from before the cancellation run was timed, and one from a
+    /// recording the stage never reached. Absent, not zero: a zero would read
+    /// as a run that cost nothing, which is the one value the overhead count
+    /// must never be handed for free.
+    func testVerdictWithoutTheCancellationSecondsReadsAsUntimed() throws {
+        let dto = try decode(EchoDetectionDTO.self, """
+        {"detected":true,"affectedWindowShare":1,"windowsScored":4,"windowsAffected":4,"removed":true}
+        """)
+        XCTAssertNil(dto.cancellationSeconds)
+    }
+
+    func testVerdictKeepsTheCancellationSeconds() throws {
+        let dto = try decode(EchoDetectionDTO.self, """
+        {"detected":true,"affectedWindowShare":1,"windowsScored":4,"windowsAffected":4,"removed":false,"cancellationSeconds":12.5}
+        """)
+        XCTAssertEqual(dto.cancellationSeconds, 12.5)
+    }
+
+    /// Same wire contract as `removed`: an untimed run is OMITTED, never
+    /// `"cancellationSeconds": null`, so a consumer asking whether the key is
+    /// there keeps telling an unattempted run from a timed one.
+    func testAnUntimedRunIsAbsentFromTheEncodedShapeRatherThanNull() throws {
+        let dto = try decode(EchoDetectionDTO.self, #"""
+        {"detected":false,"affectedWindowShare":0,"windowsScored":4,"windowsAffected":0}
+        """#)
+        let json = try XCTUnwrap(String(data: JSONEncoder().encode(dto), encoding: .utf8))
+        XCTAssertFalse(json.contains("cancellationSeconds"), "got: \(json)")
+    }
+
     // MARK: - TimestampedSegment
 
     /// Segments persisted with speaker naming, from before either field existed.

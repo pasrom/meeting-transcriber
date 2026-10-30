@@ -874,23 +874,24 @@ class PipelineQueue {
         jobAudioSeconds.removeValue(forKey: id)
     }
 
-    /// Log one echo-cancellation run on `micURL` as its own event and remember
-    /// its duration, so leaving `.transcribing` can take it back out of that
-    /// stage's event. The clock is read before anything else so the file's
+    /// Record one echo-cancellation run on `micURL`: logged as its own stage
+    /// event, remembered so leaving `.transcribing` can take it back out of
+    /// that stage's event, and written to the job as `echo.cancellationSeconds`.
+    /// One clock reading for all three, so the per-job record a driver reads
+    /// over the API and the average Settings shows never disagree about what
+    /// a run cost. The clock is read before anything else so the file's
     /// header read below is not inside the measured span.
     ///
     /// Called only for a run that processed the track, whatever the
-    /// self-check then made of it: a declined run cost the same time. Not for
-    /// a missing model or a throw, which processed nothing, and logging their
-    /// near-zero durations would pull the measured cost toward nothing.
-    /// Dropped for a job that is no longer in the list, the same guard
-    /// `recordEchoRemoved` applies, so a run finishing after its job was
-    /// cancelled leaves no entry behind.
+    /// self-check then made of it; which runs that includes and why is on
+    /// `EchoDetectionDTO.cancellationSeconds`. Dropped for a job that is no
+    /// longer in the list, the same guard `recordEchoRemoved` applies, so a
+    /// run finishing after its job was cancelled leaves no entry behind.
     /// Internal (not private) because `PipelineQueue+EchoCancellation.swift`
     /// calls it.
     func recordEchoCancellationTiming(jobID: UUID, startedAt: ContinuousClock.Instant, micURL: URL) {
         let wallClock = (ContinuousClock.now - startedAt).inSeconds
-        guard jobs.contains(where: { $0.id == jobID }) else { return }
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
         // Excluded from the enclosing stage only if there is one and the run
         // started inside it; a run outside any timed stage has nothing to be
         // taken out of, and charging it to whatever stage comes next would
@@ -898,6 +899,9 @@ class PipelineQueue {
         if let stageStart = stageStartByJob[jobID], startedAt >= stageStart {
             excludedSubStageSecondsByJob[jobID, default: 0] += wallClock
         }
+        // Same optional chain as `recordEchoRemoved`, for the same reason: a
+        // nil `echo` means this number belongs to no measurement.
+        jobs[index].echo?.cancellationSeconds = wallClock
         // Normalised by the track the run processed, not by `jobAudioSeconds`:
         // transcription stamps that later, after this run.
         logStageTiming(

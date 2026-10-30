@@ -229,9 +229,7 @@ final class PipelineEchoCancellationTests: XCTestCase {
     /// stage only reaches cancellation on an `.affected` verdict, which is
     /// recorded before it runs.
     private func seedVerdict(_ queue: PipelineQueue, _ jobID: UUID) {
-        queue.recordEchoVerdict(jobID: jobID, EchoDetectionDTO(EchoBleedDetector.Result(
-            windowScores: [EchoBleedDetector.WindowScore(correlation: 0.9, lagSeconds: 0.015)],
-        )))
+        queue.seedAffectedEchoVerdict(jobID: jobID)
     }
 
     /// A confirmed run says so on the job. Why the field exists at all, and why
@@ -288,6 +286,54 @@ final class PipelineEchoCancellationTests: XCTestCase {
             )
 
             XCTAssertEqual(queue.jobs.first?.echo?.removed, false, "\(name) has to read as a decline")
+        }
+    }
+
+    /// The run's wall clock sits beside its outcome, for a confirmed run and
+    /// for a declined one: a decline cost the same minutes, and it is the
+    /// population the overhead question is hardest on, time spent for nothing.
+    /// Why the job carries it at all is on `EchoDetectionDTO.cancellationSeconds`.
+    func testAConfirmedAndADeclinedRunAreBothTimed() async throws {
+        let cases: [(String, Float, Bool)] = [
+            ("confirmed", 30, true),
+            ("declined by the self-check", 0.2, false),
+        ]
+        for (name, reduction, removed) in cases {
+            let tracks = try makeTracks()
+            let (queue, jobID) = makeQueue(StubCanceller(medianReduction: reduction))
+            seedVerdict(queue, jobID)
+            XCTAssertNil(queue.jobs.first?.echo?.cancellationSeconds, "\(name): nothing has run yet")
+
+            _ = try await queue.cancelEchoOnMicTrack(
+                jobID: jobID, appURL: tracks.app, micURL: tracks.mic, micDelay: 0,
+            )
+
+            XCTAssertEqual(queue.jobs.first?.echo?.removed, removed, name)
+            XCTAssertNotNil(queue.jobs.first?.echo?.cancellationSeconds, "\(name) cost time")
+        }
+    }
+
+    /// The two ways the stage ends without the canceller processing anything
+    /// are declines for `removed`, since the feature was on and did not
+    /// deliver, but they are not runs that cost time, so the key stays absent:
+    /// `removed: false` without it is how a reader tells a run that never got
+    /// going from one that was turned down.
+    func testARunThatNeverProcessedTheTrackIsNotTimed() async throws {
+        let cases: [(String, StubCanceller?)] = [
+            ("no resolvable model", nil),
+            ("the run threw", StubCanceller(medianReduction: 30, failure: EchoCancellationError.modelLoadFailed("x"))),
+        ]
+        for (name, canceller) in cases {
+            let tracks = try makeTracks()
+            let (queue, jobID) = makeQueue(canceller)
+            seedVerdict(queue, jobID)
+
+            _ = try await queue.cancelEchoOnMicTrack(
+                jobID: jobID, appURL: tracks.app, micURL: tracks.mic, micDelay: 0,
+            )
+
+            XCTAssertEqual(queue.jobs.first?.echo?.removed, false, "\(name) is still a decline")
+            XCTAssertNil(queue.jobs.first?.echo?.cancellationSeconds, "\(name) processed nothing, so it has no cost")
         }
     }
 }
