@@ -50,7 +50,7 @@ final class AccidentalNamingAcceptTests: XCTestCase {
 
         func updateSpeakerDB(
             matcher _: SpeakerMatcher, mapping: [String: String],
-            embeddings _: [String: [Float]], speakingTimes _: [String: TimeInterval],
+            embeddings _: [String: [Float]], speakingTimes _: [String: TimeInterval], jobID _: UUID,
         ) {
             updateSpeakerDBCalls.append(mapping)
         }

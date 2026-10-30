@@ -106,19 +106,19 @@ final class VoiceEnrollmentViewTests: XCTestCase { // swiftlint:disable:this bal
     // MARK: - Render: done
 
     func testRendersDoneBodyWithMultipleSpeakers() throws {
-        let body = try makeView(initialStage: .done(savedNames: ["Alice", "Bob"])).inspect()
+        let body = try makeView(initialStage: .done(savedNames: ["Alice", "Bob"], notice: nil)).inspect()
         XCTAssertNoThrow(try body.find(text: "Enrolled 2 speakers"))
         XCTAssertNoThrow(try body.find(text: "Alice, Bob"))
         XCTAssertNoThrow(try body.find(button: "Done"))
     }
 
     func testRendersDoneBodySingularGrammar() throws {
-        let body = try makeView(initialStage: .done(savedNames: ["Alice"])).inspect()
+        let body = try makeView(initialStage: .done(savedNames: ["Alice"], notice: nil)).inspect()
         XCTAssertNoThrow(try body.find(text: "Enrolled 1 speaker"))
     }
 
     func testRendersDoneBodyEmptySkipsNameList() throws {
-        let body = try makeView(initialStage: .done(savedNames: [])).inspect()
+        let body = try makeView(initialStage: .done(savedNames: [], notice: nil)).inspect()
         XCTAssertNoThrow(try body.find(text: "Enrolled 0 speakers"))
         let texts = body.findAll(ViewType.Text.self)
         let hasCommaList = texts.contains { (try? $0.string())?.contains(",") == true }
@@ -146,7 +146,7 @@ final class VoiceEnrollmentViewTests: XCTestCase { // swiftlint:disable:this bal
 
     func testDoneButtonCallsOnClose() throws {
         var closed = false
-        let body = try makeView(initialStage: .done(savedNames: ["Alice"])) { closed = true }
+        let body = try makeView(initialStage: .done(savedNames: ["Alice"], notice: nil)) { closed = true }
             .inspect()
         try body.find(button: "Done").tap()
         XCTAssertTrue(closed)
@@ -207,11 +207,88 @@ final class VoiceEnrollmentViewTests: XCTestCase { // swiftlint:disable:this bal
             matcher: matcher,
         )
         XCTAssertEqual(Set(matcher.allSpeakerNames()), ["Alice", "Bob"])
-        guard case let .stage(.done(savedNames)) = outcome else {
+        guard case let .stage(.done(savedNames, notice)) = outcome else {
             XCTFail("Expected .stage(.done), got something else")
             return
         }
         XCTAssertEqual(savedNames, ["Alice", "Bob"])
+        XCTAssertNil(notice)
+    }
+
+    func testHandleNamingResultListsOnlyNamesWhoseVoiceWasStored() throws {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let diar = DiarizationResult(
+            segments: [
+                .init(start: 0, end: 5, speaker: "SPEAKER_00"),
+                .init(start: 5, end: 6, speaker: "SPEAKER_01"),
+            ],
+            speakingTimes: ["SPEAKER_00": 5, "SPEAKER_01": 1],
+            autoNames: [:],
+            embeddings: ["SPEAKER_00": [1, 0, 0], "SPEAKER_01": [.nan, 0, 0]],
+        )
+
+        let outcome = VoiceEnrollmentLogic.handleNamingResult(
+            .confirmed(["SPEAKER_00": "Alice", "SPEAKER_01": "Bob"]),
+            payload: makeNamingPayload(diarization: diar),
+            matcher: matcher,
+        )
+
+        guard case let .stage(.done(savedNames, notice)) = outcome else {
+            XCTFail("Expected .stage(.done), got \(outcome)")
+            return
+        }
+        XCTAssertEqual(savedNames, ["Alice"], "Bob's NaN sample was skipped, so he is not enrolled")
+        let text = try XCTUnwrap(notice)
+        XCTAssertTrue(text.contains("Bob") && text.contains("longer clip"), text)
+    }
+
+    func testHandleNamingResultExplainsANameWithNoEmbeddingAtAll() throws {
+        let diar = DiarizationResult(
+            segments: [
+                .init(start: 0, end: 5, speaker: "SPEAKER_00"),
+                .init(start: 5, end: 6, speaker: "SPEAKER_01"),
+            ],
+            speakingTimes: ["SPEAKER_00": 5, "SPEAKER_01": 1],
+            autoNames: [:],
+            embeddings: ["SPEAKER_00": [1, 0, 0]],
+        )
+
+        let outcome = VoiceEnrollmentLogic.handleNamingResult(
+            .confirmed(["SPEAKER_00": "Alice", "SPEAKER_01": "Bob"]),
+            payload: makeNamingPayload(diarization: diar),
+            matcher: SpeakerMatcher(dbPath: dbPath),
+        )
+
+        guard case let .stage(.done(savedNames, notice)) = outcome else {
+            XCTFail("Expected .stage(.done), got \(outcome)")
+            return
+        }
+        XCTAssertEqual(savedNames, ["Alice"])
+        XCTAssertTrue(try XCTUnwrap(notice).contains("Bob"))
+    }
+
+    func testHandleNamingResultOnUnreadableDBListsNothingAndSaysWhy() throws {
+        try Data("[]".utf8).write(to: dbPath)
+        try makeUnreadable(dbPath)
+        let matcher = SpeakerMatcher(dbPath: dbPath) { _ in }
+
+        let outcome = VoiceEnrollmentLogic.handleNamingResult(
+            .confirmed(["SPEAKER_00": "Alice", "SPEAKER_01": "Bob"]),
+            payload: makeNamingPayload(),
+            matcher: matcher,
+        )
+
+        guard case let .stage(.done(savedNames, notice)) = outcome else {
+            XCTFail("Expected .stage(.done), got \(outcome)")
+            return
+        }
+        XCTAssertTrue(savedNames.isEmpty, "nothing reached the DB, so nobody is enrolled")
+        XCTAssertTrue(try XCTUnwrap(notice).contains("Nothing was saved"))
+    }
+
+    func testRendersDoneBodyNotice() throws {
+        let body = try makeView(initialStage: .done(savedNames: [], notice: "Nothing was saved: x")).inspect()
+        XCTAssertNoThrow(try body.find(text: "Nothing was saved: x"))
     }
 
     func testHandleNamingResultConfirmedWithoutEmbeddingsReturnsErrorStage() {
@@ -243,11 +320,12 @@ final class VoiceEnrollmentViewTests: XCTestCase { // swiftlint:disable:this bal
             .skipped, payload: makeNamingPayload(), matcher: matcher,
         )
         XCTAssertTrue(matcher.allSpeakerNames().isEmpty)
-        guard case let .stage(.done(savedNames)) = outcome else {
+        guard case let .stage(.done(savedNames, notice)) = outcome else {
             XCTFail("Expected .stage(.done), got something else")
             return
         }
         XCTAssertTrue(savedNames.isEmpty)
+        XCTAssertNil(notice)
     }
 
     func testHandleNamingResultRerunForwardsURLAndSpeakerCount() {

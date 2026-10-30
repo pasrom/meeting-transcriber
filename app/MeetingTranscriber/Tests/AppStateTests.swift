@@ -786,6 +786,106 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertEqual(notifier.calls[0].body, "Sprint Review")
     }
 
+    /// A voice whose embedding is NaN/Inf is left out of the speaker DB. The
+    /// user named that speaker, so they need telling the voice was not kept,
+    /// once per job however often the job is confirmed again.
+    func testUnusableVoiceIsNotifiedOncePerJob() throws {
+        let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
+        let (state, notifier) = makeIsolatedState(logDir: tmpDir)
+        state.pipeline.configureCallbacks()
+        let queue = state.pipeline.queue
+        let job = makeJob(title: "Sprint Review")
+        queue.insertJobForTesting(job)
+        let matcher = SpeakerMatcher(dbPath: tmpDir.appendingPathComponent("speakers.json"))
+        let confirm = {
+            queue.updateSpeakerDB(
+                matcher: matcher,
+                mapping: ["SPEAKER_0": "Alice", "SPEAKER_1": "Bob"],
+                embeddings: ["SPEAKER_0": [1, 0, 0], "SPEAKER_1": [.nan, 0, 0]],
+                speakingTimes: [:],
+                jobID: job.id,
+            )
+        }
+
+        confirm()
+        confirm()
+
+        XCTAssertEqual(notifier.calls.map(\.title), ["Voice not saved"])
+        XCTAssertTrue(notifier.calls[0].body.contains("Bob"), notifier.calls[0].body)
+        XCTAssertFalse(notifier.calls[0].body.contains("Alice"), notifier.calls[0].body)
+        XCTAssertTrue(notifier.calls[0].body.contains("Sprint Review"), notifier.calls[0].body)
+    }
+
+    /// A later confirmation of the same job (late naming, a re-run) can leave
+    /// out a different name; that one has not been reported yet.
+    func testANewlyUnusableVoiceOfTheSameJobIsStillNotified() throws {
+        let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
+        let (state, notifier) = makeIsolatedState(logDir: tmpDir)
+        state.pipeline.configureCallbacks()
+        let queue = state.pipeline.queue
+        let job = makeJob()
+        queue.insertJobForTesting(job)
+        let matcher = SpeakerMatcher(dbPath: tmpDir.appendingPathComponent("speakers.json"))
+        let confirm = { (unusable: String) in
+            queue.updateSpeakerDB(
+                matcher: matcher,
+                mapping: ["SPEAKER_0": "Alice", "SPEAKER_1": unusable],
+                embeddings: ["SPEAKER_0": [1, 0, 0], "SPEAKER_1": [.nan, 0, 0]],
+                speakingTimes: [:],
+                jobID: job.id,
+            )
+        }
+
+        confirm("Bob")
+        confirm("Carol")
+        confirm("Bob")
+
+        XCTAssertEqual(notifier.calls.count, 2)
+        XCTAssertTrue(notifier.calls[0].body.contains("Bob"))
+        XCTAssertTrue(notifier.calls[1].body.contains("Carol") && !notifier.calls[1].body.contains("Bob"))
+    }
+
+    /// With nothing saved the matcher already reports the DB; a per-voice
+    /// notice on top would imply the other names were kept.
+    func testUnusableVoiceIsNotNotifiedWhenNothingWasSaved() throws {
+        let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
+        let (state, notifier) = makeIsolatedState(logDir: tmpDir)
+        state.pipeline.configureCallbacks()
+        let job = makeJob()
+        state.pipeline.queue.insertJobForTesting(job)
+        let dbPath = tmpDir.appendingPathComponent("speakers.json")
+        try Data("[]".utf8).write(to: dbPath)
+        try makeUnreadable(dbPath)
+
+        state.pipeline.queue.updateSpeakerDB(
+            matcher: SpeakerMatcher(dbPath: dbPath) { _ in },
+            mapping: ["SPEAKER_0": "Alice", "SPEAKER_1": "Bob"],
+            embeddings: ["SPEAKER_0": [1, 0, 0], "SPEAKER_1": [.nan, 0, 0]],
+            speakingTimes: [:],
+            jobID: job.id,
+        )
+
+        XCTAssertTrue(notifier.calls.isEmpty)
+    }
+
+    func testUsableVoicesAreNotNotified() throws {
+        let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
+        let (state, notifier) = makeIsolatedState(logDir: tmpDir)
+        state.pipeline.configureCallbacks()
+        let job = makeJob()
+        state.pipeline.queue.insertJobForTesting(job)
+
+        state.pipeline.queue.updateSpeakerDB(
+            matcher: SpeakerMatcher(dbPath: tmpDir.appendingPathComponent("speakers.json")),
+            mapping: ["SPEAKER_0": "Alice"],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+            speakingTimes: [:],
+            jobID: job.id,
+        )
+
+        XCTAssertTrue(notifier.calls.isEmpty)
+    }
+
     func testConfigureCallbacksErrorFiresNotification() throws {
         let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
 

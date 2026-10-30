@@ -393,6 +393,9 @@ final class PipelineController {
                 break
             }
         }
+        queue.onUnusableVoices = { [notifier] job, names in
+            notifier.notify(title: "Voice not saved", body: PipelineQueue.unusableVoicesMessage(names, in: job))
+        }
     }
 
     // MARK: - File enqueue

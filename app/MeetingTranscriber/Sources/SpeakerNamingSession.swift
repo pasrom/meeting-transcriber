@@ -28,9 +28,12 @@ protocol SpeakerNamingSessionDelegate: AnyObject {
     )
     /// Apply a speaker DB update AND refresh the queue's cached known-names in
     /// one step (issue #155): the write+refresh pairing must stay atomic.
+    /// `jobID` lets the queue tell the user, once per job, about a voice the
+    /// DB could not take.
     func updateSpeakerDB(
         matcher: SpeakerMatcher, mapping: [String: String],
         embeddings: [String: [Float]], speakingTimes: [String: TimeInterval],
+        jobID: UUID,
     )
     /// Run the LLM protocol generator over a transcript (a queue pipeline stage).
     func generateProtocol(jobID: UUID, transcript: String, title: String, protocolsDir: URL) async

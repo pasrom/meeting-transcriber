@@ -49,7 +49,7 @@ final class NamingSessionMockDelegate: SpeakerNamingSessionDelegate {
 
     func updateSpeakerDB(
         matcher _: SpeakerMatcher, mapping _: [String: String],
-        embeddings: [String: [Float]], speakingTimes _: [String: TimeInterval],
+        embeddings: [String: [Float]], speakingTimes _: [String: TimeInterval], jobID _: UUID,
     ) {
         updateSpeakerDBCallCount += 1
         updateSpeakerDBEmbeddings.append(embeddings)

@@ -57,6 +57,7 @@ extension SpeakerNamingSession {
             // centroid-quality filter (short segments stay as fallback samples,
             // long ones seed the centroid) sees real durations.
             speakingTimes: namingData.speakingTimes,
+            jobID: jobID,
         )
 
         if let transcriptPath = job.transcriptPath {

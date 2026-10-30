@@ -192,6 +192,15 @@ class PipelineQueue {
     /// Called when a job completes (success or error) — for notifications
     var onJobStateChange: ((PipelineJob, JobState, JobState) -> Void)?
 
+    /// Called when confirming a job's speakers left names out of the speaker
+    /// DB because their voice sample was unusable (NaN/Inf embedding), at
+    /// most once per name and job — for notifications.
+    var onUnusableVoices: ((PipelineJob, [String]) -> Void)?
+    /// Names `onUnusableVoices` already reported, per job. A job can be
+    /// confirmed more than once (late naming, re-runs): the same name needs
+    /// telling once, a newly affected one still does.
+    private var unusableVoicesReported: [UUID: Set<String>] = [:]
+
     // MARK: - Speaker Naming
 
     /// Owns the speaker-naming session (dialog, sidecars, recognition
@@ -381,14 +390,30 @@ class PipelineQueue {
         matcher: SpeakerMatcher,
         mapping: [String: String],
         embeddings: [String: [Float]],
-        speakingTimes: [String: TimeInterval] = [:],
+        speakingTimes: [String: TimeInterval],
+        jobID: UUID,
     ) {
-        matcher.updateDB(
+        let outcome = matcher.updateDB(
             mapping: mapping,
             embeddings: embeddings,
             speakingTimes: speakingTimes,
         )
         refreshKnownSpeakerNames()
+        // A DB that could not be read or written is reported by the matcher
+        // itself, and then no voice was kept; only when the rest was saved is
+        // the per-voice skip this job's to report.
+        let reported = unusableVoicesReported[jobID, default: []]
+        let newlyUnusable = outcome.unusableVoice.filter { !reported.contains($0) }
+        guard outcome.persistence == .saved, !newlyUnusable.isEmpty,
+              let job = job(withID: jobID) else { return }
+        unusableVoicesReported[jobID] = reported.union(newlyUnusable)
+        onUnusableVoices?(job, newlyUnusable)
+    }
+
+    /// Notification text for `onUnusableVoices`.
+    static func unusableVoicesMessage(_ names: [String], in job: PipelineJob) -> String {
+        "No usable voice sample for \(names.joined(separator: ", ")) in \"\(job.meetingTitle)\": too short "
+            + "or too quiet to remember, so it will not be recognised next time. The transcript keeps the name."
     }
 
     /// Full init with all processing dependencies.

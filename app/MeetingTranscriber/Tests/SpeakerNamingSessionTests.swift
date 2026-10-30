@@ -361,7 +361,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
 
         func updateSpeakerDB(
             matcher _: SpeakerMatcher, mapping _: [String: String],
-            embeddings _: [String: [Float]], speakingTimes _: [String: TimeInterval],
+            embeddings _: [String: [Float]], speakingTimes _: [String: TimeInterval], jobID _: UUID,
         ) {}
 
         func generateProtocol(jobID _: UUID, transcript _: String, title _: String, protocolsDir _: URL) async {
