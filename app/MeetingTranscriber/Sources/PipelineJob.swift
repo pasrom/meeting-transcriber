@@ -30,6 +30,13 @@ enum JobState: String, Codable {
     }
 }
 
+/// Page creation alone does not mean that all protocol blocks were exported.
+enum NotionExportStatus: String, Codable {
+    case inProgress = "in_progress"
+    case failed
+    case completed
+}
+
 /// Where a job's audio sits once stage 3 has handed it to the output folder:
 /// the destination for a slot that was actually moved, the original source for
 /// every other outcome, including a move that failed. Reporting the intent
@@ -108,6 +115,55 @@ struct PipelineJob: Identifiable, Codable {
         micPath = paths.mic
     }
 
+    /// The single writer for the Notion page fields. Called as soon as the page
+    /// exists, before its blocks are appended, so a failed append can be
+    /// finished by the next retry rather than becoming a second page.
+    mutating func recordNotionPage(_ page: NotionPageResult, databaseID: String) {
+        notionPageID = page.pageID
+        if let url = page.url.flatMap(Self.trustedNotionURL) {
+            notionPageURL = url
+        }
+        notionDatabaseID = databaseID
+    }
+
+    /// This URL is later handed to `NSWorkspace.open`, so only a Notion https page qualifies.
+    static func trustedNotionURL(_ string: String) -> URL? {
+        guard let url = URL(string: string), url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased() else { return nil }
+        let isNotion = ["notion.com", "notion.so", "notion.site"].contains { host == $0 || host.hasSuffix(".\($0)") }
+        return isNotion ? url : nil
+    }
+
+    mutating func beginNotionExport(speakerNames: [String], localBackupSaved: Bool = false) {
+        notionExportStatus = .inProgress
+        notionExportSpeakerNames = speakerNames
+        notionExportBackupSaved = localBackupSaved ? true : nil
+    }
+
+    mutating func finishNotionExport(succeeded: Bool) {
+        notionExportStatus = succeeded ? .completed : .failed
+        notionExportBackupSaved = nil
+    }
+
+    /// The export stopped with this run's Markdown already on disk, so a restore
+    /// can offer the retry instead of generating the protocol again.
+    var hasInterruptedNotionExportWithBackup: Bool {
+        notionExportStatus == .inProgress && notionExportBackupSaved == true
+    }
+
+    var hasCompletedNotionExport: Bool {
+        notionExportStatus == .completed
+    }
+
+    /// Whether the protocol exists somewhere: on disk or as a Notion page.
+    var hasSavedProtocol: Bool {
+        protocolPath != nil || hasCompletedNotionExport
+    }
+
+    var hasPendingNotionExport: Bool {
+        notionExportStatus == .inProgress || notionExportStatus == .failed
+    }
+
     var artifactStartTime: Date {
         meetingStartTime ?? enqueuedAt
     }
@@ -133,6 +189,23 @@ struct PipelineJob: Identifiable, Codable {
     var echo: EchoDetectionDTO?
     var transcriptPath: URL?
     var protocolPath: URL?
+    /// The Notion page this job created, kept so a retry updates that page
+    /// instead of creating a duplicate. Optional so snapshots written before
+    /// this field existed still decode.
+    private(set) var notionPageID: String?
+    private(set) var notionPageURL: URL?
+    /// The database the page belongs to. A retry against a different database
+    /// must not update a page in the old one.
+    private(set) var notionDatabaseID: String?
+    /// Optional for compatibility with snapshots written before export status
+    /// was tracked independently from the page ID and URL.
+    private(set) var notionExportStatus: NotionExportStatus?
+    /// Structured names retained for export-only retries; never reparse the
+    /// rendered transcript to recover tags.
+    private(set) var notionExportSpeakerNames: [String]? // swiftlint:disable:this discouraged_optional_collection
+    /// Only set while an export is running. An older protocol on disk during a
+    /// re-export must not pass for this run's output.
+    private(set) var notionExportBackupSaved: Bool? // swiftlint:disable:this discouraged_optional_boolean
     var namingSlug: String?
     // Output policy captured when this job enters the queue. Optional so
     // snapshots saved before transcript-output options existed still decode.

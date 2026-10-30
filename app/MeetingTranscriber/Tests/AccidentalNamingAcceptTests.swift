@@ -65,7 +65,7 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         /// early returns before the flip (a missing transcript file, and a
         /// protocol factory that turned nil after the probe). Both are handled
         /// by the session rather than here — see the missing-transcript test.
-        func generateProtocol(jobID: UUID, transcript _: String, title _: String, protocolsDir _: URL) async {
+        func generateProtocol(jobID: UUID, transcript _: String, title _: String, protocolsDir _: URL, speakerNames _: [String]) async {
             generateProtocolCallCount += 1
             jobs[jobID]?.state = .generatingProtocol
             while holdProtocolGeneration {

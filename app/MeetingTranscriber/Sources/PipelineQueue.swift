@@ -35,6 +35,14 @@ class PipelineQueue {
     /// in-place field updates, snapshot restore (whole-array assign), and
     /// recovery appends.
     var jobs: [PipelineJob] = []
+    @ObservationIgnored private var menuTrackingDepth = 0
+    @ObservationIgnored private var expiredCompletedJobIDs: Set<UUID> = []
+    @ObservationIgnored private var completedJobRemovalTokens: [UUID: UUID] = [:]
+    /// Fires for every finished export, first attempt or retry, with the short
+    /// failure cause or nil on success.
+    @ObservationIgnored var onNotionExportFinished: ((PipelineJob, String?) -> Void)?
+    @ObservationIgnored var pendingNotionExports: [UUID: PendingNotionExport] = [:]
+    @ObservationIgnored var notionExportTasks: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
     /// Internal (not private) because `loadSnapshot` in PipelineQueue+Recovery.swift
     /// reads it to locate the snapshot file.
     let logDir: URL
@@ -139,6 +147,9 @@ class PipelineQueue {
     let stageTimingLog: StageTimingLog?
 
     let completedJobLifetime: TimeInterval
+
+    /// Resolve the exporter and its destination/output policy together for each export.
+    let notionExportConfigurationProvider: (() -> NotionExportResolution)?
 
     /// Process-wide claim on the runs currently executing, so a replacement
     /// queue cannot start a job the queue it replaced is still working on.
@@ -340,6 +351,7 @@ class PipelineQueue {
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
         stageTimingLog: StageTimingLog? = nil,
         completedJobLifetime: TimeInterval = 60,
+        notionExportConfigurationProvider: (() -> NotionExportResolution)? = nil,
         terminalJobStore: TerminalJobStore? = nil,
         inFlightRuns: InFlightRunRegistry? = nil,
         echoCancellationEnabled: @escaping () -> Bool = { false },
@@ -376,6 +388,7 @@ class PipelineQueue {
         terminologyNormalizer = { TerminologyNormalizer() }
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
+        self.notionExportConfigurationProvider = notionExportConfigurationProvider
         self.terminalJobStore = terminalJobStore
         self.inFlightRuns = inFlightRuns ?? .shared
         naming = SpeakerNamingSession(
@@ -474,6 +487,7 @@ class PipelineQueue {
         terminologyNormalizer: @escaping () -> TerminologyNormalizer = { TerminologyNormalizer() },
         stageTimingLog: StageTimingLog? = nil,
         completedJobLifetime: TimeInterval = 60,
+        notionExportConfigurationProvider: (() -> NotionExportResolution)? = nil,
         terminalJobStore: TerminalJobStore? = nil,
         inFlightRuns: InFlightRunRegistry? = nil,
         securityScope: SecurityScopeAccess = .live,
@@ -517,6 +531,7 @@ class PipelineQueue {
         self.terminologyNormalizer = terminologyNormalizer
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
+        self.notionExportConfigurationProvider = notionExportConfigurationProvider
         self.terminalJobStore = terminalJobStore
         self.inFlightRuns = inFlightRuns ?? .shared
         naming = SpeakerNamingSession(
@@ -625,6 +640,7 @@ class PipelineQueue {
                 await Task.yield()
             }
         }
+        await awaitNotionExports()
     }
 
     /// Every folder a job's sidecars may sit in, newest last. What a cleanup
@@ -656,6 +672,11 @@ class PipelineQueue {
     }
 
     func removeJob(id: UUID) {
+        // An export-only retry still needs its job to retain a created page's
+        // ID if the remote request completes after the menu closes.
+        guard !jobs.contains(where: { $0.id == id && $0.state == .done && $0.notionExportStatus == .inProgress }) else { return }
+        expiredCompletedJobIDs.remove(id)
+        completedJobRemovalTokens.removeValue(forKey: id)
         if let index = jobs.firstIndex(where: { $0.id == id }) {
             processedLedger.markProcessed(mixPath: jobs[index].mixPath)
             // Unconditional, because removing a job has to remove what belongs
@@ -693,6 +714,32 @@ class PipelineQueue {
     private func cancelWork(of id: UUID) {
         pipelineRuns[id]?.cancel()
         naming.cancelLateWork(jobID: id)
+    }
+
+    func beginMenuTracking() {
+        menuTrackingDepth += 1
+    }
+
+    func endMenuTracking() {
+        guard menuTrackingDepth > 0 else { return }
+        menuTrackingDepth -= 1
+        guard menuTrackingDepth == 0 else { return }
+        let expired = expiredCompletedJobIDs
+        expiredCompletedJobIDs.removeAll()
+        for id in expired {
+            expireCompletedJob(id: id)
+        }
+    }
+
+    private func expireCompletedJob(id: UUID) {
+        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.hasPendingNotionExport }) else { return }
+        // Native menus update in place. Removing a finished export's row while
+        // the menu is open moves its actions underneath the pointer.
+        if menuTrackingDepth > 0, jobs.contains(where: { $0.id == id && $0.notionExportStatus != nil }) {
+            expiredCompletedJobIDs.insert(id)
+        } else {
+            removeJob(id: id)
+        }
     }
 
     /// Cancel a job. Removes the job + cleans up sidecar files if naming was
@@ -760,17 +807,32 @@ class PipelineQueue {
             recordTerminalJob(jobs[index])
         }
         if newState == .done {
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(self?.completedJobLifetime ?? 60))
-                self?.removeJob(id: id)
+            startPendingNotionExport(jobID: id)
+            scheduleCompletedJobRemoval(id: id)
+            // A held export retries from its Markdown, never from the audio
+            // sidecars, and it may be held for as long as the user leaves it.
+            if jobs[index].hasPendingNotionExport {
+                naming.removeNamingData(jobID: id, slug: jobs[index].namingSlug, in: allSidecarDirs(of: jobs[index]))
             }
+        }
+    }
+
+    func scheduleCompletedJobRemoval(id: UUID) {
+        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.hasPendingNotionExport }) else { return }
+        let token = UUID()
+        completedJobRemovalTokens[id] = token
+        expiredCompletedJobIDs.remove(id)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(self?.completedJobLifetime ?? 60))
+            guard self?.completedJobRemovalTokens[id] == token else { return }
+            self?.expireCompletedJob(id: id)
         }
     }
 
     /// Persist a durable terminal-state record so the automation API can read
     /// back a finished job's outcome even after `completedJobLifetime` removes
     /// it from the in-memory list. No-op when no store is wired.
-    private func recordTerminalJob(_ job: PipelineJob) {
+    func recordTerminalJob(_ job: PipelineJob) {
         terminalJobStore?.record(JobStatusDTO(job: job))
     }
 
@@ -780,7 +842,7 @@ class PipelineQueue {
     /// losing it with no generated minutes to show for it.
     private func removeRawTranscriptArtifactsIfSafe(for index: Int) {
         guard !transcriptOutputOptions(forJobID: jobs[index].id).saveRawTranscriptSeparately else { return }
-        guard jobs[index].protocolPath != nil else {
+        guard jobs[index].hasSavedProtocol else {
             if jobs[index].transcriptPath != nil {
                 // Matched by /v1 clients and persisted jobs; keep the text stable.
                 let warning = "Raw transcript retained because no protocol was saved"
