@@ -148,42 +148,73 @@ enum PersistentDiagnosticLog {
         /// subprocess alive — `stop()`/`deinit` never run — and launchd re-parents
         /// it to PID 1. Successive launches stack up these orphans (one machine
         /// had five, the oldest days old), each holding a unified-log subscription.
-        /// Call this at launch BEFORE starting a fresh streamer so the count can't
-        /// grow without bound.
+        /// Called once per launch, so the count can't grow without bound. It is
+        /// not ordered before the fresh streamer's start: that streamer's parent
+        /// is this app, not PID 1, so it is never matched.
         ///
         /// SIGTERM is enough: `log stream` exits cleanly on it. No escalation —
         /// a process wedged hard enough to ignore TERM is rare and not worth the
         /// complexity here. Best-effort: a `ps` failure is logged and ignored.
-        static func reapOrphans() {
-            let victims = orphanPids(processTable: snapshotProcessTable(), ownPid: getpid())
+        static func reapOrphans() async {
+            let victims = await orphanPids(processTable: snapshotProcessTable(), ownPid: getpid())
             for pid in victims {
                 logger.info("reaping orphaned log stream pid=\(pid, privacy: .public)")
                 kill(pid, SIGTERM)
             }
         }
 
+        /// How long `ps` may run before the snapshot is given up. It normally
+        /// takes well under a second.
+        static let psTimeoutSeconds: TimeInterval = 10
+
         /// Run `ps -axo pid=,ppid=,command=` and parse it into the tuple shape
-        /// `orphanPids` consumes. Returns an empty table if `ps` can't be run or
-        /// read — best-effort, so a `ps` failure simply reaps nothing. The `=`
-        /// suffixes suppress the header row; the first two fields are numeric,
-        /// the remainder (which can contain spaces) is the command.
-        private static func snapshotProcessTable() -> [(pid: Int32, ppid: Int32, command: String)] {
+        /// `orphanPids` consumes. Returns an empty table if `ps` can't be run,
+        /// fails, hits `timeout`, or its output was cut off — best-effort, so a
+        /// `ps` failure simply reaps nothing. The `=` suffixes suppress the
+        /// header row; the first two fields are numeric, the remainder (which
+        /// can contain spaces) is the command.
+        static func snapshotProcessTable(
+            executable: String = "/bin/ps",
+            timeout: TimeInterval = psTimeoutSeconds,
+            drainGrace: TimeInterval = ProcessOutput.defaultDrainGrace,
+        ) async -> [(pid: Int32, ppid: Int32, command: String)] {
             let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+            proc.executableURL = URL(fileURLWithPath: executable)
             proc.arguments = ["-axo", "pid=,ppid=,command="]
             let pipe = Pipe()
             proc.standardOutput = pipe
-            proc.standardError = Pipe()
+            proc.standardError = FileHandle.nullDevice
+            let stdout = ProcessOutput.chunks(of: pipe)
+            var cut = false
+            let run: (outcome: BoundedProcess.Outcome, output: Data)
             do {
-                try proc.run()
+                run = try await ProcessOutput.run(
+                    BoundedProcess(proc),
+                    timeout: timeout,
+                    ending: [stdout.end],
+                    drainGrace: drainGrace,
+                    onCut: { _ in cut = true },
+                    read: { await stdout.chunks.reduce(into: Data()) { $0.append($1) } },
+                )
             } catch {
                 logger.error("reap_orphans_ps_failed error=\(error.localizedDescription, privacy: .public)")
                 return []
             }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            proc.waitUntilExit()
-            guard let text = String(data: data, encoding: .utf8) else { return [] }
-            return parseProcessTable(text)
+            // A table stopped at the limit, or cut by a pipe held open after the
+            // exit, may end in a truncated row, which must not be matched.
+            guard run.outcome != .timedOut, !cut else {
+                logger.error("reap_orphans_ps_failed outcome=\(String(describing: run.outcome), privacy: .public) cut=\(cut, privacy: .public)")
+                return []
+            }
+            // A non-zero exit still leaves the rows ps printed whole, so they are
+            // used, as before; ps can report an error for a single process.
+            if run.outcome != .exited(0) {
+                logger.warning("reap_orphans_ps_exit outcome=\(String(describing: run.outcome), privacy: .public)")
+            }
+            // Decoded row by row: a process with a non-UTF-8 argument loses only
+            // its own row, which cannot be one of ours (our arguments are ASCII).
+            let rows = run.output.split(separator: UInt8(ascii: "\n")).compactMap { String(bytes: $0, encoding: .utf8) }
+            return parseProcessTable(rows.joined(separator: "\n"))
         }
 
         /// PURE: parse `ps -axo pid=,ppid=,command=` output into tuples. Each line
