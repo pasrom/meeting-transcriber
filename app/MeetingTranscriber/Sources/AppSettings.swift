@@ -200,6 +200,9 @@ final class AppSettings { // swiftlint:disable:this type_body_length
     /// specifically, rather than reusing a credential another tool manages.
     @ObservationIgnored private let claudeAPIKeyAccount: String
 
+    /// Keychain account backing `notionAPIKey`, same injection reasoning as above.
+    @ObservationIgnored private let notionAPIKeyAccount: String
+
     // MARK: - Apps to Watch
 
     var watchTeams: Bool {
@@ -683,6 +686,40 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         }
     #endif
 
+    // MARK: - Notion Export
+
+    var notionExportEnabled: Bool {
+        didSet { defaults.set(notionExportEnabled, forKey: "notionExportEnabled") }
+    }
+
+    var notionDatabaseID: String {
+        didSet { defaults.set(notionDatabaseID, forKey: "notionDatabaseID") }
+    }
+
+    var notionSkipLocalMarkdownOnSuccess: Bool {
+        didSet { defaults.set(notionSkipLocalMarkdownOnSuccess, forKey: "notionSkipLocalMarkdownOnSuccess") }
+    }
+
+    var notionSpeakerTagsEnabled: Bool {
+        didSet { defaults.set(notionSpeakerTagsEnabled, forKey: "notionSpeakerTagsEnabled") }
+    }
+
+    var notionAPIKey: String {
+        get {
+            access(keyPath: \.notionAPIKey)
+            return KeychainHelper.read(key: notionAPIKeyAccount) ?? ""
+        }
+        set {
+            withMutation(keyPath: \.notionAPIKey) {
+                if newValue.isEmpty {
+                    KeychainHelper.delete(key: notionAPIKeyAccount)
+                } else {
+                    KeychainHelper.save(key: notionAPIKeyAccount, value: newValue)
+                }
+            }
+        }
+    }
+
     // MARK: - Output Directory
 
     /// Security-scoped output-dir bookmark. Stored so `@Observable` can track it.
@@ -734,11 +771,13 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         defaults: UserDefaults = .standard,
         apiKeyAccount: String = "openAIAPIKey",
         claudeAPIKeyAccount: String = "claudeAPIKey",
+        notionAPIKeyAccount: String = "notionAPIKey",
         defaultOutputDir: URL = AppPaths.downloadsProtocolsDir,
     ) {
         self.defaults = defaults
         self.apiKeyAccount = apiKeyAccount
         self.claudeAPIKeyAccount = claudeAPIKeyAccount
+        self.notionAPIKeyAccount = notionAPIKeyAccount
         self.defaultOutputDir = defaultOutputDir
 
         watchTeams = defaults.bool(forKey: "watchTeams", default: true)
@@ -822,6 +861,10 @@ final class AppSettings { // swiftlint:disable:this type_body_length
             .flatMap(OpenAIAPIKeyPlacement.init(rawValue:)) ?? .bearerToken
         openAIAPIKeyHeaderName = defaults.string(forKey: "openAIAPIKeyHeaderName") ?? OpenAIAPIKeyPlacement.defaultHeaderName
         customOutputDirBookmark = defaults.data(forKey: "customOutputDirBookmark")
+        notionExportEnabled = defaults.object(forKey: "notionExportEnabled") as? Bool ?? false
+        notionDatabaseID = defaults.string(forKey: "notionDatabaseID") ?? ""
+        notionSkipLocalMarkdownOnSuccess = defaults.object(forKey: "notionSkipLocalMarkdownOnSuccess") as? Bool ?? false
+        notionSpeakerTagsEnabled = defaults.object(forKey: "notionSpeakerTagsEnabled") as? Bool ?? false
 
         // Migrate legacy "audioDebugLogging" key (renamed to "verboseDiagnostics" 2026-05-04).
         // New key wins if both are set; legacy value seeds the new key on first launch.
