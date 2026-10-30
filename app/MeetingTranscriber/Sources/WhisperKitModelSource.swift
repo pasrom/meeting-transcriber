@@ -29,6 +29,24 @@ struct WhisperKitModelSource {
         folder.path(percentEncoded: false)
     }
 
+    /// The configuration both origins build their pipe from. `downloadBase` is
+    /// passed although the model folder is already resolved, because WhisperKit
+    /// also takes the tokenizer cache from it (`tokenizerFolder ?? downloadBase`):
+    /// left out, the tokenizer would be looked up, and fetched, in
+    /// `Documents/huggingface` after all. A parameter only so a test can check the
+    /// wiring without creating the real folder.
+    nonisolated static func pipeConfig(
+        variant: String,
+        folder: URL,
+        downloadBase: URL = WhisperKitLocalSnapshot.downloadBase,
+    ) -> WhisperKitConfig {
+        WhisperKitConfig(
+            model: variant,
+            downloadBase: downloadBase,
+            modelFolder: modelFolderArgument(folder),
+        )
+    }
+
     /// Run a Hub download with the token WhisperKit finds on its own, and once more
     /// without any token when the Hub turns that token away.
     ///
@@ -118,6 +136,7 @@ struct WhisperKitModelSource {
                 try await downloadExactly(variant) { token in
                     try await WhisperKit.download(
                         variant: variant,
+                        downloadBase: WhisperKitLocalSnapshot.downloadBase,
                         from: repoID,
                         token: token,
                         progressCallback: progress,
@@ -125,7 +144,7 @@ struct WhisperKitModelSource {
                 }
             },
             makePipe: { variant, folder in
-                try await WhisperKit(WhisperKitConfig(model: variant, modelFolder: modelFolderArgument(folder)))
+                try await WhisperKit(pipeConfig(variant: variant, folder: folder))
             },
         )
     }
@@ -135,12 +154,15 @@ struct WhisperKitModelSource {
     /// folder lacks instead: that is the error the engine logs when the load fails.
     ///
     /// The folder is checked for the tokenizer too, unlike a Hub variant, so that
-    /// it is self-sufficient. It is not the first place WhisperKit looks: a stock
-    /// tokenizer already cached under `models/openai/whisper-<detected size>` takes
-    /// precedence, the folder's own `tokenizer.json` comes next, and the Hub is
-    /// the fallback when neither is there or the local one fails to parse (no
-    /// `tokenizerFolder` is passed). A folder that carries its tokenizer therefore
-    /// loads without the Hub whether or not that cache exists. Sandbox access goes
+    /// it is self-sufficient. It is not the first place WhisperKit looks. No
+    /// `tokenizerFolder` is passed, so WhisperKit uses `downloadBase` in its place
+    /// (see `pipeConfig`) and searches, in order: the app's stock tokenizer cache
+    /// `<downloadBase>/models/openai/whisper-<detected size>`, the top of
+    /// `downloadBase` itself, the picked folder, and that folder's own
+    /// `models/openai/whisper-<size>`. The Hub is the fallback when none has a
+    /// `tokenizer.json` or the one found fails to parse, and it downloads into the
+    /// app's cache. A folder that carries its tokenizer therefore loads without
+    /// the Hub whether or not that cache exists. Sandbox access goes
     /// through `VocabularyFileAccess`, whose two helpers are not specific to
     /// vocabulary.
     private static func localFolder(path: String, bookmark: Data?) -> Self {
@@ -167,7 +189,7 @@ struct WhisperKitModelSource {
                 defer {
                     if accessing { folder.stopAccessingSecurityScopedResource() }
                 }
-                return try await WhisperKit(WhisperKitConfig(model: variant, modelFolder: modelFolderArgument(folder)))
+                return try await WhisperKit(pipeConfig(variant: variant, folder: folder))
             },
         )
     }

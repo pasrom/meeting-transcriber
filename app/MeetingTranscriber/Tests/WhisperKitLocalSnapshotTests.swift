@@ -175,9 +175,9 @@ final class WhisperKitLocalSnapshotTests: XCTestCase {
     /// One drift it still cannot see, stated rather than papered over: the search root
     /// is derived from `defaultRepoRoot`, so a change in the *depth* of
     /// `HubApiWrapper.localRepoLocation` moves both and the test skips again (measured
-    /// by mutation). Deriving the root independently would mean rebuilding
-    /// `Documents/huggingface` by hand, which is exactly the duplication the locator
-    /// avoids. That drift is a library contract rather than a name this repo borrowed,
+    /// by mutation). Deriving the root independently would mean rebuilding the
+    /// `<download base>/models/<repo>` layout by hand, which is exactly the
+    /// duplication the locator avoids. That drift is a library contract rather than a name this repo borrowed,
     /// and it would also break the online download path, which the real-model tests
     /// cover.
     @MainActor
