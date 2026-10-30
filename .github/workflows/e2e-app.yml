@@ -204,6 +204,9 @@ jobs:
       # detected meeting and asserts the sidecar carries a mic track and NO app
       # track. Nothing else in this workflow would notice if a microphone-only
       # recording quietly opened a process tap.
+      # It also holds the only live check of POST /v1/watch's refusal: a start
+      # during the manual recording must answer 409 and change nothing (see
+      # `_mic_only_assert_watch_refused` in scripts/e2e-app.sh).
       #
       # It reroutes the machine's default OUTPUT into the loopback device that is
       # the default INPUT, for its own duration, because nothing else feeds that

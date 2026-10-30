@@ -104,7 +104,11 @@ PRs are excluded from the self-hosted runner.
   driving `POST /v1/record` instead of a detected meeting, and asserts the
   record-only sidecar carries a mic track, `trigger` is `manual`, and there is
   **no** app track. That last one is the point: nothing else in the suite would
-  notice a microphone-only recording quietly opening a process tap. It is the
+  notice a microphone-only recording quietly opening a process tap. It also
+  holds the only live check of `POST /v1/watch`'s refusal (`409` during the
+  manual recording); why it never starts watching is at
+  `_mic_only_assert_watch_refused`. The start/stop success path has no live
+  check. It is the
   only lane that mutates a machine-global setting, pointing the default audio
   output at the loopback for its own duration (see setup step 1 for why), so it
   is also the only one whose teardown can leave the host in a worse state than

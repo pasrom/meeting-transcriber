@@ -377,13 +377,11 @@ fi
 
 # --- drive the browser meeting --------------------------------------------
 
-_watch_state() { rpc /state | jq -r '.watchState // ""'; }
-
 # Best-effort diagnostics when detection doesn't fire — the next CI run then
 # shows whether the app was watching, whether Chrome was in the watched set,
 # and whether the WebRTC assertion was actually present. Never fails the script.
 _dump_detection_diag() {
-    log "DIAG: watchState=$(_watch_state)"
+    log "DIAG: watchState=$(watch_state)"
     log "DIAG: /state.settings.detection = $(rpc /state | jq -c '.settings.detection // {}' 2>/dev/null)"
     log "DIAG: effective watchBrowserMeetings std=$(snapshot_default "$_STANDARD_PLIST" watchBrowserMeetings) ctr=$([ -f "$_CONTAINER_PLIST" ] && snapshot_default "$_CONTAINER_PLIST" watchBrowserMeetings)"
     log "DIAG: effective autoWatch std=$(snapshot_default "$_STANDARD_PLIST" autoWatch)"
@@ -500,7 +498,7 @@ poll_until 10 1 _consent_notification_posted \
 log "Consent notification was posted and flagged deliverable"
 
 log "Waiting for recording to start (watchState == recording)"
-_is_recording() { [ "$(_watch_state)" = "recording" ]; }
+_is_recording() { [ "$(watch_state)" = "recording" ]; }
 poll_until "$DETECT_TIMEOUT_S" 2 _is_recording \
     || fail "watchState never reached 'recording' after consent"
 log "Recording started; capturing ${RECORD_SECONDS}s of tone"
@@ -510,9 +508,17 @@ log "Quitting Chrome to end the meeting"
 quit_chrome
 
 log "Waiting up to ${STOP_TIMEOUT_S}s for recording to stop"
-_not_recording() { [ "$(_watch_state)" != "recording" ]; }
-poll_until "$STOP_TIMEOUT_S" 2 _not_recording \
-    || fail "watchState stayed 'recording' after Chrome quit — meeting-end not detected"
+# Not recording, and the app answered: an unanswered /state is not a stop.
+_not_recording() {
+    local state
+    state="$(watch_state)"
+    [ "$state" != "recording" ] && [ "$state" != "unreadable" ]
+}
+if ! poll_until "$STOP_TIMEOUT_S" 2 _not_recording; then
+    [ "$(watch_state)" != unreadable ] \
+        || fail "the app stopped answering /state after Chrome quit (crashed or hung?), so whether the meeting end was detected is unknown"
+    fail "watchState stayed 'recording' after Chrome quit — meeting-end not detected"
+fi
 
 # --- assert: a non-silent app track was captured --------------------------
 

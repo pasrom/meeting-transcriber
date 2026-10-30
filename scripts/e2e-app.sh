@@ -85,7 +85,10 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        POST /v1/record, and assert the sidecar carries a mic track
                        and NO app track. Reroutes the default OUTPUT to BlackHole
                        2ch for the lane's duration so the loopback input has
-                       something to hear, and restores it on any exit.
+                       something to hear, and restores it on any exit. Also
+                       the live check of POST /v1/watch's refusal: a start
+                       during the manual recording must answer 409 and
+                       change nothing.
   --record-only        Enable record-only mode: assert on sidecar JSON + mix WAV instead
                        of transcript/protocol. Exercises the WatchLoop branch that
                        skips VAD/transcription/diarization/protocol generation.
@@ -1056,7 +1059,15 @@ fi
 # Record-only lanes assert the captured app track is non-silent via
 # `mt-cli wav-verdict` (the same analyzer the browser lane uses). Only that
 # mode needs it, so build lazily to keep the processing lane unchanged.
-if { [ "$RECORD_ONLY" = true ] || [ "$MIC_ONLY" = true ] || [ "$QUIT_FLUSH" = true ] || [ -n "$MIC_STALL" ]; } && [ ! -x "$MTCLI" ]; then
+# Rebuilt when any of its sources is newer than the binary, not only when it is
+# missing: a hand-run host keeps .build across checkouts, and an mt-cli older
+# than the lane could lack a subcommand or flag it calls and fail with an
+# error that blames the app.
+_mtcli_stale() {
+    [ ! -x "$MTCLI" ] \
+        || [ -n "$(find "$MTCLI_PKG/Sources" "$MTCLI_PKG/Package.swift" "$MTCLI_PKG/Package.resolved" -newer "$MTCLI" -print -quit 2>/dev/null)" ]
+}
+if { [ "$RECORD_ONLY" = true ] || [ "$MIC_ONLY" = true ] || [ "$QUIT_FLUSH" = true ] || [ -n "$MIC_STALL" ]; } && _mtcli_stale; then
     # record-only asserts the app track carries signal; mic-only needs the same
     # analyzer for its mic track AND drives `record start/stop` through it.
     log "Building mt-cli (track silence guard + record control)"
@@ -1902,6 +1913,32 @@ assert_pipeline_did_not_run() {
 # `afplay` rather than the meeting-simulator, and auto-watch off: this lane wants
 # sound, not a detectable meeting. The simulator holds a power assertion, and the
 # watch loop would start an auto recording alongside the manual one.
+#
+# The lane also carries the only live check of POST /v1/watch's refusal, which
+# is otherwise tested against fakes: it holds a manual recording, and while one
+# owns the loop a watch start must be refused with 409 and leave everything as
+# it was. The check asserts the effect, the watch state unchanged and the
+# recording still running, not just the code. It never starts watching: a
+# start rebuilds the pipeline, including staged-recording recovery against the
+# host's real staging folder, which a test must not set off. The status is
+# read with rpc_post_status because the code is the contract, and mt-cli folds
+# every refusal into one non-zero exit.
+_mic_only_assert_watch_refused() {
+    local label="$1" code state status
+    # 30 s: the endpoint may take its 20 s settle before answering. The caller
+    # has just confirmed the recording, so the state before is 'recording'.
+    code="$(rpc_post_status /v1/watch '{"action":"start"}' 30)"
+    [ "$code" = 409 ] \
+        || fail "$label: POST /v1/watch start during a manual recording answered $code, expected 409"
+    state="$(watch_state)"
+    [ "$state" = recording ] \
+        || fail "$label: after the refused watch start, /state.watchState is '$state', expected the manual recording's 'recording'"
+    status="$("$MTCLI" record)" || fail "$label: mt-cli record status failed after the refused watch start"
+    jq -e '.recording == true' >/dev/null <<<"$status" \
+        || fail "$label: the refused watch start ended the manual recording: $status"
+    log "$label: watch start refused with 409; watch state still 'recording', recording still running"
+}
+
 run_mic_only() {
     local label="[mic-only]"
 
@@ -1918,6 +1955,8 @@ run_mic_only() {
     echo "$status" | jq -e '.recording == true' >/dev/null \
         || fail "$label: /v1/record reports recording=false right after a 200 start: $status"
     log "$label: recording confirmed: $status"
+
+    _mic_only_assert_watch_refused "$label"
 
     log "$label: playing $SIMULATOR_FIXTURE into the loopback input"
     afplay "$SIMULATOR_FIXTURE" || fail "$label: afplay failed; the microphone had nothing to capture"
@@ -2083,12 +2122,7 @@ run_one_reimport() {
 
     log "$label: POST /action/enqueueFile path=$audio_path"
     local enq_status
-    enq_status="$(curl --silent --show-error --max-time 10 -o /dev/null -w "%{http_code}" \
-        -X POST \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        --header "Content-Type: application/json" \
-        --data "$(jq -nc --arg p "$audio_path" '{path: $p}')" \
-        "$RPC_BASE/action/enqueueFile" 2>/dev/null || echo "000")"
+    enq_status="$(rpc_post_status /action/enqueueFile "$(jq -nc --arg p "$audio_path" '{path: $p}')" 10)"
     [ "$enq_status" = "200" ] || fail "$label: enqueueFile returned HTTP $enq_status (expected 200)"
 
     _poll_for_new_lastjob_terminal "$label"
@@ -2576,12 +2610,7 @@ run_naming_confirm() {
     log "$label: confirming mapping: $mapping"
 
     local confirm_status
-    confirm_status="$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' \
-        -X POST \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        --header "Content-Type: application/json" \
-        --data "$(jq -nc --argjson m "$mapping" '{mapping: $m}')" \
-        "$RPC_BASE/v1/jobs/$job_id/naming" 2>/dev/null || echo '000')"
+    confirm_status="$(rpc_post_status "/v1/jobs/$job_id/naming" "$(jq -nc --argjson m "$mapping" '{mapping: $m}')" 10)"
     [ "$confirm_status" = "200" ] || fail "$label: POST naming returned HTTP $confirm_status (expected 200)"
     log "$label: naming confirmed; polling job to a terminal state"
 
@@ -3091,7 +3120,7 @@ run_mic_stall() {
     "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" --loop --duration "$MIC_STALL_MEETING_S" >/tmp/e2e-app-sim.log 2>&1 &
     SIM_PID=$!
 
-    _ms_recording() { [ "$(rpc /state | jq -r '.watchState // ""')" = recording ]; }
+    _ms_recording() { [ "$(watch_state)" = recording ]; }
     poll_until 60 1 _ms_recording || fail "$label: no recording started within 60s of the meeting"
     local rec_at
     rec_at="$(date +%s)"

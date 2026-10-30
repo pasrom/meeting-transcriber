@@ -149,6 +149,36 @@ fail_on_host_skips() {
     return 1
 }
 
+# watch_state_from_state — read a GET /state body on stdin and print its
+# `watchState`: the loop's state, empty when there is no watch loop, and
+# `unreadable` when the body is empty or not an object, so a dead or hung app
+# never reads as "not watching". (`jq -e` alone exits 0 on empty input in jq
+# 1.6, hence the explicit test.)
+watch_state_from_state() {
+    local body
+    body="$(cat)"
+    [ -n "$body" ] \
+        && jq -er 'if type == "object" then (.watchState // "") else error end' <<<"$body" 2>/dev/null \
+        || echo unreadable
+}
+
+# watch_state — the app's watch state, read through the calling driver's
+# `rpc` GET helper (see watch_state_from_state for the values).
+watch_state() { rpc /state | watch_state_from_state; }
+
+# rpc_post_status <path> <json> [max-time] — POST a JSON body to the debug RPC
+# server and print only the HTTP status, `000` when nothing answered. For the
+# calls whose status code is the contract under test. Uses the calling
+# driver's RPC_BASE and RPC_TOKEN.
+rpc_post_status() {
+    local code
+    code="$(curl --silent --max-time "${3:-15}" -o /dev/null -w '%{http_code}' -X POST \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data "$2" "$RPC_BASE$1" 2>/dev/null)" || true
+    echo "${code:-000}"
+}
+
 # Assert that a process matching `$pattern` is running. Exits 1 with a
 # clear error if not. Intended for polling loops that would otherwise
 # burn their full timeout if the app crashed mid-poll — the loop just
