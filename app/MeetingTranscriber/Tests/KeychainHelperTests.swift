@@ -2,9 +2,16 @@ import Foundation
 @testable import MeetingTranscriber
 import XCTest
 
-// swiftlint:disable:next balanced_xctest_lifecycle
 final class KeychainHelperTests: XCTestCase {
     private let testKey = "KEYCHAIN_TEST_\(UUID().uuidString)"
+
+    /// Removes the item an earlier round-trip test left under a fixed name in the
+    /// account's keychain, which both CI runners share. Remove once no runner
+    /// can still hold one.
+    override static func setUp() {
+        super.setUp()
+        KeychainHelper.delete(key: "HF_TOKEN_TEST")
+    }
 
     override func tearDown() {
         KeychainHelper.delete(key: testKey)

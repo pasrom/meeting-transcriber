@@ -550,26 +550,6 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.diarizerTuningIsAllDefaults)
     }
 
-    // MARK: - Keychain
-
-    func testKeychainRoundTrip() {
-        KeychainHelper.delete(key: "HF_TOKEN_TEST")
-
-        XCTAssertFalse(KeychainHelper.exists(key: "HF_TOKEN_TEST"))
-        XCTAssertNil(KeychainHelper.read(key: "HF_TOKEN_TEST"))
-
-        KeychainHelper.save(key: "HF_TOKEN_TEST", value: "hf_abc123")
-        XCTAssertTrue(KeychainHelper.exists(key: "HF_TOKEN_TEST"))
-        XCTAssertEqual(KeychainHelper.read(key: "HF_TOKEN_TEST"), "hf_abc123")
-
-        KeychainHelper.save(key: "HF_TOKEN_TEST", value: "hf_xyz789")
-        XCTAssertEqual(KeychainHelper.read(key: "HF_TOKEN_TEST"), "hf_xyz789")
-
-        KeychainHelper.delete(key: "HF_TOKEN_TEST")
-        XCTAssertFalse(KeychainHelper.exists(key: "HF_TOKEN_TEST"))
-        XCTAssertNil(KeychainHelper.read(key: "HF_TOKEN_TEST"))
-    }
-
     /// `DiarizerMode` is persisted via `PipelineSnapshot` (PipelineJob.usedDiarizerMode)
     /// and via UserDefaults (AppSettings.diarizerMode). The JSON/UserDefaults
     /// shape is keyed off the implicit rawValues `"offline"` / `"sortformer"`
