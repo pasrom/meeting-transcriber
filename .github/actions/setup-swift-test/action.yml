@@ -56,17 +56,18 @@ runs:
     # before the new model was added persist, and the un-pre-warmed model
     # would race + hit HF rate limits under parallel xctest. The trailing
     # `-vN` suffix is a manual belt-and-braces bump for the same reason
-    # (last bumped to v2 when the EOU 320ms streaming model was added to
-    # `ModelPreloadTests.testPreloadEouStreaming`).
+    # (bumped to v2 when the EOU 320ms streaming model was added to
+    # `ModelPreloadTests.testPreloadEouStreaming`, to v3 when WhisperKit
+    # models moved out of ~/Documents/huggingface, issue #640).
     - name: Cache ML models
       id: model-cache
       if: inputs.cache-models == 'true'
       uses: actions/cache@v5
       with:
         path: |
-          ~/Documents/huggingface
+          ~/Library/Application Support/MeetingTranscriber/huggingface
           ~/Library/Application Support/FluidAudio
-        key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Tests/ModelPreloadTests.swift') }}-v2
+        key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Tests/ModelPreloadTests.swift') }}-v3
         restore-keys: ml-models-${{ runner.os }}-
 
     # Pre-warm step has no per-step `timeout-minutes` — composite actions
