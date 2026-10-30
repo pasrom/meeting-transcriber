@@ -174,6 +174,11 @@ class PipelineQueue {
     /// starts, because `jobs[].state` is observed on its own, and a view that read
     /// this dictionary would be rebuilt on every transition for no gain.
     @ObservationIgnored private var stageStartByJob: [UUID: ContinuousClock.Instant] = [:]
+    /// Seconds of sub-stages already logged as events of their own inside a
+    /// job's current stage (the echo canceller's run inside `.transcribing`),
+    /// taken out of the enclosing stage's event when that stage is left.
+    /// Ignored by observation for the same reason as `stageStartByJob`.
+    @ObservationIgnored private var excludedSubStageSecondsByJob: [UUID: Double] = [:]
     /// Audio length (seconds) each job processed, captured when transcription
     /// completes, so stage durations can be normalised into an RTF.
     /// Internal (not private) because `transcribe` in PipelineQueue+Stages.swift stamps it.
@@ -605,8 +610,7 @@ class PipelineQueue {
             )
             jobs.remove(at: index)
         }
-        stageStartByJob.removeValue(forKey: id)
-        jobAudioSeconds.removeValue(forKey: id)
+        forgetStageBookkeeping(for: id)
         saveSnapshot()
     }
 
@@ -627,8 +631,7 @@ class PipelineQueue {
         // cancelJob removes the job directly (not via removeJob) and skips the
         // normal terminal transition, so reap the stage-timing bookkeeping here
         // too — otherwise a job cancelled mid-stage leaks these entries.
-        stageStartByJob.removeValue(forKey: id)
-        jobAudioSeconds.removeValue(forKey: id)
+        forgetStageBookkeeping(for: id)
         if state != .done, state != .error {
             processedLedger.markProcessed(mixPath: jobs[index].mixPath)
         }
@@ -830,36 +833,93 @@ class PipelineQueue {
     // MARK: - Stage timing metrics
 
     /// On every state change: if we left a timed stage, log its wall-clock
-    /// duration; if we entered one, stamp its start. Measuring per-state means
-    /// the recorded duration matches exactly what the menu's elapsed timer shows
-    /// and excludes the speaker-naming pause (see `StageKind(jobState:)`).
+    /// duration; if we entered one, stamp its start. Measuring per-state
+    /// excludes the speaker-naming pause (see `StageKind(jobState:)`). A
+    /// sub-stage logged as an event of its own (the echo canceller's run inside
+    /// `.transcribing`) is taken back out of the enclosing stage's event, so
+    /// that average stays the cost of the stage for the jobs that never run it.
+    /// The menu's elapsed timer keeps the run, since the state is still
+    /// `.transcribing` while it runs, so on an echo-cancelled job that timer
+    /// reads above the average and can say "longer than usual": the stage is
+    /// taking longer, and the alternative, re-stamping the stage start after
+    /// the run, would make a counter the user is watching jump backwards.
     private func recordStageTransition(from oldState: JobState, to newState: JobState, jobID: UUID) {
         // A same-state "transition" (e.g. the confirm path re-enters
         // .generatingProtocol while already .generatingProtocol) is not a stage
         // boundary; ignore it so it neither logs a partial event nor resets the start.
         guard oldState != newState else { return }
+        let excluded = excludedSubStageSecondsByJob.removeValue(forKey: jobID) ?? 0
         if let leaving = StageKind(jobState: oldState), let start = stageStartByJob.removeValue(forKey: jobID) {
-            logStageTiming(stage: leaving, wallClock: (ContinuousClock.now - start).inSeconds, jobID: jobID)
+            // audioSeconds is 0 for stages with no known audio length (e.g. a
+            // late re-diarization with no transcription this session);
+            // aggregate() then excludes it from the RTF but still counts its
+            // wall-clock.
+            logStageTiming(
+                stage: leaving, wallClock: max(0, (ContinuousClock.now - start).inSeconds - excluded),
+                jobID: jobID, audioSeconds: jobAudioSeconds[jobID] ?? 0,
+            )
         }
         if StageKind(jobState: newState) != nil {
             stageStartByJob[jobID] = ContinuousClock.now
         }
     }
 
+    /// Drop every per-job timing entry. One place, because the two exits that
+    /// bypass the terminal transition (`removeJob`, `cancelJob`) each have to
+    /// reap all of them, and a dictionary added to one and not the other is
+    /// how a job cancelled mid-stage came to leak its entries once before.
+    private func forgetStageBookkeeping(for id: UUID) {
+        stageStartByJob.removeValue(forKey: id)
+        excludedSubStageSecondsByJob.removeValue(forKey: id)
+        jobAudioSeconds.removeValue(forKey: id)
+    }
+
+    /// Log one echo-cancellation run on `micURL` as its own event and remember
+    /// its duration, so leaving `.transcribing` can take it back out of that
+    /// stage's event. The clock is read before anything else so the file's
+    /// header read below is not inside the measured span.
+    ///
+    /// Called only for a run that processed the track, whatever the
+    /// self-check then made of it: a declined run cost the same time. Not for
+    /// a missing model or a throw, which processed nothing, and logging their
+    /// near-zero durations would pull the measured cost toward nothing.
+    /// Dropped for a job that is no longer in the list, the same guard
+    /// `recordEchoRemoved` applies, so a run finishing after its job was
+    /// cancelled leaves no entry behind.
+    /// Internal (not private) because `PipelineQueue+EchoCancellation.swift`
+    /// calls it.
+    func recordEchoCancellationTiming(jobID: UUID, startedAt: ContinuousClock.Instant, micURL: URL) {
+        let wallClock = (ContinuousClock.now - startedAt).inSeconds
+        guard jobs.contains(where: { $0.id == jobID }) else { return }
+        // Excluded from the enclosing stage only if there is one and the run
+        // started inside it; a run outside any timed stage has nothing to be
+        // taken out of, and charging it to whatever stage comes next would
+        // shorten an unrelated event.
+        if let stageStart = stageStartByJob[jobID], startedAt >= stageStart {
+            excludedSubStageSecondsByJob[jobID, default: 0] += wallClock
+        }
+        // Normalised by the track the run processed, not by `jobAudioSeconds`:
+        // transcription stamps that later, after this run.
+        logStageTiming(
+            stage: .echoCancelling, wallClock: wallClock, jobID: jobID,
+            audioSeconds: Double(AudioMixer.frameCount(of: micURL)) / Double(AudioConstants.targetSampleRate),
+        )
+    }
+
     /// Append one stage-timing event, then refresh the cached averages from the
     /// log so the menu reflects the new data point. Append and reload run in one
     /// Task so the reload is ordered strictly after the append (no race that
-    /// could miss the just-logged event).
-    private func logStageTiming(stage: StageKind, wallClock: Double, jobID: UUID) {
+    /// could miss the just-logged event). `audioSeconds` is evaluated only
+    /// when there is a log to write to, since one caller reads a file for it.
+    private func logStageTiming(
+        stage: StageKind, wallClock: Double, jobID: UUID, audioSeconds: @autoclosure () -> Double,
+    ) {
         guard let stageTimingLog else { return }
-        // audioSeconds is 0 for stages with no known audio length (e.g. a late
-        // re-diarization with no transcription this session); aggregate() then
-        // excludes it from the RTF but still counts its wall-clock.
         let event = StageTimingEvent(
             ts: Date(), jobID: jobID, stage: stage,
-            wallClockSeconds: wallClock, audioSeconds: jobAudioSeconds[jobID] ?? 0,
-            engine: activeEngineTag,
-            diarizerMode: usedDiarizerMode(forJobID: jobID)?.rawValue,
+            wallClockSeconds: wallClock, audioSeconds: audioSeconds(),
+            engine: stage.isEngineScoped ? activeEngineTag : nil,
+            diarizerMode: stage.isEngineScoped ? usedDiarizerMode(forJobID: jobID)?.rawValue : nil,
         )
         Task { [weak self] in
             await stageTimingLog.append([event])

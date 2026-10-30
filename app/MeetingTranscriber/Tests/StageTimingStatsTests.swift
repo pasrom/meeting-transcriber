@@ -33,6 +33,29 @@ final class StageTimingStatsTests: XCTestCase {
         )
     }
 
+    /// The canceller's cost depends on neither engine nor diarizer mode, so
+    /// its events carry neither and all land in one config, shown as the bare
+    /// stage name and ahead of the stages it runs before. A scoped stage with
+    /// no engine stays "· unknown": that is an anomaly, not a design.
+    func testEchoCancellationIsOneUnscopedConfigShownFirst() {
+        XCTAssertFalse(StageKind.echoCancelling.isEngineScoped)
+        XCTAssertTrue(StageKind.transcribing.isEngineScoped)
+        let events = [
+            event(.echoCancelling, wall: 90, audio: 600, engine: nil, mode: nil),
+            event(.echoCancelling, wall: 30, audio: 600, engine: nil, mode: nil),
+            event(.transcribing, wall: 10, audio: 600, engine: "ParakeetEngine"),
+        ]
+        let agg = StageTimingStats.aggregateByConfig(events: events)
+        let echo = StageConfig(stage: .echoCancelling, engine: nil, diarizerMode: nil)
+        XCTAssertEqual(agg[echo]?.count, 2)
+        XCTAssertEqual(agg[echo]?.avgWallClockSeconds ?? 0, 60, accuracy: 0.001)
+
+        XCTAssertEqual(echo.label, "Echo cancellation")
+        XCTAssertEqual(StageConfig(stage: .transcribing, engine: nil, diarizerMode: nil).label, "Transcribing · unknown")
+        XCTAssertEqual(StageConfig(stage: .transcribing, engine: "ParakeetEngine", diarizerMode: nil).label, "Transcribing · Parakeet")
+        XCTAssertEqual(agg.keys.min(by: StageConfig.displayedBefore), echo)
+    }
+
     // MARK: - Slower-than-usual decision
 
     func testIsSlowerThanUsualNeedsBothRatioAndAbsoluteFloor() {

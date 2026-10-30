@@ -41,7 +41,7 @@ struct ProcessingStatsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(orderedConfigs(aggregates), id: \.self) { config in
+                    ForEach(aggregates.keys.sorted(by: StageConfig.displayedBefore), id: \.self) { config in
                         if let agg = aggregates[config] {
                             statRow(config, agg)
                         }
@@ -65,7 +65,7 @@ struct ProcessingStatsView: View {
     }
 
     private func statRow(_ config: StageConfig, _ agg: StageTimingStats.StageAggregate) -> some View {
-        LabeledContent(configLabel(config)) {
+        LabeledContent(config.label) {
             HStack(spacing: 8) {
                 Text("Ø \(formattedTime(agg.avgWallClockSeconds))")
                 if let rtf = agg.avgRTF {
@@ -82,35 +82,40 @@ struct ProcessingStatsView: View {
         }
     }
 
-    /// "Stage · mode · engine" (mode omitted when nil, e.g. transcription);
-    /// the trailing `Engine` suffix is trimmed for brevity.
-    private func configLabel(_ config: StageConfig) -> String {
-        let raw = config.engine ?? "unknown"
-        let engine = raw.hasSuffix("Engine") ? String(raw.dropLast("Engine".count)) : raw
-        var parts = [config.stage.label]
-        if let mode = config.diarizerMode { parts.append(mode) }
-        parts.append(engine)
-        return parts.joined(separator: " · ")
-    }
-
-    /// Stage order first (transcribe → diarize → protocol), then engine, then
-    /// mode — a total order over distinct configs (no label rebuilds), so rows
-    /// are stable and grouped.
-    private func orderedConfigs(
-        _ aggs: [StageConfig: StageTimingStats.StageAggregate],
-    ) -> [StageConfig] {
-        aggs.keys.sorted { a, b in
-            let ia = StageKind.allCases.firstIndex(of: a.stage) ?? 0
-            let ib = StageKind.allCases.firstIndex(of: b.stage) ?? 0
-            if ia != ib { return ia < ib }
-            if a.engine != b.engine { return (a.engine ?? "") < (b.engine ?? "") }
-            return (a.diarizerMode ?? "") < (b.diarizerMode ?? "")
-        }
-    }
-
     private func reload() async {
         let interval = TimeInterval(windowDays.rawValue * 86400)
         let events = await log.loadRecent(within: interval)
         aggregates = StageTimingStats.aggregateByConfig(events: events)
+    }
+}
+
+/// How a config is shown in the stats table. Off the view so the label and
+/// the row order can be pinned without instantiating it.
+extension StageConfig {
+    /// "Stage · mode · engine" (mode omitted when nil, e.g. transcription);
+    /// the trailing `Engine` suffix is trimmed for brevity. A stage the engine
+    /// does not scope (echo cancellation) is the bare stage name, not
+    /// "· unknown": its events carry no engine on purpose, while a scoped
+    /// event without one is an anomaly worth showing as such.
+    var label: String {
+        guard stage.isEngineScoped else { return stage.label }
+        let raw = engine ?? "unknown"
+        let trimmed = raw.hasSuffix("Engine") ? String(raw.dropLast("Engine".count)) : raw
+        var parts = [stage.label]
+        if let diarizerMode { parts.append(diarizerMode) }
+        parts.append(trimmed)
+        return parts.joined(separator: " · ")
+    }
+
+    /// Stage order first (the `StageKind` declaration order: echo cancellation
+    /// → transcribe → diarize → protocol), then engine, then mode — a total
+    /// order over distinct configs (no label rebuilds), so rows are stable and
+    /// grouped.
+    static func displayedBefore(_ a: StageConfig, _ b: StageConfig) -> Bool {
+        let ia = StageKind.allCases.firstIndex(of: a.stage) ?? 0
+        let ib = StageKind.allCases.firstIndex(of: b.stage) ?? 0
+        if ia != ib { return ia < ib }
+        if a.engine != b.engine { return (a.engine ?? "") < (b.engine ?? "") }
+        return (a.diarizerMode ?? "") < (b.diarizerMode ?? "")
     }
 }

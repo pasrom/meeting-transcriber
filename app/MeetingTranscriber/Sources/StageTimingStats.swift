@@ -7,6 +7,14 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "StageTi
 /// `stage_timing.jsonl` wire contract; map from a `JobState` via the
 /// `init?(jobState:)` below.
 enum StageKind: String, Codable, CaseIterable {
+    /// The echo canceller's run on the microphone track. Not a `JobState`: it
+    /// happens inside `.transcribing`, before either track is transcribed, and
+    /// is timed by the caller rather than by a state change. Its own kind
+    /// because it costs several times what transcription does and runs on
+    /// only the few recordings that carry echo, so folded into transcribing it
+    /// skewed that average for every job and left its own cost unmeasured.
+    /// Listed first because it runs first.
+    case echoCancelling // swiftlint:disable:this raw_value_for_camel_cased_codable_enum
     case transcribing
     case diarizing
     // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
@@ -14,16 +22,25 @@ enum StageKind: String, Codable, CaseIterable {
 
     var label: String {
         switch self {
+        case .echoCancelling: "Echo cancellation"
         case .transcribing: "Transcribing"
         case .diarizing: "Diarizing"
         case .generatingProtocol: "Protocol"
         }
     }
 
+    /// Whether the engine and diarizer mode are comparability tags for this
+    /// stage. The canceller's cost depends on neither, so its events carry
+    /// neither and its average is not split by them.
+    var isEngineScoped: Bool {
+        self != .echoCancelling
+    }
+
     /// The timed stage a `JobState` corresponds to, or nil for non-timed states
     /// (`.waiting`, `.speakerNamingPending`, `.done`, `.error`). The speaker-
     /// naming wait is its own state, so its human-paced duration is never
-    /// attributed to diarization.
+    /// attributed to diarization. Never `.echoCancelling`, which is a part of
+    /// `.transcribing` rather than a state of its own.
     init?(jobState: JobState) {
         switch jobState {
         case .transcribing: self = .transcribing

@@ -4,58 +4,9 @@ import XCTest
 /// The cancellation stage: what it does to the microphone track, and what it
 /// tells the user when it cannot.
 ///
-/// Driven with a stub canceller rather than the real model. The model is a
-/// separate ~3 MB download that no CI job has, and what is under test here is
-/// the stage's decisions — replace or keep, warn or stay quiet — not the
-/// quality of the audio, which `LocalVQECancellerFileTests` covers.
+/// Driven with `StubCanceller` rather than the real model; see there for why.
 @MainActor
 final class PipelineEchoCancellationTests: XCTestCase {
-    private struct StubCanceller: EchoCancelling {
-        let report: EchoCancellationReport
-        let failure: (any Error)?
-        /// Written by the stub so a test can tell "produced silence" from
-        /// "never ran", which an assertion on the file's contents alone cannot.
-        let marker: Float
-        let writesOutput: Bool
-
-        init(
-            medianReduction: Float,
-            failure: (any Error)? = nil,
-            marker: Float = 0.25,
-            quietWindows: Int = 20,
-            writesOutput: Bool = true,
-        ) {
-            self.writesOutput = writesOutput
-            // Both populations, because the self-check is a difference: the
-            // windows carrying echo AND the ones carrying none, which a healthy
-            // run leaves alone. A stub that emitted only the first would be
-            // asking a question the check refuses to answer.
-            report = EchoCancellationReport(
-                windows: (0 ..< 30).map { _ in
-                    EchoCancellationWindow(referenceDBFS: -20, reductionDb: medianReduction)
-                } + (0 ..< quietWindows).map { _ in
-                    EchoCancellationWindow(referenceDBFS: -80, reductionDb: 0.2)
-                },
-            )
-            self.failure = failure
-            self.marker = marker
-        }
-
-        func cancelEcho(
-            micURL: URL, referenceURL _: URL, outputURL: URL, referenceLead _: TimeInterval,
-        ) throws -> EchoCancellationReport {
-            if let failure { throw failure }
-            guard writesOutput else { return report }
-            let samples = try AudioMixer.loadAudioFileAsFloat32(url: micURL)
-            try AudioMixer.saveWAV(
-                samples: samples.map { _ in marker },
-                sampleRate: AudioConstants.targetSampleRate,
-                url: outputURL,
-            )
-            return report
-        }
-    }
-
     private var dir = FileManager.default.temporaryDirectory
 
     @MainActor
@@ -76,30 +27,11 @@ final class PipelineEchoCancellationTests: XCTestCase {
     }
 
     private func makeTracks() throws -> (app: URL, mic: URL) {
-        let app = dir.appendingPathComponent("app_16k.wav")
-        let mic = dir.appendingPathComponent("mic_16k.wav")
-        try AudioMixer.saveWAV(
-            samples: EchoTestAudio.speechLike(seconds: 2, seed: 1),
-            sampleRate: AudioConstants.targetSampleRate, url: app,
-        )
-        try AudioMixer.saveWAV(
-            samples: EchoTestAudio.speechLike(seconds: 2, seed: 2),
-            sampleRate: AudioConstants.targetSampleRate, url: mic,
-        )
-        return (app, mic)
+        try EchoTestAudio.writeTrackPair(into: dir)
     }
 
     private func makeQueue(_ canceller: StubCanceller?) -> (PipelineQueue, UUID) {
-        // A factory that returns nil is "no model could be resolved", which is a
-        // different branch from a canceller that fails once it runs. Bound to a
-        // local first: as a trailing argument the formatter detaches it from
-        // the call.
-        let factory: () -> (any EchoCancelling)? = { canceller }
-        let queue = PipelineQueue(
-            logDir: dir.appendingPathComponent("logs"),
-            echoCancellationEnabled: { true },
-            echoCancellerFactory: factory,
-        )
+        let queue = PipelineQueue.withEchoCanceller(canceller, logDir: dir.appendingPathComponent("logs"))
         let job = PipelineJob(
             meetingTitle: "meeting", appName: "File",
             mixPath: nil, appPath: nil, micPath: nil, micDelay: 0,
