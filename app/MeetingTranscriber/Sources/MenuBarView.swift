@@ -227,7 +227,7 @@ struct MenuBarView: View {
 
     @ViewBuilder private var protocolActions: some View {
         let completedTarget = JobOpenTarget.resolve(
-            for: pipelineQueue.completedJobs.last(where: \.hasCompletedNotionExport),
+            for: pipelineQueue.completedJobs.last,
             preferNotion: notionExportEnabled,
         )
         let target = completedTarget ?? status?.protocolPath.map { path in
