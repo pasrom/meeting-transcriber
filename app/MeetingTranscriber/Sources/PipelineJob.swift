@@ -92,6 +92,16 @@ struct PipelineJob: Identifiable, Codable {
     /// move had just emptied, so the snapshot restore discarded it although the
     /// audio was sitting in the output folder, and the ledger recorded a path
     /// that no longer existed.
+    /// The mix file, the one a duplicate run would read first, as a list.
+    var mixPaths: [URL] {
+        [mixPath].compactMap(\.self)
+    }
+
+    /// Every audio file the job references.
+    var audioPaths: [URL] {
+        [mixPath, appPath, micPath].compactMap(\.self)
+    }
+
     mutating func recordRelocatedAudio(_ paths: RelocatedAudioPaths) {
         mixPath = paths.mix
         appPath = paths.app

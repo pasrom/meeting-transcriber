@@ -117,6 +117,17 @@ extension PipelineQueue {
         )
     }
 
+    /// Throw `CancellationError` once a job's work has been cancelled or the
+    /// job is no longer in the queue. A cancelled job writes nothing further,
+    /// and this is the check that holds the writes back: run before each write
+    /// that follows an await. Cancelling the task alone does not, because a
+    /// step that ignores cancellation (a model call that cannot be
+    /// interrupted) still returns, and everything after it would then write
+    /// for a job that is gone.
+    func ensureStillQueued(_ jobID: UUID) throws(CancellationError) {
+        guard isStillQueued(jobID) else { throw CancellationError() }
+    }
+
     /// Put the transcript on disk as soon as transcription produced it.
     ///
     /// Diarization is where this pipeline dies hardest, and a model that crashes
@@ -185,10 +196,27 @@ extension PipelineQueue {
         if continues { triggerProcessing() }
     }
 
+    /// Run one stage of a job's pipeline run under the cancel rule: not at all
+    /// once the job's work is cancelled or the job is gone, and its output
+    /// dropped when that happened while the stage ran. A stage that ignores
+    /// cancellation (an engine or model call that cannot be interrupted)
+    /// still returns, and the next stage would otherwise write for a job that
+    /// is gone. Writes that follow an await inside a stage are guarded where
+    /// they are made: the protocol save, and the naming session's writers.
+    private func stage<T>(_ jobID: UUID, _ body: () async throws -> T) async throws -> T {
+        try ensureStillQueued(jobID)
+        let output = try await body()
+        try ensureStillQueued(jobID)
+        return output
+    }
+
     /// One claimed job's run. Returns whether the queue moves on to the next
     /// waiting job, which every exit does except a queue missing its
     /// dependencies.
     private func runPipeline(_ job: PipelineJob) async -> Bool {
+        // Cancelled between the claim and this task's first turn: no resume,
+        // no work directory, no transcription for a job that is gone.
+        guard isStillQueued(job.id) else { return true }
         // A job the restore found interrupted while its protocol was being
         // generated already has its transcript on disk. Attempted under the
         // claim, like every other exit here, and ahead of the dependency guard
@@ -217,7 +245,9 @@ extension PipelineQueue {
             try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: workDir) }
 
-            let transcription = try await transcribe(ctx, engine: engine, workDir: workDir)
+            let transcription = try await stage(ctx.jobID) {
+                try await transcribe(ctx, engine: engine, workDir: workDir)
+            }
 
             // The transcript WITHOUT its recording-level note. A dropped track
             // renders that one line even when the surviving track produced no
@@ -240,22 +270,28 @@ extension PipelineQueue {
 
             saveTranscriptDraft(transcription.transcript, ctx: ctx, outputDir: outputDir)
 
-            let finalTranscript = await diarize(
-                transcription, ctx: ctx, engine: engine,
-                workDir: workDir, outputDir: outputDir,
-            )
+            let finalTranscript = try await stage(ctx.jobID) {
+                try await diarize(
+                    transcription, ctx: ctx, engine: engine,
+                    workDir: workDir, outputDir: outputDir,
+                )
+            }
 
-            try await generateAndSaveProtocol(
-                finalTranscript: finalTranscript, transcription: transcription,
-                ctx: ctx, workDir: workDir, outputDir: outputDir,
-            )
+            try await stage(ctx.jobID) {
+                try await generateAndSaveProtocol(
+                    finalTranscript: finalTranscript, transcription: transcription,
+                    ctx: ctx, workDir: workDir, outputDir: outputDir,
+                )
+            }
         } catch {
             // This run's task is cancelled only when its own job is cancelled
-            // or removed, so the task's flag is the record of it. A stage
-            // stopped by the cancellation may still report a failure of its
-            // own rather than `CancellationError`, which must not read as a
-            // pipeline error. The job is already gone either way.
-            if error is CancellationError || Task.isCancelled {
+            // or removed, so the task's flag and the job's absence are the
+            // record of it, whatever the error says: a stage stopped by the
+            // cancellation may report a failure of its own rather than
+            // `CancellationError`. Conversely a `CancellationError` for a job
+            // still here is a failure, or the job would sit in its working
+            // state for good.
+            if !isStillQueued(ctx.jobID) {
                 logger.info("Job \(ctx.jobID) cancelled")
             } else {
                 logger.error("Pipeline error for job \(ctx.jobID): \(error.localizedDescription, privacy: .public)")
@@ -398,6 +434,9 @@ extension PipelineQueue {
         let appSegments = viability == .micOnly
             ? []
             : try await engine.transcribeSegments(audioPath: app16k)
+        // An engine that ignores cancellation still returns; the second track
+        // is not transcribed for a job that is gone.
+        try ensureStillQueued(ctx.jobID)
         let micSegments = viability == .appOnly
             ? []
             : try await engine.transcribeSegments(audioPath: mic16k)
@@ -501,8 +540,10 @@ extension PipelineQueue {
         let segCount = cachedSegments?.count ?? 0
         let totalSecs = cachedSegments?.last?.end ?? 0
         // Stash for stage-timing RTF: diarization/protocol of this job process
-        // the same audio length.
-        jobAudioSeconds[ctx.jobID] = totalSecs
+        // the same audio length. Not for a job cancelled while it was
+        // transcribed: removing it cleared this bookkeeping, and writing it
+        // back would leave an entry nothing removes again.
+        if isStillQueued(ctx.jobID) { jobAudioSeconds[ctx.jobID] = totalSecs }
         logger.info(
             "[\(ctx.shortID, privacy: .public)] transcription_complete segments=\(segCount, privacy: .public) duration=\(totalSecs, privacy: .public)s",
         )
@@ -536,15 +577,18 @@ extension PipelineQueue {
     /// diarization is disabled, unavailable, or fails. Drives the speaker-naming
     /// dialog loop and persists naming data + recognition forensics as side
     /// effects.
-    /// Cannot throw, and that is the point: every failure inside is caught and
-    /// downgraded to a warning, so a diarization problem costs the speaker
-    /// labels and never the transcript. Keeping that in the signature means the
-    /// compiler, not a comment, refuses the next throwing call added outside the
-    /// block.
+    /// Throws only `CancellationError`, and that is the point: every failure
+    /// inside is caught and downgraded to a warning, so a diarization problem
+    /// costs the speaker labels and never the transcript. A cancellation is not
+    /// a diarization problem. Downgraded with the rest, it carried a cancelled
+    /// run on into stage 3, which saved the transcript, moved the recording
+    /// and asked for a protocol for a job that was gone. The typed throw keeps
+    /// what the old non-throwing signature gave: the compiler, not a comment,
+    /// refuses any other error escaping past the block.
     private func diarize(
         _ transcription: TranscriptionOutput, ctx: JobContext,
         engine: any TranscribingEngine, workDir: URL, outputDir: URL,
-    ) async -> String {
+    ) async throws(CancellationError) -> String {
         var finalTranscript = transcription.transcript
 
         guard diarizeEnabled, let diarizationFactory else { return finalTranscript }
@@ -605,6 +649,11 @@ extension PipelineQueue {
             let segCount = run.combined?.segments.count ?? 0
             logger.info("[\(ctx.shortID, privacy: .public)] diarization_complete segments=\(segCount, privacy: .public)")
         } catch {
+            // A cancelled job ends the run here, whatever the diarizer reported:
+            // one stopped by the cancellation may throw an error of its own.
+            // Nothing failed, and the job is gone. Any other error, including a
+            // stray `CancellationError` for a job still ours, costs the labels.
+            guard isStillQueued(ctx.jobID) else { throw CancellationError() }
             logger.warning("[\(ctx.shortID, privacy: .public)] diarization_failed error=\(error.localizedDescription, privacy: .public)")
             addWarning(id: ctx.jobID, "Diarization failed — speakers not identified")
             // Continue with original transcript
@@ -900,7 +949,7 @@ extension PipelineQueue {
         // the current auto-names). Saves an LLM call we'd otherwise
         // have to redo.
         if naming.speakerNamingDataByJob[ctx.jobID] == nil {
-            await generateProtocol(
+            try await generateProtocol(
                 jobID: ctx.jobID, transcript: finalTranscript, title: ctx.title,
                 protocolsDir: protocolsDir,
             )
@@ -933,21 +982,26 @@ extension PipelineQueue {
     /// Used by: main pipeline (if no naming pending) and the session's
     /// reapplySpeakerNames / skipped / stale paths. Internal (not private)
     /// because it is a `SpeakerNamingSessionDelegate` witness.
+    ///
+    /// Throws only `CancellationError`: when the job was cancelled or removed
+    /// before the call, during it, or while the model was writing. Nothing is
+    /// generated or saved for it then, and nothing is reported as a failure.
     func generateProtocol(
         jobID: UUID, transcript: String, title: String, protocolsDir: URL,
-    ) async {
-        guard let protocolGeneratorFactory, let generator = protocolGeneratorFactory() else {
-            return
-        }
+    ) async throws(CancellationError) {
+        // No generator and no LLM call for a job that is already gone.
+        try ensureStillQueued(jobID)
+        guard let job = job(withID: jobID),
+              let protocolGeneratorFactory, let generator = protocolGeneratorFactory()
+        else { return }
         let shortID = PipelineJob.shortID(for: jobID)
         // Reuse the basename fixed when the transcript was saved (persisted as
         // namingSlug), so the .md shares the .txt/audio stem exactly. This runs
         // only after a transcript exists, so namingSlug is set on every real
-        // path; the fallback just keeps generation working if the job is gone.
-        let job = jobs.first { $0.id == jobID }
-        let initialBasename = job?.namingSlug
+        // path; the fallback only keeps generation working without one.
+        let initialBasename = job.namingSlug
             ?? Self.namingSlug(title: title, jobID: jobID, startTime: Date())
-        let meetingStartTime = job?.meetingStartTime
+        let meetingStartTime = job.meetingStartTime
         updateJobState(id: jobID, to: .generatingProtocol)
         let protocolMD: String
         do {
@@ -961,6 +1015,10 @@ extension PipelineQueue {
                 meetingStartTime: meetingStartTime,
             )
         } catch {
+            // Cancelled while the model was writing. A generator stopped this
+            // way may report an error of its own (the CLI one does), and either
+            // way it is no failure, and there is no job left to warn.
+            try ensureStillQueued(jobID)
             // Every ProtocolGenerating error's message is now guaranteed
             // content-free: ClaudeCLIProtocolGenerator sources cliFailed's
             // text from the stream-json result event (never generated
@@ -975,13 +1033,15 @@ extension PipelineQueue {
             return
         }
 
+        // A job cancelled or removed during the call gets no protocol file and
+        // no renamed artifacts: a generator that ignores cancellation still
+        // returns its text. Checked here, after the await, because the job's
+        // own output options are only answered while it is in the queue.
+        try ensureStillQueued(jobID)
+
         let outputOptions = transcriptOutputOptions(forJobID: jobID)
         var basename = initialBasename
-        // A job cancelled or removed during the LLM call is gone, and
-        // `transcriptOutputOptions` then answers from the queue-wide setting
-        // rather than the job's own: its files are not ours to rename.
         if outputOptions.useAITitleForFilenames,
-           jobs.contains(where: { $0.id == jobID }),
            let titleSlug = ProtocolGenerator.extractTitle(from: protocolMD).flatMap(ProtocolGenerator.toSnakeCase) {
             basename = renameJobArtifacts(
                 jobID: jobID, from: initialBasename, titleSlug: titleSlug, protocolsDir: protocolsDir,
@@ -1128,12 +1188,97 @@ extension PipelineQueue {
 
     // MARK: - Audio File Copy
 
+    /// Hand a cancelled job's recording to the output folder, and nothing else
+    /// of it: no transcript, sidecars, protocol or naming data.
+    ///
+    /// The recording is the user's data, not something derived from it. Left
+    /// in the staging folder it would sit where nobody looks, hundreds of MB of
+    /// private audio per cancel, with nothing that ever cleans it up: the ledger
+    /// marks it processed at the cancel. The same ownership rule as a finished job
+    /// (`AudioPersistencePolicy`), so a file the user picked for import is
+    /// never touched, and a recording stage 3 already moved stays where it is.
+    ///
+    /// Left alone while another job of this queue points at the same files,
+    /// a failed one included: a failed job keeps its recording for Retry, and
+    /// a recovered orphan or a re-import can share the staged file.
+    ///
+    /// Best effort. The ledger does not wait for it: `cancelJob` marks the
+    /// recording processed straight away, because orphan recovery does not
+    /// merely offer an unmarked recording, it enqueues and processes it, and a
+    /// cancelled meeting must not come back as a transcript and protocol. A
+    /// move that fails or is cut short by a quit leaves the recording in
+    /// staging, marked, never deleted and never processed again; a half copy
+    /// never takes a recording's name (`moveIntoPlace`).
+    ///
+    /// Off the main actor, because Cancel is a click: with the output folder
+    /// on another volume the move is a copy of hundreds of MB. The task holds
+    /// the queue, and with it the output folder's security scope, until the
+    /// move is done.
+    func relocateRecordingOfCancelledJob(_ job: PipelineJob) {
+        guard let outputDir else { return }
+        let destination = outputDir.appendingPathComponent("recordings")
+        let staged = job.audioPaths.filter { path in
+            AudioPersistencePolicy.action(source: path, stagingDir: stagingDir, destinationDir: destination) == .move
+        }
+        guard !staged.isEmpty, !otherJobHoldsAudio(of: job, in: \.audioPaths, includingFailed: true) else {
+            return
+        }
+        let ctx = Self.makeContext(for: job)
+        let staging = stagingDir
+        lastRecordingRelocation = Task.detached(priority: .utility) { [self] in
+            withExtendedLifetime(self) {
+                _ = Self.persistAudioToOutput(ctx: ctx, outputDir: destination, stagingDir: staging)
+                if staged.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+                    logger.warning("[\(ctx.shortID, privacy: .public)] cancelled_recording_left_in_staging")
+                }
+            }
+        }
+    }
+
+    /// Move `source` to `destination` so that `destination` only ever names a
+    /// complete file. On one volume a move is a rename, which is atomic. Across
+    /// volumes it is a copy, so the copy is built under a hidden `.partial`
+    /// name no reader takes for a recording, renamed into place once it is
+    /// complete, and only then is the source removed: a copy that fails leaves
+    /// the source untouched and nothing in the destination folder, and one cut
+    /// short by a quit leaves at worst a hidden `.partial`, which the next
+    /// attempt replaces. `asIfAcrossVolumes` takes the copy path regardless, for tests.
+    nonisolated static func moveIntoPlace(_ source: URL, to destination: URL, asIfAcrossVolumes: Bool = false) throws {
+        let fm = FileManager.default
+        let crossing = asIfAcrossVolumes || !onSameVolume(source, destination.deletingLastPathComponent())
+        guard crossing else {
+            if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+            try fm.moveItem(at: source, to: destination)
+            return
+        }
+        let partial = destination.deletingLastPathComponent()
+            .appendingPathComponent(".\(destination.lastPathComponent).partial")
+        try? fm.removeItem(at: partial)
+        do {
+            try fm.copyItem(at: source, to: partial)
+        } catch {
+            try? fm.removeItem(at: partial)
+            throw error
+        }
+        if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+        try fm.moveItem(at: partial, to: destination)
+        try fm.removeItem(at: source)
+    }
+
+    nonisolated private static func onSameVolume(_ lhs: URL, _ rhs: URL) -> Bool {
+        let key = URLResourceKey.volumeIdentifierKey
+        guard let left = try? lhs.resourceValues(forKeys: [key]).volumeIdentifier,
+              let right = try? rhs.resourceValues(forKeys: [key]).volumeIdentifier
+        else { return false }
+        return left.isEqual(right)
+    }
+
     /// Hand the app's own staging recordings over to the protocol output
     /// directory, per `AudioPersistencePolicy`. Nil `mixPath` (paired imports
     /// without a `_mix.wav` source) → mix slot is skipped, no persistent mix is
     /// written. `outputDir` here is `<root>/recordings`, reachable because the
     /// queue holds the security scope on the root.
-    private static func persistAudioToOutput(
+    nonisolated private static func persistAudioToOutput(
         ctx: JobContext, outputDir: URL, stagingDir: URL,
     ) -> RelocatedAudioPaths {
         let (mixPath, appPath, micPath) = (ctx.mixPath, ctx.appPath, ctx.micPath)
@@ -1188,8 +1333,7 @@ extension PipelineQueue {
                 return fm.fileExists(atPath: dst.path) ? dst : src
             }
             do {
-                if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
-                try fm.moveItem(at: src, to: dst)
+                try moveIntoPlace(src, to: dst)
                 logger.info("Audio moved: \(name, privacy: .private)")
                 return dst
             } catch {

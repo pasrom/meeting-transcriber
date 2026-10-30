@@ -2541,7 +2541,7 @@ final class PipelineQueueTests: XCTestCase {
         try write("sibling protocol", to: protocolsDir.appendingPathComponent("sprint_planning_retro.md"))
 
         gen.headingTitle = "Sprint Review"
-        await q.generateProtocol(jobID: job.id, transcript: "Hello world", title: "Google Chrome", protocolsDir: protocolsDir)
+        try await q.generateProtocol(jobID: job.id, transcript: "Hello world", title: "Google Chrome", protocolsDir: protocolsDir)
 
         for name in siblings {
             XCTAssertEqual(
@@ -2605,11 +2605,13 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: protocolPath.path))
     }
 
-    /// A job cancelled while the model is still writing is gone from the queue;
-    /// its files are not renamed behind its back.
-    func testAJobCancelledDuringProtocolGenerationIsNotRenamed() async throws {
-        // The queue-wide setting is on: it is what a vanished job's options fall
-        // back to, and the only way the guard against renaming it is reached.
+    /// A job cancelled while the model is still writing is gone from the queue,
+    /// and a cancelled job writes nothing further: its files are not renamed
+    /// behind its back, and the protocol the model then returns is not saved.
+    func testAJobCancelledDuringProtocolGenerationIsNotRenamedOrGivenAProtocol() async throws {
+        // The queue-wide setting is on, so a rename would happen if anything
+        // after the model call still ran for the vanished job: a vanished job's
+        // options fall back to it.
         let (q, gen) = makeStraightThroughQueue(stagingDir: tmpDir, useAITitleForFilenames: true)
         gen.headingTitle = "Sprint Planning"
         let job = try makeAITitleJob()
@@ -2620,6 +2622,7 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertNil(q.jobs.first { $0.id == job.id }, "precondition: the job was cancelled")
         XCTAssertFalse(names(in: protocolsDir).contains { $0.hasPrefix("sprint_planning") }, "\(names(in: protocolsDir))")
         XCTAssertFalse(names(in: recordingsDir).contains { $0.hasPrefix("sprint_planning") }, "\(names(in: recordingsDir))")
+        XCTAssertFalse(names(in: protocolsDir).contains { $0.hasSuffix(".md") }, "\(names(in: protocolsDir))")
     }
 
     /// The user's own file, picked for import, is neither moved nor repointed;

@@ -28,6 +28,64 @@ extension SpeakerNamingSession {
         lateWork.removeValue(forKey: jobID)?.values.forEach { $0.cancel() }
     }
 
+    // MARK: - Protocol for accepted auto-names
+
+    /// Takes the delegate as a strong parameter (captured by the spawning Task
+    /// in `acceptAutoNames`) so the queue stays alive across the LLM-generation
+    /// await; see `delegate` for the keep-alive rationale. Internal (not
+    /// private) because `acceptAutoNames` in SpeakerNamingSession.swift starts
+    /// it.
+    func generateProtocolForExistingJob(
+        jobID: UUID, delegate: any SpeakerNamingSessionDelegate,
+    ) async {
+        // A job that is gone needs no transition. Anything else must reach a
+        // terminal state on every exit: `acceptAutoNames` has already deleted
+        // the naming sidecars by the time we get here, so bailing out without a
+        // transition would strand the job in `.speakerNamingPending` with
+        // nothing left to name — the naming window would keep reopening on an
+        // empty placeholder, and the next launch would drop the job with no
+        // protocol ever written.
+        guard let job = delegate.job(withID: jobID) else { return }
+        guard let transcriptPath = job.transcriptPath,
+              let transcript = try? String(contentsOf: transcriptPath, encoding: .utf8)
+        else {
+            // Reachable when the transcript was moved or deleted between the
+            // pipeline writing it and the user resolving naming: the caller's
+            // readiness probe only checks that `transcriptPath` is non-nil.
+            delegate.addWarning(id: jobID, "Protocol not generated — transcript file is missing")
+            finishIfUnresolved(jobID: jobID, delegate: delegate)
+            return
+        }
+        do {
+            try await delegate.generateProtocol(
+                jobID: jobID,
+                transcript: transcript,
+                title: job.meetingTitle,
+                // Beside the transcript it is made from, which is the rule the
+                // protocol-only resume uses too.
+                protocolsDir: transcriptPath.deletingLastPathComponent(),
+            )
+        } catch {
+            // Cancelled with its job, which is then gone and needs no
+            // transition.
+            return
+        }
+        finishIfUnresolved(jobID: jobID, delegate: delegate)
+    }
+
+    /// Move a job to `.done` unless something already advanced it. Accepts
+    /// `.speakerNamingPending` as well as `.generatingProtocol` because the
+    /// generation call can return before its own `.generatingProtocol`
+    /// transition — it guards on the protocol factory, which can go nil between
+    /// the readiness probe and the call. Both shapes leave the job pending, and
+    /// pending with its sidecars deleted is unrecoverable.
+    private func finishIfUnresolved(jobID: UUID, delegate: any SpeakerNamingSessionDelegate) {
+        let state = delegate.job(withID: jobID)?.state
+        if state == .generatingProtocol || state == .speakerNamingPending {
+            delegate.updateJobState(id: jobID, to: .done)
+        }
+    }
+
     // MARK: - Late re-apply speaker names
 
     /// Late-confirm path: read the saved transcript, replace generic speaker
@@ -106,7 +164,7 @@ extension SpeakerNamingSession {
                 // the paths that never reach this line.
                 removeNamingData(jobID: jobID, slug: slug)
 
-                await delegate.generateProtocol(
+                try await delegate.generateProtocol(
                     jobID: jobID,
                     transcript: transcript,
                     title: job.meetingTitle,
@@ -116,6 +174,10 @@ extension SpeakerNamingSession {
                     // repoint is not where this `.txt` is.
                     protocolsDir: transcriptPath.deletingLastPathComponent(),
                 )
+            } catch is CancellationError {
+                // Cancelled with its job: nothing failed, and there is no job
+                // left to finish.
+                return
             } catch {
                 logger.error("Failed to re-apply speaker names: \(error.localizedDescription, privacy: .public)")
             }

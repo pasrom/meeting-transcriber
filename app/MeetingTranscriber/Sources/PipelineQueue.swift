@@ -199,6 +199,11 @@ class PipelineQueue {
     /// Internal (not private) because `processNext` in PipelineQueue+Stages.swift
     /// fills it.
     @ObservationIgnored var pipelineRuns: [UUID: Task<Bool, Never>] = [:]
+    /// The move of the last cancelled job's recording, which runs off the main
+    /// actor. Tests await it; nothing else needs to.
+    /// Internal (not private) because `relocateRecordingOfCancelledJob` in
+    /// PipelineQueue+Stages.swift sets it.
+    @ObservationIgnored var lastRecordingRelocation: Task<Void, Never>?
 
     /// Called when a job completes (success or error) — for notifications
     var onJobStateChange: ((PipelineJob, JobState, JobState) -> Void)?
@@ -689,8 +694,15 @@ class PipelineQueue {
     /// `removeJob`: its naming data and sidecars go, its stage bookkeeping is
     /// forgotten, and its own work is stopped (`cancelWork`), whatever state
     /// it is in.
+    ///
+    /// The one thing of the job that is kept is its recording, moved out of
+    /// staging into the output folder (`relocateRecordingOfCancelledJob`).
+    /// The ledger mark above does not wait for that move: orphan recovery
+    /// enqueues and processes an unmarked recording, so one still in staging
+    /// while the move runs, or after it failed, has to be marked already.
     func cancelJob(id: UUID) {
-        guard let state = job(withID: id)?.state, state != .done, state != .error else { return }
+        guard let job = job(withID: id), job.state != .done, job.state != .error else { return }
+        relocateRecordingOfCancelledJob(job)
         removeJob(id: id)
     }
 

@@ -44,7 +44,7 @@ final class PipelineQueueProtocolSaveTests: XCTestCase {
         )
         queue.insertJobForTesting(job)
 
-        await queue.generateProtocol(
+        try await queue.generateProtocol(
             jobID: job.id, transcript: "[00:00] Speaker A: Hello", title: job.meetingTitle, protocolsDir: protocols,
         )
 

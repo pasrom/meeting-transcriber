@@ -246,11 +246,16 @@ extension PipelineQueue {
             jobID: job.id, event: "resumed_protocol_only",
             from: .waiting, to: .generatingProtocol,
         )
-        await generateProtocol(
-            jobID: job.id, transcript: transcript, title: job.meetingTitle,
-            protocolsDir: transcriptPath.deletingLastPathComponent(),
-        )
-        updateJobState(id: job.id, to: .done)
+        do {
+            try await generateProtocol(
+                jobID: job.id, transcript: transcript, title: job.meetingTitle,
+                protocolsDir: transcriptPath.deletingLastPathComponent(),
+            )
+            updateJobState(id: job.id, to: .done)
+        } catch {
+            // Cancelled with its job: nothing is left to finish, and still
+            // `true`, since a full run of a job that is gone would be worse.
+        }
         return true
     }
 
@@ -423,12 +428,25 @@ extension PipelineQueue {
     /// Whether a run is claimed for this job or its mix file on any queue, or
     /// another job in this one that has not failed holds the same mix file.
     /// Paired imports without a mix file are compared by the claim alone.
+    /// A failed holder does not count: it processes nothing any more, and this
+    /// job is the way back to the recording.
     private func audioIsHeldElsewhere(for job: PipelineJob) -> Bool {
-        if inFlightRuns.isInFlight(job) { return true }
-        guard let key = job.mixPath?.standardizedFileURL.path else { return false }
+        inFlightRuns.isInFlight(job) || otherJobHoldsAudio(of: job, in: \.mixPaths, includingFailed: false)
+    }
+
+    /// Whether a job of this queue other than `job` points at one of `job`'s
+    /// audio files, as `files` names them. `includingFailed` counts a failed
+    /// job too: it keeps its recording for Retry. The one rule behind
+    /// `audioIsHeldElsewhere` (Retry) and the move of a cancelled job's
+    /// recording; each says which files and which holders count.
+    func otherJobHoldsAudio(
+        of job: PipelineJob, in files: KeyPath<PipelineJob, [URL]>, includingFailed: Bool,
+    ) -> Bool {
+        let mine = Set(job[keyPath: files].map(\.standardizedFileURL.path))
+        guard !mine.isEmpty else { return false }
         return jobs.contains { other in
-            other.id != job.id && other.state != .error
-                && other.mixPath?.standardizedFileURL.path == key
+            other.id != job.id && (includingFailed || other.state != .error)
+                && other[keyPath: files].contains { mine.contains($0.standardizedFileURL.path) }
         }
     }
 

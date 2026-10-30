@@ -138,54 +138,6 @@ final class PipelineQueueSecurityScopeTests: XCTestCase {
         }
     }
 
-    /// A protocol generator that parks inside `generate` until released, so a
-    /// test can act while a job is mid-run.
-    private final class GatedProtocolGen: ProtocolGenerating, @unchecked Sendable {
-        private let lock = NSLock()
-        private var entered: CheckedContinuation<Void, Never>?
-        private var hasEntered = false
-        private var releaseContinuation: CheckedContinuation<Void, Never>?
-        private var released = false
-
-        func generate(transcript _: String, title _: String, diarized _: Bool, meetingStartTime _: Date?) async -> String {
-            let waiter: CheckedContinuation<Void, Never>? = lock.withLock {
-                hasEntered = true
-                defer { entered = nil }
-                return entered
-            }
-            waiter?.resume()
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                let resumeNow: Bool = lock.withLock {
-                    if released { return true }
-                    releaseContinuation = continuation
-                    return false
-                }
-                if resumeNow { continuation.resume() }
-            }
-            return "# Protocol"
-        }
-
-        func waitUntilEntered() async {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                let resumeNow: Bool = lock.withLock {
-                    if hasEntered { return true }
-                    entered = continuation
-                    return false
-                }
-                if resumeNow { continuation.resume() }
-            }
-        }
-
-        func release() {
-            let waiter: CheckedContinuation<Void, Never>? = lock.withLock {
-                released = true
-                defer { releaseContinuation = nil }
-                return releaseContinuation
-            }
-            waiter?.resume()
-        }
-    }
-
     // MARK: - Fixtures
 
     /// The output folder. Stands in for the URL the bookmark resolved to; the
@@ -320,7 +272,8 @@ final class PipelineQueueSecurityScopeTests: XCTestCase {
         let root = try makeRoot()
         let staging = try makeStaging()
         let recorder = ScopeRecorder(root: root)
-        let gate = GatedProtocolGen()
+        let gate = ParkingProtocolGen()
+        gate.parkNextCall()
         var queue: PipelineQueue? = makeQueue(recorder, staging: staging, protocolGen: gate)
         weak let weakQueue = queue
         let job = try PipelineJob(
@@ -328,14 +281,14 @@ final class PipelineQueueSecurityScopeTests: XCTestCase {
             mixPath: createTestAudioFile(in: staging), appPath: nil, micPath: nil, micDelay: 0,
         )
         queue?.enqueue(job)
-        await gate.waitUntilEntered()
+        await waitFor(gate.isParked, timeout: .seconds(5))
         queue = nil
 
         XCTAssertNotNil(weakQueue, "the running job keeps its queue alive")
         XCTAssertEqual(recorder.stops.count, 0, "the scope was closed while the job was still running")
         XCTAssertTrue(recorder.isOpen)
 
-        gate.release()
+        await gate.gate.open()
         for _ in 0 ..< 500 where weakQueue != nil {
             try? await Task.sleep(for: .milliseconds(10))
         }
