@@ -1182,7 +1182,7 @@ final class PipelineQueueTests: XCTestCase {
             logDir: ownDir,
             // Default keeps sources outside staging, i.e. user-picked imports
             // the pipeline leaves alone; pass one to exercise the relocation.
-            stagingDir: stagingDir ?? AppPaths.recordingsDir,
+            stagingDir: stagingDir ?? tmpDir.appendingPathComponent("unused-staging", isDirectory: true),
             diarizeEnabled: true,
             numSpeakers: 0,
             micLabel: "Me",
@@ -1785,7 +1785,7 @@ final class PipelineQueueTests: XCTestCase {
             logDir: tmpDir,
             // Default keeps sources outside staging, i.e. they count as
             // user-picked imports; pass tmpDir to exercise the hand-off instead.
-            stagingDir: stagingDir ?? AppPaths.recordingsDir,
+            stagingDir: stagingDir ?? tmpDir.appendingPathComponent("unused-staging", isDirectory: true),
             diarizeEnabled: true,
             numSpeakers: 0,
             micLabel: micLabel,
