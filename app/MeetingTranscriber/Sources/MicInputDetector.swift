@@ -87,9 +87,16 @@ class MicInputDetector: MeetingDetecting {
 
     /// The `defaultPatterns` subset selected by the user's "Apps to Watch"
     /// toggles — same contract as `PowerAssertionDetector.patterns(watching:)`.
+    /// Custom bundle IDs a selected built-in already matches are dropped, so
+    /// one process is never watched under two patterns; with that built-in
+    /// deselected the custom entry applies again.
     static func patterns(watching watchedAppNames: [String], customBundleIDs: [String] = []) -> [MicPattern] {
         let watched = Set(watchedAppNames)
-        return defaultPatterns.filter { watched.contains($0.appName) } + customBundleIDs.map(customPattern(bundleID:))
+        let builtIns = defaultPatterns.filter { watched.contains($0.appName) }
+        let customs = customBundleIDs
+            .filter { id in !builtIns.contains { $0.matches(bundleID: id) } }
+            .map(customPattern(bundleID:))
+        return builtIns + customs
     }
 
     static func customPattern(bundleID: String) -> MicPattern {

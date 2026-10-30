@@ -151,7 +151,7 @@ struct GeneralSettingsView: View {
             return "\(name) can't watch itself."
         }
         let executable = info["CFBundleExecutable"] as? String
-        let builtInName = MicInputDetector.defaultPatterns.first { $0.bundleIDs.contains(bundleID) }?.appName
+        let builtInName = MicInputDetector.defaultPatterns.first { $0.matches(bundleID: bundleID) }?.appName
             ?? PowerAssertionDetector.defaultPatterns.first { executable.map($0.processNames.contains) ?? false }?.appName
         if let builtInName {
             return "\(builtInName) has its own toggle above."
