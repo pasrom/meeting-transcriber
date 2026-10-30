@@ -203,6 +203,11 @@ class SpeakerMatcher {
     ///   (max `maxRecentSamples`) regardless of duration, so a borderline
     ///   centroid match can be rescued by a fallback sample distance.
     /// - `lastUsed` / `useCount` are bumped on every confirmation.
+    /// - An embedding with a NaN/Inf value (FluidAudio emits these for short
+    ///   or silent segments) is skipped like a missing one. Folded into the
+    ///   running-mean centroid it would turn it NaN for good, and the plain
+    ///   JSON encoder cannot write it, which used to drop the other labels of
+    ///   the same confirmation too.
     func updateDB(
         mapping: [String: String],
         embeddings: [String: [Float]],
@@ -212,6 +217,10 @@ class SpeakerMatcher {
         mutateDB { stored in
             for (label, name) in mapping {
                 guard name != label, let embedding = embeddings[label] else { continue }
+                guard embedding.allSatisfy(\.isFinite) else {
+                    logger.warning("Skipping non-finite embedding for \(label, privacy: .public)")
+                    continue
+                }
                 let duration = speakingTimes[label] ?? 0
 
                 if let idx = stored.firstIndex(where: { $0.name == name }) {
