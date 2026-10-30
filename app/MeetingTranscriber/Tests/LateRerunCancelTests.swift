@@ -188,6 +188,59 @@ final class LateRerunCancelTests: XCTestCase {
         XCTAssertEqual(namingSidecars(), [], "re-run wrote a naming sidecar for a cancelled job")
     }
 
+    /// A cancelled dual-track diarization stops after the app track instead of
+    /// diarizing the mic track in full for a job that is gone. Cancelled before
+    /// it starts, so the app track runs while the cancellation is already
+    /// pending, as it would be if the cancel arrived mid-track.
+    func testACancelledDualTrackDiarizationSkipsTheMicTrack() async {
+        let queue = PipelineQueue(logDir: tmpDir)
+        let diarizer = MockDiarization()
+        let tracks = (
+            app: tmpDir.appendingPathComponent("app.wav"),
+            mic: tmpDir.appendingPathComponent("mic.wav"),
+            micDelay: TimeInterval(0),
+            viability: DualTrackViability?.none,
+        )
+        let run = Task {
+            try await queue.runDualTrackDiarization(
+                diarizeProcess: diarizer, tracks: tracks,
+                speakerCount: nil, title: "Cancelled", jobID: UUID(),
+            )
+        }
+        run.cancel()
+        let result = await run.result
+
+        XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "\($0)") }
+        XCTAssertEqual(diarizer.runCount, 1, "the mic track was diarized after the run was cancelled")
+    }
+
+    /// A cancellation that arrives while the mic track is diarized ends the
+    /// run as cancelled, not as an app-only fallback with a warning about a
+    /// mic track that never failed.
+    func testACancellationDuringTheMicTrackIsNotTakenForAFailedTrack() async {
+        let queue = PipelineQueue(logDir: tmpDir)
+        let diarizer = MockDiarization()
+        // The mic track's call still returns its result, like a model call
+        // that cannot be interrupted, but the cancel arrives during it.
+        diarizer.onRun = { run in
+            if run == 2 { withUnsafeCurrentTask { $0?.cancel() } }
+        }
+        let tracks = (
+            app: tmpDir.appendingPathComponent("app.wav"),
+            mic: tmpDir.appendingPathComponent("mic.wav"),
+            micDelay: TimeInterval(0),
+            viability: DualTrackViability?.none,
+        )
+        let result = await Task {
+            try await queue.runDualTrackDiarization(
+                diarizeProcess: diarizer, tracks: tracks,
+                speakerCount: nil, title: "Cancelled", jobID: UUID(),
+            )
+        }.result
+
+        XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "\($0)") }
+    }
+
     // MARK: - Fixture
 
     private struct Fixture {

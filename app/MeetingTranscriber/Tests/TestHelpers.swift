@@ -363,9 +363,12 @@ final class MockDiarization: DiarizationProvider, @unchecked Sendable {
     var receivedNumSpeakers: [Int?] = []
     var throwOnPathSuffix: String?
     var resultToReturn: DiarizationResult?
+    /// Runs inside each call with that call's 1-based number.
+    var onRun: ((Int) -> Void)?
 
     func run(audioPath: URL, numSpeakers: Int?, meetingTitle _: String) throws -> DiarizationResult {
         runCount += 1
+        onRun?(runCount)
         receivedNumSpeakers.append(numSpeakers)
         if let suffix = throwOnPathSuffix, audioPath.lastPathComponent.hasSuffix(suffix) {
             throw NSError(

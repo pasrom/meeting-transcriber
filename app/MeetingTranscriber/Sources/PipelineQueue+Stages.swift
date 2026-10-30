@@ -708,6 +708,10 @@ extension PipelineQueue {
                 appError = error
             }
         }
+        // A cancelled run must not go on to the second track: the app track's
+        // `CancellationError` is caught above like any track failure, and the
+        // mic track would then be diarized in full for a job that is gone.
+        try Task.checkCancellation()
 
         var micDiarization: DiarizationResult?
         var micError: (any Error)?
@@ -726,6 +730,10 @@ extension PipelineQueue {
                 micError = error
             }
         }
+        // Again after the mic track, so that a cancellation arriving during it
+        // is not taken for a failed track: the fallback below would log it as
+        // one and put a warning on the job.
+        try Task.checkCancellation()
 
         // Tolerate one silent/failed track and fall back to the other: a silent
         // local mic on a host without a real input device (app-only), or a silent
