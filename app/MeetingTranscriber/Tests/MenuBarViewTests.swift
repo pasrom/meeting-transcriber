@@ -9,6 +9,19 @@ import XCTest
 final class MenuBarViewTests: XCTestCase {
     // MARK: - Helpers
 
+    private actor RetryNotionExporter: NotionExporting {
+        private(set) var receivedPageIDs: [String?] = []
+
+        func exportMeeting( // swiftlint:disable:this function_parameter_count
+            title _: String, date _: Date?, tags _: [String], markdown _: String,
+            transcript _: String?, existingPageID: String?,
+            onPageCreated _: @Sendable (NotionPageResult) async -> Void,
+        ) -> NotionPageResult {
+            receivedPageIDs.append(existingPageID)
+            return NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1")
+        }
+    }
+
     private func makeStatus(
         state: TranscriberState = .idle,
         detail: String = "",
@@ -37,8 +50,11 @@ final class MenuBarViewTests: XCTestCase {
         onNameSpeakers: (() -> Void)? = nil,
         onStopManualRecording: (() -> Void)? = nil,
         onRecordMicrophone: @escaping () -> Void = {},
+        onOpenProtocol: @escaping (URL) -> Void = { _ in },
+        onQuit: @escaping () -> Void = {},
         noMic: Bool = false,
         manualRecordingPendingOrActive: Bool = false,
+        notionExportEnabled: Bool = false,
     ) throws -> MenuBarView {
         try MenuBarView(
             status: status,
@@ -51,14 +67,14 @@ final class MenuBarViewTests: XCTestCase {
             noMic: noMic,
             manualRecordingPendingOrActive: manualRecordingPendingOrActive,
             onStopManualRecording: onStopManualRecording,
-            onOpenLastProtocol: {},
-            onOpenProtocol: { _ in },
+            onOpenProtocol: { onOpenProtocol($0.url) },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
             onNameSpeakers: onNameSpeakers,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {},
+            onQuit: onQuit,
+            notionExportEnabled: notionExportEnabled,
         )
     }
 
@@ -257,7 +273,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -284,7 +299,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -311,7 +325,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: { called = true },
@@ -338,7 +351,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: { called = true },
             onOpenSettings: {},
@@ -353,7 +365,7 @@ final class MenuBarViewTests: XCTestCase {
     }
 
     func testOpenLastProtocolButtonCallsCallback() throws {
-        var called = false
+        var openedURL: URL?
         let sut = try MenuBarView(
             status: makeStatus(state: .protocolReady, protocolPath: "/tmp/p.md"),
             isWatching: false,
@@ -365,8 +377,7 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: { called = true },
-            onOpenProtocol: { _ in },
+            onOpenProtocol: { openedURL = $0.url },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
             onNameSpeakers: nil,
@@ -376,7 +387,7 @@ final class MenuBarViewTests: XCTestCase {
         )
         let body = try sut.inspect()
         try body.find(button: "Open Last Notes").tap()
-        XCTAssertTrue(called)
+        XCTAssertEqual(openedURL, URL(fileURLWithPath: "/tmp/p.md"))
     }
 
     func testNameSpeakersButtonCallsCallback() throws {
@@ -392,7 +403,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -455,7 +465,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -494,7 +503,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -520,7 +528,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -559,7 +566,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -597,7 +603,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -684,7 +689,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -724,7 +728,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -766,7 +769,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: { called = true },
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -855,7 +857,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
@@ -1076,6 +1077,198 @@ final class MenuBarViewTests: XCTestCase {
         XCTAssertThrowsError(try body.find(button: "Open"))
     }
 
+    func testDoneJobWithNotionPageShowsOpenInNotion() throws {
+        let queue = try makeIsolatedQueue()
+        var job = PipelineJob(
+            meetingTitle: "Sprint",
+            appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.recordNotionPage(
+            NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
+            databaseID: "database-1",
+        )
+        job.finishNotionExport(succeeded: true)
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        var openedURL: URL?
+        var quitCalled = false
+        let sut = try makeView(
+            status: makeStatus(),
+            pipelineQueue: queue,
+            onOpenProtocol: { openedURL = $0 },
+            onQuit: { quitCalled = true },
+            notionExportEnabled: true,
+        )
+        let body = try sut.inspect()
+
+        XCTAssertNoThrow(try body.find(button: "Open in Notion"))
+        XCTAssertThrowsError(try body.find(button: "Open"))
+        try body.find(button: "Open in Notion").tap()
+        XCTAssertEqual(openedURL, URL(string: "https://www.notion.so/page-1"))
+        XCTAssertFalse(quitCalled)
+    }
+
+    func testOpenLastProtocolInNotionCallsOpenCallbackWithoutQuitting() throws {
+        let queue = try makeIsolatedQueue()
+        var job = PipelineJob(
+            meetingTitle: "Sprint",
+            appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.recordNotionPage(
+            NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
+            databaseID: "database-1",
+        )
+        job.finishNotionExport(succeeded: true)
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        var openedURL: URL?
+        var quitCalled = false
+        let sut = try makeView(
+            status: makeStatus(),
+            pipelineQueue: queue,
+            onOpenProtocol: { openedURL = $0 },
+            onQuit: { quitCalled = true },
+            notionExportEnabled: true,
+        )
+        try sut.inspect().find(button: "Open Last Notes in Notion").tap()
+
+        XCTAssertEqual(openedURL, URL(string: "https://www.notion.so/page-1"))
+        XCTAssertFalse(quitCalled)
+    }
+
+    func testOpenLastProtocolInNotionUsesTheDisplayedTargetAfterQueueChanges() throws {
+        let queue = try makeIsolatedQueue()
+        var displayedJob = PipelineJob(
+            meetingTitle: "First",
+            appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/first.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        displayedJob.recordNotionPage(
+            NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
+            databaseID: "database-1",
+        )
+        displayedJob.finishNotionExport(succeeded: true)
+        queue.enqueue(displayedJob)
+        queue.updateJobState(id: displayedJob.id, to: .done)
+
+        var openedURL: URL?
+        var quitCalled = false
+        let sut = try makeView(
+            status: makeStatus(),
+            pipelineQueue: queue,
+            onOpenProtocol: { openedURL = $0 },
+            onQuit: { quitCalled = true },
+            notionExportEnabled: true,
+        )
+        let displayedButton = try sut.inspect().find(button: "Open Last Notes in Notion")
+
+        queue.removeJob(id: displayedJob.id)
+        var newerJob = PipelineJob(
+            meetingTitle: "Second",
+            appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/second.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        newerJob.recordNotionPage(
+            NotionPageResult(pageID: "page-2", url: "https://www.notion.so/page-2"),
+            databaseID: "database-1",
+        )
+        queue.enqueue(newerJob)
+        queue.updateJobState(id: newerJob.id, to: .done)
+
+        try displayedButton.tap()
+        XCTAssertEqual(openedURL, URL(string: "https://www.notion.so/page-1"))
+        XCTAssertFalse(quitCalled)
+    }
+
+    func testFailedNotionJobRetryButtonRunsSavedExport() async throws {
+        let dir = try makeTempDirectory(prefix: "menu_notion_retry_test")
+        let markdown = dir.appendingPathComponent("protocol.md")
+        try "# Meeting Protocol - Sprint".write(to: markdown, atomically: true, encoding: .utf8)
+        let exporter = RetryNotionExporter()
+        let configuration = NotionExportConfiguration(exporter: exporter, databaseID: "database-1")
+        let configurationProvider: () -> NotionExportResolution = { .ready(configuration) }
+        let queue = PipelineQueue(
+            engine: MockEngine(), diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { MockProtocolGen() },
+            outputDir: dir, logDir: dir,
+            notionExportConfigurationProvider: configurationProvider,
+        )
+        var job = PipelineJob(
+            meetingTitle: "Sprint", appName: "Zoom", mixPath: nil,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .done
+        job.protocolPath = markdown
+        job.beginNotionExport(speakerNames: [])
+        job.recordNotionPage(
+            NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
+            databaseID: "database-1",
+        )
+        job.finishNotionExport(succeeded: false)
+        queue.insertJobForTesting(job)
+
+        let view = try makeView(status: makeStatus(), pipelineQueue: queue, notionExportEnabled: true)
+        let button = try view.inspect().find(viewWithAccessibilityIdentifier: A11yID.jobNotionRetryButton(0)).button()
+        XCTAssertFalse(button.isDisabled())
+        try button.tap()
+
+        for _ in 0 ..< 50 where queue.jobs.first?.notionExportStatus != .completed {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(queue.jobs.first?.notionExportStatus, .completed)
+        let receivedPageIDs = await exporter.receivedPageIDs
+        XCTAssertEqual(receivedPageIDs, ["page-1"])
+    }
+
+    func testDismissIsDisabledWhileNotionExportIsInProgress() throws {
+        let queue = try makeIsolatedQueue()
+        var job = PipelineJob(
+            meetingTitle: "Exporting", appName: "Zoom", mixPath: nil,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .done
+        job.beginNotionExport(speakerNames: [])
+        queue.insertJobForTesting(job)
+
+        let view = try makeView(pipelineQueue: queue, notionExportEnabled: true)
+        XCTAssertTrue(try view.inspect().find(button: "Dismiss").isDisabled())
+    }
+
+    func testDoneJobWithNotionPageFallsBackToLocalFileWhenDisabled() throws {
+        let queue = try makeIsolatedQueue()
+        var job = PipelineJob(
+            meetingTitle: "Sprint",
+            appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.protocolPath = URL(fileURLWithPath: "/tmp/protocol.md")
+        job.recordNotionPage(
+            NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
+            databaseID: "database-1",
+        )
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        let sut = try makeView(
+            status: makeStatus(),
+            pipelineQueue: queue,
+            notionExportEnabled: false,
+        )
+        let body = try sut.inspect()
+
+        XCTAssertNoThrow(try body.find(button: "Open"))
+        XCTAssertThrowsError(try body.find(button: "Open in Notion"))
+    }
+
     // MARK: - All state labels shown
 
     func testAllTranscriberStateLabelsRendered() throws {
@@ -1123,7 +1316,6 @@ final class MenuBarViewTests: XCTestCase {
             noMic: false,
             manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
-            onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},

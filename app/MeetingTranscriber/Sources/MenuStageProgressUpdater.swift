@@ -9,6 +9,7 @@ final class MenuStageProgressUpdater {
     private weak var trackedMenu: NSMenu?
     private var queueProvider: (@MainActor () -> PipelineQueue?)?
     private var subscriptions: Set<AnyCancellable> = []
+    private var trackingMenus: [ObjectIdentifier: PipelineQueue] = [:]
 
     func observe(queueProvider: @escaping @MainActor () -> PipelineQueue?) {
         self.queueProvider = queueProvider
@@ -35,6 +36,10 @@ final class MenuStageProgressUpdater {
     }
 
     private func beginTracking(menu: NSMenu, queue: PipelineQueue) {
+        if trackingMenus[ObjectIdentifier(menu)] == nil {
+            trackingMenus[ObjectIdentifier(menu)] = queue
+            queue.beginMenuTracking()
+        }
         timer?.invalidate()
         trackedMenu = menu
         refresh(menu: menu, queue: queue)
@@ -56,6 +61,7 @@ final class MenuStageProgressUpdater {
     }
 
     private func endTracking(menu: NSMenu) {
+        trackingMenus.removeValue(forKey: ObjectIdentifier(menu))?.endMenuTracking()
         guard trackedMenu === menu else { return }
         timer?.invalidate()
         timer = nil

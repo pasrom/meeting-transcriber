@@ -18,8 +18,7 @@ struct MenuBarView: View {
     /// to avoid on the picker.
     let manualRecordingPendingOrActive: Bool
     let onStopManualRecording: (() -> Void)?
-    let onOpenLastProtocol: () -> Void
-    let onOpenProtocol: (URL) -> Void
+    let onOpenProtocol: (JobOpenTarget) -> Void
     let onOpenProtocolsFolder: () -> Void
     let onOpenSettings: () -> Void
     let onNameSpeakers: (() -> Void)?
@@ -32,6 +31,10 @@ struct MenuBarView: View {
     var pendingConsentApp: String?
     /// Answers the open prompt: true records, false declines.
     var onAnswerPendingConsent: (Bool) -> Void = { _ in }
+    /// Whether Notion export is on. A job that has a page URL but was exported
+    /// before the setting was turned off still falls back to it when no local
+    /// file exists; `JobOpenTarget` owns that rule.
+    var notionExportEnabled: Bool = false
 
     private var state: TranscriberState {
         status?.state ?? .idle
@@ -223,14 +226,20 @@ struct MenuBarView: View {
     }
 
     @ViewBuilder private var protocolActions: some View {
-        if let protocolPath = status?.protocolPath {
+        let completedTarget = JobOpenTarget.resolve(
+            for: pipelineQueue.completedJobs.last(where: \.hasCompletedNotionExport),
+            preferNotion: notionExportEnabled,
+        )
+        let target = completedTarget ?? status?.protocolPath.map { path in
+            JobOpenTarget.file(URL(fileURLWithPath: path))
+        }
+        if let target {
             Button {
-                onOpenLastProtocol()
+                onOpenProtocol(target)
             } label: {
-                Label("Open Last Notes", systemImage: "doc.text")
+                Label(target.lastProtocolLabel, systemImage: target.systemImage)
             }
             .keyboardShortcut("o")
-            .disabled(protocolPath.isEmpty)
         }
 
         Button {
@@ -292,8 +301,9 @@ struct MenuBarView: View {
         Text(job.meetingTitle)
         jobStateLabel(job)
 
-        if job.state == .done, let path = job.protocolPath ?? job.transcriptPath {
-            Button("Open") { onOpenProtocol(path) }
+        if job.state == .done,
+           let target = JobOpenTarget.resolve(for: job, preferNotion: notionExportEnabled) {
+            Button(target.jobActionLabel) { onOpenProtocol(target) }
         }
         if job.state == .speakerNamingPending {
             Button("Name Speakers") { onNameSpeakers?() }
@@ -303,8 +313,10 @@ struct MenuBarView: View {
             Button("Cancel") { pipelineQueue.cancelJob(id: job.id) }
         }
         retryButton(job, index: index)
+        notionRetryButton(job, index: index)
         if job.state == .done || job.state == .error || job.state == .speakerNamingPending {
-            Button("Dismiss") { onDismissJob(job.id) }
+            Button(job.notionExportStatus == .failed ? "Discard Notion Retry" : "Dismiss") { onDismissJob(job.id) }
+                .disabled(job.notionExportStatus == .inProgress)
         }
     }
 
@@ -319,11 +331,25 @@ struct MenuBarView: View {
     }
 
     @ViewBuilder
+    private func notionRetryButton(_ job: PipelineJob, index: Int) -> some View {
+        if job.state == .done, job.hasPendingNotionExport {
+            Button("Retry Notion Export") {
+                Task { await pipelineQueue.retryNotionExport(id: job.id) }
+            }
+            .accessibilityIdentifier(A11yID.jobNotionRetryButton(index))
+            .disabled(!notionExportEnabled || !pipelineQueue.canRetryNotionExport(id: job.id))
+            .help(notionExportEnabled ? "" : "Enable Notion export in Settings → Output to retry.")
+        }
+    }
+
+    @ViewBuilder
     private func jobStateLabel(_ job: PipelineJob) -> some View {
         if StageKind(jobState: job.state) != nil {
             MenuStageProgressLabel(text: MenuStageProgressUpdater.progressText(job: job, queue: pipelineQueue))
         } else if job.state == .error, let msg = job.error {
             Text(msg)
+        } else if job.state == .done, job.notionExportStatus == .inProgress {
+            Text("Exporting to Notion…")
         } else if job.state == .done, !job.warnings.isEmpty {
             Text(job.warnings.joined(separator: "; "))
         } else {
