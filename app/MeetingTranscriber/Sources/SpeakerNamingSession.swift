@@ -118,6 +118,15 @@ final class SpeakerNamingSession {
     /// confirms in a fresh session, the recognition log row will have nil/empty
     /// `autoName` (acceptable; user data is the real signal).
     private var stashedSuggestedAtDialog: [UUID: [String: String]] = [:]
+    /// The late-naming tasks still running per job (re-run, confirm, protocol
+    /// for accepted auto-names), so cancelling a job can stop its own work.
+    /// They run outside the queue's processing task, which is why the queue's
+    /// cancel cannot reach them. Keyed per task as well, because one job can
+    /// hold two at once: a re-run hands its result to the naming handler,
+    /// whose answer starts the next task before the re-run's has returned.
+    /// Internal (not private) because the helpers that fill and cancel it live
+    /// in SpeakerNamingSession+Late.swift.
+    @ObservationIgnored var lateWork: [UUID: [UUID: Task<Void, Never>]] = [:]
     private var stashedTopCandidates: [UUID: [String: [TopCandidate]]] = [:]
 
     init(
@@ -169,13 +178,15 @@ final class SpeakerNamingSession {
             if delegate?.job(withID: jobID)?.state == .speakerNamingPending {
                 delegate?.updateJobState(id: jobID, to: .generatingProtocol)
             }
-            Task { await reapplySpeakerNames(jobID: jobID, mapping: userMapping) }
+            startLateWork(jobID: jobID) { await self.reapplySpeakerNames(jobID: jobID, mapping: userMapping) }
 
         case let .rerun(count):
-            Task { await lateDiarization(jobID: jobID, speakerCount: count) }
+            startLateWork(jobID: jobID) { await self.lateDiarization(jobID: jobID, speakerCount: count) }
 
         case let .rerunWithMode(mode, count):
-            Task { await lateDiarization(jobID: jobID, speakerCount: count, mode: mode) }
+            startLateWork(jobID: jobID) {
+                await self.lateDiarization(jobID: jobID, speakerCount: count, mode: mode)
+            }
 
         case .skipped:
             recordRecognition(
@@ -194,10 +205,10 @@ final class SpeakerNamingSession {
     /// stays weak. No-op when no handler is set (the interactive/production path).
     func invokeHandler(jobID: UUID, data: SpeakerNamingData) {
         guard let handler = speakerNamingHandler else { return }
-        Task {
+        startLateWork(jobID: jobID) {
             let result = await handler(data)
             // The handler stands in for the dialog, so it reports as the dialog.
-            completeSpeakerNaming(jobID: jobID, result: result, source: .dialog)
+            self.completeSpeakerNaming(jobID: jobID, result: result, source: .dialog)
         }
     }
 
@@ -221,7 +232,9 @@ final class SpeakerNamingSession {
         // (it resolved the job's transcriptPath); binding it here lets the Task
         // closure hold the queue strongly from spawn (see `delegate`).
         if canGenerateProtocol, let delegate {
-            Task { await generateProtocolForExistingJob(jobID: jobID, delegate: delegate) }
+            startLateWork(jobID: jobID) {
+                await self.generateProtocolForExistingJob(jobID: jobID, delegate: delegate)
+            }
         } else if delegate?.job(withID: jobID)?.state == .speakerNamingPending {
             delegate?.updateJobState(id: jobID, to: .done)
         }

@@ -7,6 +7,25 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Speaker
 /// happens after the pipeline already reached `.speakerNamingPending`. Split
 /// out of `SpeakerNamingSession.swift` to keep both files under the lint cap.
 extension SpeakerNamingSession {
+    // MARK: - Late work tracking
+
+    /// Run `work` on a task of its own, tracked under `jobID` until it returns
+    /// so `cancelLateWork` can reach it.
+    func startLateWork(jobID: UUID, _ work: @escaping () async -> Void) {
+        let token = UUID()
+        lateWork[jobID, default: [:]][token] = Task {
+            await work()
+            lateWork[jobID]?[token] = nil
+            if lateWork[jobID]?.isEmpty == true { lateWork[jobID] = nil }
+        }
+    }
+
+    /// Cancel every late-naming task still running for `jobID`. Called when
+    /// the job is removed or cancelled.
+    func cancelLateWork(jobID: UUID) {
+        lateWork.removeValue(forKey: jobID)?.values.forEach { $0.cancel() }
+    }
+
     // MARK: - Late re-apply speaker names
 
     /// Late-confirm path: read the saved transcript, replace generic speaker

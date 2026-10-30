@@ -185,6 +185,20 @@ class PipelineQueue {
     var jobAudioSeconds: [UUID: Double] = [:]
 
     private var processTask: Task<Void, Never>?
+    /// The task running each job's pipeline run, for as long as the run lasts.
+    /// Cancelling a job cancels its entry here and nothing else. The job's state
+    /// cannot stand in for this: a late speaker re-run and a late confirm move a
+    /// job back to `.diarizing` / `.generatingProtocol` on a task of the naming
+    /// session's own, while the queue may be running a different job.
+    ///
+    /// The run's own task rather than `processTask`, because `processTask` is
+    /// only one of the ways into `processNext`: a caller awaiting `processNext`
+    /// directly runs the job on its own task, and cancelling `processTask` then
+    /// stopped whatever that task held, or nothing. Keyed by job rather than a
+    /// single slot for the same reason: two such entries can overlap.
+    /// Internal (not private) because `processNext` in PipelineQueue+Stages.swift
+    /// fills it.
+    @ObservationIgnored var pipelineRuns: [UUID: Task<Bool, Never>] = [:]
     /// Internal (not private) because `processNext` in PipelineQueue+Stages.swift
     /// reads this to distinguish a cancellation from a real pipeline error.
     var cancelledJobIDs = Set<UUID>()
@@ -578,7 +592,14 @@ class PipelineQueue {
     /// from `enqueue` → `triggerProcessing()`.
     func awaitProcessing() async {
         while isProcessing || !pendingJobs.isEmpty {
-            if let task = processTask {
+            // A run first: its job stays `.waiting` until the run's task gets
+            // going, and an already finished `processTask` would return at once
+            // and spin this loop on the main actor the run needs.
+            if let run = pipelineRuns.values.first {
+                _ = await run.value
+                // Lets the entry that ran it take the run off the record.
+                await Task.yield()
+            } else if let task = processTask {
                 await task.value
             } else {
                 // processTask not yet assigned — yield so the spawning Task
@@ -635,8 +656,28 @@ class PipelineQueue {
             )
             jobs.remove(at: index)
         }
+        cancelWork(of: id)
         forgetStageBookkeeping(for: id)
+        // A restored job marked for a protocol-only resume keeps no claim on
+        // that once it is gone.
+        protocolResumeDispositions.removeValue(forKey: id)
         saveSnapshot()
+    }
+
+    /// Stop what is still running for a job that is being dropped: its
+    /// pipeline run, when this queue is running one for it, and its late naming
+    /// work. Only the job's own work: a job in a working state may be in a late
+    /// re-run or late confirm, on the naming session's tasks, while the queue
+    /// runs a different job, and stopping the queue's run then stopped that
+    /// other job half-way and left this one going. The late work is cancelled
+    /// whatever the state, because accepting auto-names starts it while the job
+    /// is still `.speakerNamingPending`.
+    private func cancelWork(of id: UUID) {
+        if let run = pipelineRuns[id] {
+            cancelledJobIDs.insert(id)
+            run.cancel()
+        }
+        naming.cancelLateWork(jobID: id)
     }
 
     /// Cancel a job. Removes the job + cleans up sidecar files if naming was
@@ -649,39 +690,14 @@ class PipelineQueue {
     /// relabelled as a recovered recording. Cancelling that copy only re-armed
     /// the loop. Re-importing the file by hand stays the way back and never
     /// consults the ledger.
+    ///
+    /// Everything else is what dismissing a job does, so it goes through
+    /// `removeJob`: its naming data and sidecars go, its stage bookkeeping is
+    /// forgotten, and its own work is stopped (`cancelWork`), whatever state
+    /// it is in.
     func cancelJob(id: UUID) {
-        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
-        let state = jobs[index].state
-        let slug = jobs[index].namingSlug
-        // cancelJob removes the job directly (not via removeJob) and skips the
-        // normal terminal transition, so reap the stage-timing bookkeeping here
-        // too — otherwise a job cancelled mid-stage leaks these entries.
-        forgetStageBookkeeping(for: id)
-        if state != .done, state != .error {
-            processedLedger.markProcessed(mixPath: jobs[index].mixPath)
-        }
-        switch state {
-        case .waiting:
-            jobs.remove(at: index)
-            saveSnapshot()
-
-        case .transcribing, .diarizing, .generatingProtocol:
-            cancelledJobIDs.insert(id)
-            processTask?.cancel()
-            naming.removeNamingData(jobID: id, slug: slug)
-            jobs.remove(at: index)
-            saveSnapshot()
-
-        case .speakerNamingPending:
-            // User cancelled while waiting for late-confirm — drop the sidecar
-            // files and the in-memory state so it doesn't sit around.
-            naming.removeNamingData(jobID: id, slug: slug)
-            jobs.remove(at: index)
-            saveSnapshot()
-
-        case .done, .error:
-            break
-        }
+        guard let state = job(withID: id)?.state, state != .done, state != .error else { return }
+        removeJob(id: id)
     }
 
     func updateJobState(id: UUID, to newState: JobState, error: String? = nil) {

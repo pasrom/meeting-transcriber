@@ -94,7 +94,7 @@ extension PipelineQueue {
             logger.info("[\(job.shortID, privacy: .public)] audio already running under another job")
             updateJobState(id: job.id, to: .error, error: "This recording is already being processed")
         }
-        isProcessing = false
+        releaseProcessingFlag()
         triggerProcessing()
         return false
     }
@@ -145,11 +145,22 @@ extension PipelineQueue {
         }
     }
 
+    /// Clear `isProcessing` on the way out of `processNext`, unless another
+    /// entry's run is still going: the flag is what keeps `triggerProcessing`
+    /// from starting a second run beside it, and entries overlap whenever
+    /// `processNext` is awaited directly while `processTask` runs.
+    private func releaseProcessingFlag() {
+        if pipelineRuns.isEmpty { isProcessing = false }
+    }
+
     /// Thin orchestrator: take the next waiting job and run it through the
     /// pipeline — transcribe → diarize → generate protocol → done.
     func processNext() async {
-        guard let index = jobs.firstIndex(where: { $0.state == .waiting }) else {
-            isProcessing = false
+        // A job another entry into this method is already running stays
+        // `.waiting` until its run's task first executes; picking it again here
+        // would read the claim below as a duplicate and drop the job.
+        guard let index = jobs.firstIndex(where: { $0.state == .waiting && pipelineRuns[$0.id] == nil }) else {
+            releaseProcessingFlag()
             return
         }
         let job = jobs[index]
@@ -160,6 +171,24 @@ extension PipelineQueue {
         // any later attempt for the rest of the session.
         defer { inFlightRuns.end(jobID: job.id) }
 
+        // On a task of its own, recorded under the job, so that cancelling this
+        // job cancels exactly this run however this method was entered. Only
+        // `cancelWork` cancels it, which is what lets the run read its own
+        // task's cancellation as "my job was cancelled or removed". Nothing
+        // cancels the entering task, and a cancel of it is not passed on.
+        let run = Task { await runPipeline(job) }
+        pipelineRuns[job.id] = run
+        let continues = await run.value
+        pipelineRuns[job.id] = nil
+
+        releaseProcessingFlag()
+        if continues { triggerProcessing() }
+    }
+
+    /// One claimed job's run. Returns whether the queue moves on to the next
+    /// waiting job, which every exit does except a queue missing its
+    /// dependencies.
+    private func runPipeline(_ job: PipelineJob) async -> Bool {
         // A job the restore found interrupted while its protocol was being
         // generated already has its transcript on disk. Attempted under the
         // claim, like every other exit here, and ahead of the dependency guard
@@ -171,15 +200,12 @@ extension PipelineQueue {
             // Same reason the `catch` blocks below clear it: an id left behind
             // is what tells a later generic error apart from a cancellation.
             cancelledJobIDs.remove(job.id)
-            isProcessing = false
-            triggerProcessing()
-            return
+            return true
         }
 
         guard let engine, let outputDir else {
             logger.warning("Processing dependencies not configured — skipping")
-            isProcessing = false
-            return
+            return false
         }
         let ctx = Self.makeContext(for: job)
 
@@ -214,9 +240,7 @@ extension PipelineQueue {
                     "[\(ctx.shortID, privacy: .public)] transcription_empty inputRMSdBFS=\(inputRMS, privacy: .public). Likely silent input or ASR misconfiguration — check microphone level and engine settings.",
                 )
                 updateJobState(id: ctx.jobID, to: .error, error: "Empty transcript")
-                isProcessing = false
-                triggerProcessing()
-                return
+                return true
             }
 
             saveTranscriptDraft(transcription.transcript, ctx: ctx, outputDir: outputDir)
@@ -247,9 +271,7 @@ extension PipelineQueue {
                 updateJobState(id: ctx.jobID, to: .error, error: error.localizedDescription)
             }
         }
-
-        isProcessing = false
-        triggerProcessing()
+        return true
     }
 
     // MARK: - Pipeline stages

@@ -22,13 +22,38 @@ final class ParkedEngine: TranscribingEngine {
 
     /// True once a run has entered `transcribeSegments` and suspended there.
     private(set) var isParked = false
+    // swiftlint:disable discouraged_optional_boolean
+    /// Whether the parked run's task had been cancelled by the time it was
+    /// released; nil until a parked run resumes.
+    private(set) var sawCancellation: Bool?
+    // swiftlint:enable discouraged_optional_boolean
 
     private var parkedContinuation: CheckedContinuation<Void, Never>?
     private var isReleased = false
+    private let parksEveryRun: Bool
+    private var parksNextRun = false
+
+    /// `parksEveryRun: false` transcribes straight through until
+    /// `parkNextRun()` arms a single park, for a test that needs earlier runs
+    /// to finish before the one it holds.
+    init(parksEveryRun: Bool = true) {
+        self.parksEveryRun = parksEveryRun
+    }
 
     func loadModel() {}
 
+    /// Arms a fresh park, also after an earlier one was released: the next
+    /// run parks again and `isParked` / `sawCancellation` describe that run.
+    func parkNextRun() {
+        parksNextRun = true
+        isParked = false
+        isReleased = false
+        sawCancellation = nil
+    }
+
     func transcribeSegments(audioPath _: URL) async -> [TimestampedSegment] {
+        guard parksEveryRun || parksNextRun else { return segmentsToReturn }
+        parksNextRun = false
         isParked = true
         // Parking only when the release has not already happened keeps the two
         // orderings equivalent. Otherwise a run that arrives here after the
@@ -37,6 +62,7 @@ final class ParkedEngine: TranscribingEngine {
         if !isReleased {
             await withCheckedContinuation { parkedContinuation = $0 }
         }
+        sawCancellation = Task.isCancelled
         return segmentsToReturn
     }
 
