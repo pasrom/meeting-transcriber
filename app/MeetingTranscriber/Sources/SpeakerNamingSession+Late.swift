@@ -257,12 +257,9 @@ extension SpeakerNamingSession {
             delegate.updateJobState(id: jobID, to: .speakerNamingPending)
             NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
 
-            if let handler = speakerNamingHandler {
-                let result = await handler(newNamingData)
-                // Same as the first-pass invocation: the handler stands in for
-                // the re-opened dialog, so it reports as the dialog.
-                completeSpeakerNaming(jobID: jobID, result: result, source: .dialog)
-            }
+            // Same hand-off as the first pass, so the re-run's task ends here
+            // rather than staying alive until the handler answers.
+            invokeHandler(jobID: jobID, data: newNamingData)
         } catch {
             // A cancelled job ends here when its diarizer honours cancellation.
             // Nothing failed, and there is no job left to roll back.
