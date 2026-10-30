@@ -104,8 +104,7 @@ extension PipelineQueue {
             // A state saved but not yet on disk is the newer one: a queue that
             // replaces another restores while that queue's last write may
             // still be in flight, and the file would hand it the state before.
-            guard let decoded = try PipelineSnapshotStore.existing(for: logDir)?.latestSaved
-                ?? PipelineSnapshot.load(from: logDir) else {
+            guard let decoded = try PipelineSnapshotStore.latestJobs(in: logDir) else {
                 logger.info("No pipeline snapshot to restore")
                 return
             }

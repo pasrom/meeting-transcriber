@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import Foundation
 import Observation
 import os.log
@@ -43,6 +44,8 @@ final class PipelineController {
     /// Durable finished-job record store, shared across queue rebuilds and read
     /// by `jobStatus(forID:)` for the automation API. Test-injectable.
     let terminalJobStore: TerminalJobStore
+    /// Shared across queue rebuilds; see `PipelineController+Retention.swift`.
+    let recordingRetention: RecordingRetention
 
     /// Where the queues this controller builds keep their data and how they
     /// reach the output folder, beyond the settings: the logs and snapshot, the
@@ -80,6 +83,12 @@ final class PipelineController {
     /// speaker actions), so all of them agree on one file.
     var speakersDB: URL {
         queueEnvironment.speakersDB
+    }
+
+    /// How the queues this controller builds open the output folder's scope,
+    /// for a retention pass that runs before any of them is built.
+    var queueSecurityScope: SecurityScopeAccess {
+        queueEnvironment.securityScope
     }
 
     /// Called with the new queue whenever `rebuild()` replaces it, so a holder
@@ -122,6 +131,7 @@ final class PipelineController {
             ?? PipelineQueue(
                 logDir: queueEnvironment.logDir, stagingDir: queueEnvironment.stagingDir,
             )
+        recordingRetention = Self.makeRecordingRetention(logDir: queueEnvironment.logDir, settings: settings)
     }
 
     /// Wire the active-engine source. Called once from `AppState.init` after its
@@ -129,6 +139,7 @@ final class PipelineController {
     func activate(engineProvider: @escaping () -> (any TranscribingEngine)?) {
         self.engineProvider = engineProvider
         observeOutputFolder()
+        startRecordingRetention()
     }
 
     // MARK: - Queue lifecycle
@@ -195,6 +206,7 @@ final class PipelineController {
         queueBuiltFromBookmark = settings.customOutputDirBookmark
         builtQueue = built
         onQueueReplaced?(queue)
+        Task { [weak self] in await self?.sweepRetainedRecordings() }
     }
 
     /// Whether the installed queue is one this controller built, as opposed to
@@ -325,6 +337,7 @@ final class PipelineController {
             notionExportConfigurationProvider: { [settings] in NotionExportConfiguration.resolve(settings: settings) },
             terminalJobStore: terminalJobStore,
             securityScope: queueEnvironment.securityScope,
+            recordingRetention: recordingRetention,
         )
     }
 

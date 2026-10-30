@@ -28,6 +28,12 @@ final class PipelineSnapshotStore {
         live[key(dir)]
     }
 
+    /// The newest job list for `dir`: the one waiting to be written, else the
+    /// file. Nil when there is neither; throws when the file is unreadable.
+    static func latestJobs(in dir: URL) throws -> [PipelineJob]? { // swiftlint:disable:this discouraged_optional_collection
+        try existing(for: dir)?.latestSaved ?? PipelineSnapshot.load(from: dir)
+    }
+
     /// Queue `jobs` for writing into `dir`. Rapid saves coalesce: only the
     /// latest one waiting is written, with the writer it was saved with.
     static func save(_ jobs: [PipelineJob], to dir: URL, using writer: @escaping Writer) {
