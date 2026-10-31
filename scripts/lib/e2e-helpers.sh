@@ -430,18 +430,22 @@ mic_stall_restore_protocol() {
     return 0
 }
 
-# Whether `home` is one of the lane's own `mktemp` homes: directly inside the
-# directory the lane creates them in (MIC_STALL_HOME_PARENT, by default
-# $TMPDIR or /tmp, as the lane does), named `e2e-mic-stall-home.` plus the
-# letters and digits mktemp fills in. Anchored on purpose: a substring match
-# would take `<parent>/e2e-mic-stall-home.a/../../Documents` too, and the
-# callers remove what this accepts.
-mic_stall_is_lane_home() {
-    local home="$1"
-    local parent="${MIC_STALL_HOME_PARENT:-${TMPDIR:-/tmp}}"
-    parent="${parent%/}"
-    [[ "$home" =~ ^.*/e2e-mic-stall-home\.[A-Za-z0-9]+$ ]] || return 1
+# e2e_is_lane_home <home> <stem> <parent> — whether `home` is one of a lane's
+# own `mktemp` homes: directly inside `parent`, named `<stem>.` plus the letters
+# and digits mktemp fills in. Anchored on purpose: a substring match would take
+# `<parent>/<stem>.a/../../Documents` too, and the callers remove what this
+# accepts. The lanes with an isolated home (--mic-stall, --upgrade) each pass
+# their own stem, so neither can remove the other's home.
+e2e_is_lane_home() {
+    local home="$1" stem="$2" parent="${3%/}"
+    [[ "$home" =~ ^.*/${stem}\.[A-Za-z0-9]+$ ]] || return 1
     [ "${home%/*}" = "$parent" ]
+}
+
+# Whether `home` is one of the mic-stall lane's homes, created in
+# MIC_STALL_HOME_PARENT (by default $TMPDIR or /tmp, as the lane does).
+mic_stall_is_lane_home() {
+    e2e_is_lane_home "$1" e2e-mic-stall-home "${MIC_STALL_HOME_PARENT:-${TMPDIR:-/tmp}}"
 }
 
 # Remove a mic-stall run's throwaway home, unless the app that used it (`pid`)
