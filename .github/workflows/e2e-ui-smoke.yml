@@ -101,6 +101,14 @@ jobs:
         with:
           developer-dir: ${{ env.DEVELOPER_DIR }}
 
+      # The same Homebrew release build as release.yml's `build (homebrew)`
+      # leg, so it shares that leg's cache (see the comment there).
+      - uses: ./.github/actions/setup-swift-test
+        with:
+          cache-key-suffix: release-homebrew
+          cache-restore-fallback: "false"
+          cache-models: "false"
+
       - name: UI smoke — drive /ui/* against the live app
         run: ./scripts/e2e-settings-smoke.sh
 

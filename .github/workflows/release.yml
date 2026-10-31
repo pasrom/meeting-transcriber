@@ -103,15 +103,22 @@ jobs:
         with:
           fetch-tags: true
 
-      # Same SPM cache key as ci.yml — release builds reuse the test
-      # matrix's resolved artifacts. The transcription/diarization models are
-      # neither loaded nor bundled by build_release.sh, so skip the model
-      # cache + prewarm. (It does fetch the 2.9 MB LocalVQE AEC model to bundle
-      # it, deliberately outside that cache: the fetch is checksum-pinned and
-      # small enough that a cache round-trip would save nothing.)
+      # A release cache of its own. It used to share the test matrix's key, so
+      # a release build restored a debug build tree it could not reuse and
+      # compiled every dependency again. Restored only for the exact
+      # `Package.resolved` and Xcode path (no fallback to an older cache); the app's own
+      # sources are newer than the cache and are always recompiled.
+      # build_release.sh builds the App Store variant in `.build-appstore`.
+      # The transcription/diarization models are neither loaded nor bundled by
+      # build_release.sh, so skip the model cache + prewarm. (It does fetch the
+      # 2.9 MB LocalVQE AEC model to bundle it, deliberately outside that cache:
+      # the fetch is checksum-pinned and small enough that a cache round-trip
+      # would save nothing.)
       - uses: ./.github/actions/setup-swift-test
         with:
-          cache-key-suffix: ${{ matrix.variant }}
+          cache-key-suffix: release-${{ matrix.variant }}
+          cache-path: app/MeetingTranscriber/.build${{ matrix.variant == 'appstore' && '-appstore' || '' }}
+          cache-restore-fallback: "false"
           cache-models: "false"
 
       - name: Install Developer ID certificate
