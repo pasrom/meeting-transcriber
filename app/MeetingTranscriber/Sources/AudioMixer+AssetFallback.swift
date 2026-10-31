@@ -98,9 +98,9 @@ extension AudioMixer {
     /// grow. A container's duration is untrusted input here, and this tier runs
     /// precisely on files the first tier refused, so a bogus field is likelier
     /// than usual: `CMTimeGetSeconds` yields NaN for an indefinite duration and
-    /// `Int(NaN)` traps, while an `mdhd` duration of `0xFFFFFFFF` at timescale 1
-    /// is 4.29e9 seconds, whose reservation aborts the process on allocation
-    /// (measured: `reserveCapacity(68_719_476_736_000)` dies at 275 GB). A
+    /// `Int(NaN)` traps, while a duration of `0xFFFFFFFF` at timescale 1 is
+    /// 4.29e9 seconds, whose reservation of about 6.9e13 frames aborts the
+    /// process on allocation (measured: it dies asking for 275 TB). A
     /// crash is the one outcome a rescue path must not have, and over-reserving
     /// costs nothing to skip because `append` grows geometrically anyway.
     private static func sampleReservation(for duration: CMTime) -> Int? {
