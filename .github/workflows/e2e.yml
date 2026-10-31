@@ -105,6 +105,9 @@ jobs:
         with:
           prewarm: "true"
 
+      # For the MKV and WebM legs of WhisperKitE2ETests' format sweep.
+      - uses: ./.github/actions/setup-ffmpeg
+
       # RunnerHomeIsolationTests is added to the filter so this lane, too,
       # fails if it ever runs in the account's real home.
       - name: Run E2E tests

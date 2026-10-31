@@ -49,6 +49,8 @@ runs:
         "$GITHUB_WORKSPACE/scripts/keychain-prepend.sh" "$MT_CI_KEYCHAIN"
         security unlock-keychain -p "" "$MT_CI_KEYCHAIN"
         security set-keychain-settings -lut 36000 "$MT_CI_KEYCHAIN"
+    # The full suite includes the ffmpeg-tier tests (see the action).
+    - uses: ./.github/actions/setup-ffmpeg
     - name: Swift tests
       shell: bash
       env:
