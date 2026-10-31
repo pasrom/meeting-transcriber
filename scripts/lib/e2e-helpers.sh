@@ -17,44 +17,79 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bundle-ids.sh"
 # shellcheck source=signing.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/signing.sh"
 
-# Graceful AppleScript quit → SIGTERM → SIGKILL ladder. Returns 0 when
-# the process is gone, 1 if it survived even SIGKILL (unusual; means
-# the process is wedged in a kernel call). The bundle id can be
+# Graceful AppleScript quit → SIGTERM → SIGKILL ladder. Returns 0 when the app
+# is gone, 2 when it is gone but the AppleScript quit was refused for want of
+# the Automation grant (see below), 1 if it survived even SIGKILL (unusual;
+# means the process is wedged in a kernel call). The bundle id can be
 # overridden for the rare case a forked dev variant uses a different one.
 #
-# Timing budget: up to ~3 s for graceful AppleScript quit, then ~3 s
-# for SIGTERM grace, then SIGKILL with a 1 s reap window. Total worst
-# case ~7 s. The pre-extraction inline ladders ran with shorter
-# windows (3 s or 5 s total); the merged version is strictly more
-# graceful and never sends SIGTERM/SIGKILL when the process has
-# already exited.
+# The AppleScript quit is what runs the app's applicationShouldTerminate, and
+# with it the quit hold that stops a recording and flushes the pipeline
+# snapshots (TerminationFlush in the app: recordingBudget 5 s, then flushBudget
+# 2 s, then a second flushBudget 2 s, so up to E2E_APP_QUIT_HOLD_S = 9 s; the
+# app has no SIGTERM handler, so a signal skips all of it). The waits are sized
+# from that hold, with margin: the Apple Event gets twice the hold to be
+# answered, and the process twice the hold to be gone after it.
+#
+# The Apple Event needs the Automation grant for this job's process to control
+# the dev app, and a pending consent prompt for it blocks rather than fails, so
+# it runs under run_bounded. What the answer means:
+#   - Answered: the hold runs; wait for the process.
+#   - Refused (-1743): the grant is missing for certain and the hold never ran.
+#     An ::error naming the grant, the signal ladder so the next lane does not
+#     inherit the app, and status 2, so a lane does not carry on as if the app
+#     had quit.
+#   - No answer (-1712, or the bound): a pending prompt, or an app that got the
+#     event and is in a modal or nested run loop, or a teardown past its hold.
+#     Nothing here tells those apart, so it is no verdict on the grant: wait
+#     the same as after an answer; if the app is still there, a ::warning
+#     naming all of them, then the signal ladder, and the old outcome (0).
+#   - Any other error (-600 not running, -128 cancelled, ...): not a grant
+#     question; the short wait the ladder always had, then signals.
+#
+# Worst case, the unanswered path, as the reaper's grace has to cover it:
+# run_bounded for 2 x hold + 5 = 23 s overshoots by at most its whole-second
+# wall-clock cap, 25 s; the exit wait of 2 x hold polls whole seconds, 19 s;
+# the TERM and KILL waits 4 s each: about 52 s.
+: "${E2E_APP_QUIT_HOLD_S:=9}"
+_app_gone() { ! pgrep -f "$1" >/dev/null; }
 quit_running_app() {
     local bundle_id="${1:-$DEV_BUNDLE_ID}"
     # Default pattern matches the dev bundle. Release-bundle callers
     # (e.g. test_rpc.sh against the homebrew-cask binary) override by
     # passing a second arg.
     local pattern="${2:-MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber}"
-    if ! pgrep -f "$pattern" >/dev/null; then
+    local hold="$E2E_APP_QUIT_HOLD_S" out status=0 verdict gone_status=0 wait_s
+    _app_gone "$pattern" && return 0
+    out="$(run_bounded $(( hold * 2 + 5 )) osascript \
+        -e "with timeout of $(( hold * 2 )) seconds" \
+        -e "tell application id \"$bundle_id\" to quit" \
+        -e 'end timeout' 2>&1)" || status=$?
+    verdict="$(tcc_probe_verdict "$status" "$out")"
+    case "$verdict" in
+        granted|blocked) wait_s=$(( hold * 2 )) ;;
+        denied) wait_s=0 ;;
+        *) wait_s=3 ;;
+    esac
+    if [ "$wait_s" -gt 0 ] && poll_until "$wait_s" 0.2 _app_gone "$pattern"; then
         return 0
     fi
-    osascript -e "tell application id \"$bundle_id\" to quit" 2>/dev/null || true
-    for _ in 1 2 3; do
-        pgrep -f "$pattern" >/dev/null || return 0
-        sleep 1
-    done
+    case "$verdict" in
+        denied)
+            gone_status=2
+            echo "::error title=TCC Automation → MeetingTranscriber-Dev not usable::the AppleScript quit was refused (${out:-exit $status}), so the app's quit hold (stopping a recording, flushing the pipeline snapshots) did not run; ending it by signal instead. Fix: $(tcc_fix_hint 'Automation → MeetingTranscriber-Dev')" >&2
+            ;;
+        blocked)
+            echo "::warning title=dev app did not quit::the AppleScript quit got no answer (${out:-exit $status}) and the app was still running $(( hold * 2 )) s later; ending it by signal, without its quit hold. Possible causes: a pending Automation → MeetingTranscriber-Dev prompt on the runner's screen ($(tcc_fix_hint 'Automation → MeetingTranscriber-Dev')), a modal or nested run loop in the app, or a teardown past its quit budget." >&2
+            ;;
+    esac
     pkill -f "$pattern" 2>/dev/null || true
-    for _ in 1 2 3; do
-        pgrep -f "$pattern" >/dev/null || return 0
-        sleep 1
-    done
+    poll_until 3 0.2 _app_gone "$pattern" && return "$gone_status"
     pkill -KILL -f "$pattern" 2>/dev/null || true
-    # Mirror the post-TERM ladder for the post-KILL reap. A process
+    # Mirror the post-TERM wait for the post-KILL reap. A process
     # wedged in a kernel call can take longer than one `sleep 1` to
     # be reaped — a single check would false-negative.
-    for _ in 1 2 3; do
-        pgrep -f "$pattern" >/dev/null || return 0
-        sleep 1
-    done
+    poll_until 3 0.2 _app_gone "$pattern" && return "$gone_status"
     echo "ERROR: could not stop running MeetingTranscriber — kill it manually and retry" >&2
     return 1
 }
