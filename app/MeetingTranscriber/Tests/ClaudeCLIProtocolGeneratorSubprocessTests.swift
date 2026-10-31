@@ -11,9 +11,6 @@
     /// `HeldFake`s, and limits not under test are `HeldFake.noLimit`. The time
     /// checks left are coarse ceilings on a stop, `HeldFake.stopBound`.
     final class ClaudeCLIProtocolGeneratorSubprocessTests: XCTestCase {
-        /// The limit for runs expected to time out, on a clock the test
-        /// moves.
-        private static let shortTimeout: TimeInterval = 0.2
         private static let grace: TimeInterval = 0.15
 
         private var scratch: URL?
@@ -51,7 +48,7 @@
 
             try await assertTimesOut(script: script, cli: cli)
 
-            try await assertReaped(child.pidFile)
+            try await assertReaped(child)
         }
 
         /// SIGTERM goes to the CLI's whole process group: a CLI that obeys
@@ -67,7 +64,7 @@
 
             try await assertTimesOut(script: script, cli: cli)
 
-            try await assertReaped(child.pidFile)
+            try await assertReaped(child)
         }
 
         /// Closing its output is not finishing: a CLI that does so and keeps
@@ -100,7 +97,7 @@
             /usr/bin/perl -e 'setpgrp(0, 0); exec @ARGV' '\(child.path)' <&3 &
             exec 3<&-
             exec 1>&-
-            \(child.waitForStart)
+            \(child.shellWaitForStart)
             exec '\(cli.path)'
             """)
 
@@ -194,7 +191,7 @@
             let generator = Self.makeGenerator(script: script)
             let run = Task { try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false) }
             defer { run.cancel() }
-            try await waitForPID(pidFile: probe.pidFile)
+            try await waitForStart(of: probe)
             let start = Date()
 
             run.cancel()
@@ -208,7 +205,7 @@
         /// Cancelling the job stops the CLI, waits for it to exit and ends
         /// the run with a cancellation. The CLI ignores SIGTERM, so a run
         /// that returned without waiting would leave it running. The held
-        /// CLI writes its pid after the trap is set, so the cancel cannot
+        /// CLI starts after the trap is set, so the cancel cannot
         /// come before it.
         func testCancellingGenerateStopsTheCLI() async throws {
             let cli = try makeHeldFake(in: XCTUnwrap(scratch), name: "cli")
@@ -219,7 +216,7 @@
             let generator = Self.makeGenerator(script: script)
             let run = Task { try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false) }
             defer { run.cancel() }
-            try await waitForPID(pidFile: cli.pidFile)
+            try await waitForStart(of: cli)
             let start = Date()
 
             run.cancel()
@@ -233,21 +230,15 @@
 
         /// Runs `generate` against `script` and asserts that it fails with
         /// the timeout, and that the fake CLI `cli` was stopped rather than
-        /// left to give up. The limit runs on a clock moved once the held CLI
-        /// has written its pid, after everything the fake set up first: in
-        /// real time the limit could pass first on a loaded machine, and the
-        /// SIGTERM would then end a fake before it had set its trap or
-        /// started what the test is about.
+        /// left to give up (`passLimit`).
         private func assertTimesOut(
             script: String, cli: HeldFake, transcript: String = "Speaker 1: hello",
             file: StaticString = #filePath, line: UInt = #line,
         ) async throws {
-            let clock = ManualClock()
-            async let run = Self.outcome(script: script, timeout: Self.shortTimeout, transcript: transcript, clock: clock)
-            try await waitForPID(pidFile: cli.pidFile)
-            let start = Date()
-            await clock.advance(by: .seconds(Self.shortTimeout))
-            let result = await run
+            let result = try await passLimit(of: cli, "the CLI was not stopped", file: file, line: line) { clock, timeout in
+                try await Self.makeGenerator(script: script, timeout: timeout, clock: clock)
+                    .generate(transcript: transcript, title: "Sync", diarized: false)
+            }
             switch result {
             case .failure(ProtocolError.timeout):
                 break
@@ -255,17 +246,15 @@
             default:
                 XCTFail("expected a timeout, got \(result)", file: file, line: line)
             }
-            cli.assertStopped(since: start, "the CLI was not stopped", file: file, line: line)
         }
 
         /// Runs `generate` against `script` and reports how it ended.
         private static func outcome(
-            script: String, timeout: TimeInterval = HeldFake.noLimit, drainGrace: TimeInterval = HeldFake.noLimit,
-            transcript: String = "Speaker 1: hello", clock: any Clock<Duration> = SuspendingClock(),
+            script: String, drainGrace: TimeInterval = HeldFake.noLimit,
         ) async -> Result<String, any Error> {
-            let generator = makeGenerator(script: script, timeout: timeout, drainGrace: drainGrace, clock: clock)
+            let generator = makeGenerator(script: script, drainGrace: drainGrace)
             do {
-                return try await .success(generator.generate(transcript: transcript, title: "Sync", diarized: false))
+                return try await .success(generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false))
             } catch {
                 return .failure(error)
             }
@@ -286,8 +275,10 @@
         /// this process's child once the CLI is gone, it is reaped elsewhere,
         /// a moment later. Waits up to `HeldFake.stopBound` for that; the child holds
         /// until the test is over, so only a stop ends it before then.
-        private func assertReaped(_ pidFile: URL, file: StaticString = #filePath, line: UInt = #line) async throws {
-            let pid = try XCTUnwrap(readPID(pidFile), "the child never started", file: file, line: line)
+        private func assertReaped(_ child: HeldFake, file: StaticString = #filePath, line: UInt = #line) async throws {
+            let pidFile = child.pidFile
+            child.assertNotRunOut("the child gave up instead of being stopped", file: file, line: line)
+            let pid = try XCTUnwrap(readPID(pidFile), "the child wrote no pid", file: file, line: line)
             let reapedBy = Date().addingTimeInterval(HeldFake.stopBound)
             while kill(pid, 0) == 0, Date() < reapedBy {
                 try await Task.sleep(for: .milliseconds(20))

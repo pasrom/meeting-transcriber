@@ -141,10 +141,8 @@ final class FFmpegHelperProcessTests: XCTestCase {
     // MARK: - Timeout
 
     /// An ffmpeg that ignores SIGTERM is killed at the limit, and the import
-    /// fails only once it has exited. The limit runs on a clock the test
-    /// moves once the fake has set its trap, which the pid written after it
-    /// shows: in real time it could pass first on a loaded machine, and the
-    /// SIGTERM would then end a fake not yet ignoring it.
+    /// fails only once it has exited. The limit must pass after the trap is
+    /// set (`passLimit`).
     func testLoadKillsAnFFmpegThatIgnoresSIGTERMAtTheTimeout() async throws {
         let folder = try makeTempDirectory(prefix: "ffmpeg-process")
         let fake = try makeHeldFake(in: folder, name: "ffmpeg")
@@ -152,18 +150,13 @@ final class FFmpegHelperProcessTests: XCTestCase {
         trap '' TERM
         exec '\(fake.path)'
         """)
-        let timeout: TimeInterval = 0.5
-        let clock = ManualClock()
-        let run = Task { try await Self.load(script: script, timeout: timeout, clock: clock) }
-        defer { run.cancel() }
-        try await waitForPID(pidFile: fake.pidFile)
-        let start = Date()
 
-        await clock.advance(by: .seconds(timeout))
-        let message = await failureMessage { try await run.value }
+        let result = try await passLimit(of: fake, "ffmpeg was not killed") { clock, timeout in
+            try await Self.load(script: script, timeout: timeout, clock: clock)
+        }
+        let message = await failureMessage { try result.get() }
 
         XCTAssertEqual(message?.hasPrefix("timed out"), true, "got \(String(describing: message))")
-        fake.assertStopped(since: start, "ffmpeg was not killed")
     }
 
     // MARK: - Cancellation
@@ -171,7 +164,7 @@ final class FFmpegHelperProcessTests: XCTestCase {
     /// Cancelling the import stops ffmpeg, waits for it to exit, removes the
     /// temporary WAV and ends with a cancellation. The fake ignores SIGTERM,
     /// so an import that returned without waiting would leave it running.
-    /// The pid is written after the trap is set, so the cancel cannot come
+    /// It starts after the trap is set, so the cancel cannot come
     /// before it.
     func testCancellingTheLoadStopsFFmpeg() async throws {
         let folder = try makeTempDirectory(prefix: "ffmpeg-process")
@@ -185,7 +178,7 @@ final class FFmpegHelperProcessTests: XCTestCase {
         """)
         let run = Task { try await Self.load(script: script) }
         defer { run.cancel() }
-        try await waitForPID(pidFile: fake.pidFile)
+        try await waitForStart(of: fake)
         let start = Date()
 
         run.cancel()
