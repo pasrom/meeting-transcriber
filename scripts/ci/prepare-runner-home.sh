@@ -9,7 +9,9 @@
 # The home is <tool-cache>/meetingtranscriber-home/<runner-name>. The tests run
 # with CFFIXED_USER_HOME pointed there, which moves NSHomeDirectory(), so an
 # ffmpeg in the account's ~/.local/bin, one of the places FFmpegHelper looks,
-# is linked in; without it the ffmpeg tests would start skipping.
+# is linked in, as it is for a local run in such a home. CI test steps do not
+# rely on it: they use the pinned FFMPEG_BINARY from .github/actions/setup-ffmpeg,
+# and on a runner the ffmpeg-tier tests fail on any other binary.
 #
 # Each folder the script creates or writes in (the base, the home, its
 # Library, and the .local/bin chain to the ffmpeg link) is checked before

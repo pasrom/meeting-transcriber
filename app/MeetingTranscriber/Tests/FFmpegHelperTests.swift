@@ -168,10 +168,48 @@ final class FFmpegHelperTests: XCTestCase {
         XCTAssertEqual(stderr, "")
     }
 
+    // MARK: - CI gate for the ffmpeg-tier tests
+
+    func testGitHubRunnerIsRecognisedByEitherRunnerVariable() {
+        XCTAssertFalse(isGitHubRunner(env: ["CI": "true"]))
+        XCTAssertTrue(isGitHubRunner(env: ["RUNNER_NAME": "mini-1"]))
+        XCTAssertTrue(isGitHubRunner(env: ["RUNNER_ENVIRONMENT": "github-hosted"]))
+    }
+
+    /// On a GitHub runner the gate never answers "skip": only the pinned
+    /// FFMPEG_BINARY in use passes, anything else throws.
+    func testCIGateAcceptsOnlyThePinnedBuild() throws {
+        let runner = ["RUNNER_ENVIRONMENT": "github-hosted"]
+        let pinned = runner.merging(["FFMPEG_BINARY": "/pinned/ffmpeg"]) { $1 }
+
+        XCTAssertTrue(try ffmpegAvailableForTests(env: pinned, path: "/pinned/ffmpeg"))
+        assertGate(env: pinned, path: "/opt/homebrew/bin/ffmpeg", throws: .notThePinnedBuild(
+            found: "/opt/homebrew/bin/ffmpeg", pinned: "/pinned/ffmpeg",
+        ))
+        assertGate(env: pinned, path: nil, throws: .notThePinnedBuild(found: nil, pinned: "/pinned/ffmpeg"))
+        // An ffmpeg found without the action is a job that forgot it.
+        assertGate(env: runner, path: "/opt/homebrew/bin/ffmpeg", throws: .notPinned)
+        assertGate(env: runner, path: nil, throws: .notPinned)
+    }
+
+    func testOffCIGateReportsAvailability() throws {
+        XCTAssertTrue(try ffmpegAvailableForTests(env: [:], path: "/opt/homebrew/bin/ffmpeg"))
+        XCTAssertFalse(try ffmpegAvailableForTests(env: [:], path: nil))
+    }
+
+    private func assertGate(
+        env: [String: String], path: String?, throws expected: FFmpegMissingOnCI,
+        line: UInt = #line,
+    ) {
+        XCTAssertThrowsError(try ffmpegAvailableForTests(env: env, path: path), line: line) { error in
+            XCTAssertEqual(error as? FFmpegMissingOnCI, expected, line: line)
+        }
+    }
+
     // MARK: - Audio Loading from Fixtures (requires ffmpeg)
 
     func testLoadAudioFromMKV() async throws {
-        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+        try requireFFmpeg()
 
         let (samples, sampleRate) = try await FFmpegHelper.loadAudioWithFFmpeg(url: fixtureURL("two_speakers_de.mkv"))
         XCTAssertEqual(sampleRate, 16000)
@@ -180,7 +218,7 @@ final class FFmpegHelperTests: XCTestCase {
     }
 
     func testLoadAudioFromWebM() async throws {
-        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+        try requireFFmpeg()
 
         let (samples, sampleRate) = try await FFmpegHelper.loadAudioWithFFmpeg(url: fixtureURL("two_speakers_de.webm"))
         XCTAssertEqual(sampleRate, 16000)
@@ -188,7 +226,7 @@ final class FFmpegHelperTests: XCTestCase {
     }
 
     func testLoadAudioFromOGG() async throws {
-        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+        try requireFFmpeg()
 
         let (samples, sampleRate) = try await FFmpegHelper.loadAudioWithFFmpeg(url: fixtureURL("two_speakers_de.ogg"))
         XCTAssertEqual(sampleRate, 16000)
@@ -198,7 +236,7 @@ final class FFmpegHelperTests: XCTestCase {
     // MARK: - Full Fallback Chain (AVAudioFile → AVAsset → ffmpeg)
 
     func testLoadAudioAsFloat32FallsBackToFFmpegForMKV() async throws {
-        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+        try requireFFmpeg()
 
         let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: fixtureURL("two_speakers_de.mkv"))
         XCTAssertEqual(sampleRate, 16000)
@@ -206,7 +244,7 @@ final class FFmpegHelperTests: XCTestCase {
     }
 
     func testLoadAudioAsFloat32FallsBackToFFmpegForWebM() async throws {
-        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+        try requireFFmpeg()
 
         let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: fixtureURL("two_speakers_de.webm"))
         XCTAssertEqual(sampleRate, 16000)
@@ -216,7 +254,7 @@ final class FFmpegHelperTests: XCTestCase {
     // MARK: - Audio Quality
 
     func testFFmpegExtractedAudioHasEnergy() async throws {
-        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+        try requireFFmpeg()
 
         let (samples, _) = try await FFmpegHelper.loadAudioWithFFmpeg(url: fixtureURL("two_speakers_de.mkv"))
         let rms = sqrt(samples.map { $0 * $0 }.reduce(0, +) / Float(samples.count))
@@ -224,7 +262,7 @@ final class FFmpegHelperTests: XCTestCase {
     }
 
     func testMKVAndWAVProduceSimilarDuration() async throws {
-        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+        try requireFFmpeg()
 
         let (wavSamples, wavRate) = try await AudioMixer.loadAudioAsFloat32(url: fixtureURL("two_speakers_de.wav"))
         let (mkvSamples, mkvRate) = try await AudioMixer.loadAudioAsFloat32(url: fixtureURL("two_speakers_de.mkv"))
