@@ -109,6 +109,8 @@ jobs:
       # `Package.resolved` and Xcode path (no fallback to an older cache); the app's own
       # sources are newer than the cache and are always recompiled.
       # build_release.sh builds the App Store variant in `.build-appstore`.
+      # A `v*` tag build, the one that is published, always builds cold: it
+      # neither restores nor saves this cache.
       # The transcription/diarization models are neither loaded nor bundled by
       # build_release.sh, so skip the model cache + prewarm. (It does fetch the
       # 2.9 MB LocalVQE AEC model to bundle it, deliberately outside that cache:
@@ -119,6 +121,7 @@ jobs:
           cache-key-suffix: release-${{ matrix.variant }}
           cache-path: app/MeetingTranscriber/.build${{ matrix.variant == 'appstore' && '-appstore' || '' }}
           cache-restore-fallback: "false"
+          cache-spm: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           cache-models: "false"
 
       - name: Install Developer ID certificate

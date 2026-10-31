@@ -24,6 +24,14 @@ inputs:
       ones.
     required: false
     default: "true"
+  cache-spm:
+    description: >
+      Restore and save the SPM build cache. Anything but `true` skips both, so
+      the build starts cold and leaves no cache behind (a malformed value fails
+      toward the cold build, not toward a warm one). Does not affect the model
+      cache.
+    required: false
+    default: "true"
   cache-path:
     description: >
       The SwiftPM scratch directory to cache. build_release.sh builds the App
@@ -67,6 +75,7 @@ runs:
       run: echo "dir=${DEVELOPER_DIR:-$(xcode-select -p)}" >> "$GITHUB_OUTPUT"
 
     - name: Cache SPM dependencies
+      if: inputs.cache-spm == 'true'
       uses: actions/cache@v5
       with:
         path: ${{ inputs.cache-path }}
