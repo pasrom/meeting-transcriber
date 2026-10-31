@@ -12,12 +12,7 @@ import XCTest
 final class RunnerHomeIsolationTests: XCTestCase {
     func testSelfHostedRunsUseTheRunnersOwnHome() throws {
         let environment = ProcessInfo.processInfo.environment
-        // Set by the GitHub runner for every step, as is RUNNER_ENVIRONMENT
-        // (`self-hosted` or `github-hosted`). Neither set: not on CI.
-        try XCTSkipIf(
-            environment["RUNNER_NAME"] == nil && environment["RUNNER_ENVIRONMENT"] == nil,
-            "Not on a GitHub runner",
-        )
+        try XCTSkipUnless(isGitHubRunner(env: environment), "Not on a GitHub runner")
         let runnerEnvironment = try XCTUnwrap(
             environment["RUNNER_ENVIRONMENT"],
             "The runner reports no RUNNER_ENVIRONMENT, so this cannot tell a self-hosted run from a hosted one",

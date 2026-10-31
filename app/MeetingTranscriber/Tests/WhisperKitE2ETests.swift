@@ -467,9 +467,11 @@ final class WhisperKitE2ETests: XCTestCase {
         XCTAssertEqual(engine.modelState, .loaded)
 
         // Each entry covers one ingestion path:
-        //   - WAV/MP3/M4A/MP4 ride the AVAudioFile/AVAsset tier of `AudioMixer`
-        //   - MKV/WebM/OGG only decode through the FFmpegHelper fallback,
-        //     so they're skipped on hosts without ffmpeg installed.
+        //   - WAV/MP3/M4A/MP4/OGG ride the AVAudioFile/AVAsset tier of `AudioMixer`
+        //   - MKV/WebM (`FFmpegHelper.ffmpegOnlyExtensions`) only decode
+        //     through the FFmpegHelper fallback, so they're skipped on hosts
+        //     without ffmpeg installed (an error on CI, see
+        //     `ffmpegAvailableForTests`).
         let stem = "two_speakers_de"
         let formats: [(ext: String, label: String)] = [
             ("wav", "WAV"), ("mp3", "MP3"), ("m4a", "M4A"), ("mp4", "MP4"),
@@ -477,7 +479,7 @@ final class WhisperKitE2ETests: XCTestCase {
         ]
 
         for entry in formats {
-            if FFmpegHelper.ffmpegOnlyExtensions.contains(entry.ext), !FFmpegHelper.isAvailable {
+            if FFmpegHelper.ffmpegOnlyExtensions.contains(entry.ext), try !ffmpegAvailableForTests() {
                 continue
             }
             let transcript = try await transcribeFixture("\(stem).\(entry.ext)", engine: engine)
