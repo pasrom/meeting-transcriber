@@ -4878,6 +4878,89 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// Whether a job interrupted in `.generatingProtocol` still has naming data
+    /// is asked of every folder it recorded, not only the newest. Naming data
+    /// still on disk means the confirm never rewrote the transcript, and a
+    /// protocol-only resume would then publish the auto-names. The newest
+    /// folder can hold only the audio stage 3 moved there, while the naming
+    /// data sits in the folder before it.
+    func testTheResumeLooksForNamingDataInEveryRecordedFolder() async throws {
+        let test = try makePendingJobInSnapshot(title: "Quit Mid Confirm", folders: 2)
+        var interrupted = test.job
+        interrupted.state = .generatingProtocol
+        let transcript = test.folders[0].appendingPathComponent("protocols/quit_mid_confirm.txt")
+        try write("[00:00] SPEAKER_0: hello", to: transcript)
+        interrupted.transcriptPath = transcript
+        let snapshot = try JSONEncoder().encode([interrupted])
+        let snapshotURL = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
+        // A registry of its own per restore, so the control's run cannot leave
+        // the job looking in flight to the second restore.
+        func restore() -> PipelineQueue {
+            let queue = makeRestoreQueue(
+                outputDir: tmpDir.appendingPathComponent("current-output"),
+                inFlightRuns: InFlightRunRegistry(),
+            )
+            queue.loadSnapshot()
+            return queue
+        }
+
+        // Control: with no naming data anywhere, this job is resumed from its
+        // transcript. Otherwise the assertion below could pass for a reason
+        // that has nothing to do with the folders.
+        try snapshot.write(to: snapshotURL)
+        let control = restore()
+        XCTAssertEqual(control.protocolResumeDispositions[test.job.id], .resumeProtocolOnly)
+        // The restore and the resume it starts rewrite the snapshot off the
+        // main actor; let both land before the interrupted state is written
+        // back for the second restore.
+        await control.awaitProcessing()
+        await control.awaitSnapshotFlush()
+
+        try SpeakerNamingStore(outputDir: test.folders[0])
+            .save(test.namingData(in: test.folders[0]), slug: test.slug)
+        try snapshot.write(to: snapshotURL)
+        let restored = restore()
+
+        XCTAssertTrue(restored.jobs.contains { $0.id == test.job.id }, "test premise: the job survived the restore")
+        XCTAssertNil(
+            restored.protocolResumeDispositions[test.job.id],
+            "naming data in the earlier folder means the confirm never landed: run in full",
+        )
+        await restored.awaitProcessing()
+    }
+
+    /// A run that parks no naming data still records the folder stage 3 moved
+    /// its 16 kHz audio and segments into. Nothing else records it then, and a
+    /// job that recorded none falls back to whichever folder the setting points
+    /// at, which after a repoint is not the one holding its files.
+    func testARunWithoutNamingDataRecordsTheFolderItsSidecarsWentTo() async throws {
+        let (queue, _) = makeStraightThroughQueue()
+        let job = try PipelineJob(
+            meetingTitle: "No Naming Data", appName: "File",
+            mixPath: createTestAudioFile(in: tmpDir), appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+        await queue.processNext()
+        await queue.awaitSnapshotFlush()
+
+        XCTAssertNil(queue.speakerNamingDataByJob[job.id], "test premise: no naming data was parked")
+        let outputDir = try XCTUnwrap(queue.outputDir)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: outputDir.appendingPathComponent("recordings").path),
+            "test premise: stage 3 moved sidecars under the output folder",
+        )
+        // Read back from the snapshot rather than the live job: the record is
+        // only worth anything if it reaches the file a restore reads.
+        let saved = try JSONDecoder().decode(
+            [PipelineJob].self,
+            from: Data(contentsOf: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)),
+        )
+        XCTAssertEqual(
+            saved.first { $0.id == job.id }?.sidecarOutputDirs.map(\.standardizedFileURL.path),
+            [outputDir.standardizedFileURL.path],
+        )
+    }
+
     // MARK: - Restore arrangement
 
     /// One `.speakerNamingPending` job in a snapshot, having recorded each of
