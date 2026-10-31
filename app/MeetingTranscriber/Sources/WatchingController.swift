@@ -38,6 +38,11 @@ final class WatchingController {
     /// See `defaultStartJoinTimeout`.
     private let startJoinTimeout: Duration
 
+    /// What `startJoinTimeout` is measured on. The continuous clock in
+    /// production; a test passes one it advances itself, so it can let the
+    /// bound pass at a point it chooses instead of timing a real wait.
+    private let joinClock: any Clock<Duration>
+
     /// Set while `startManualRecording` is in flight, i.e. from the call until
     /// `watchLoop` holds the manual loop. `startTask`'s counterpart for the
     /// manual path, so `isManualRecording` covers the window before the loop
@@ -139,6 +144,7 @@ final class WatchingController {
             #endif
         },
         startJoinTimeout: Duration = WatchingController.defaultStartJoinTimeout,
+        joinClock: any Clock<Duration> = ContinuousClock(),
         makeDetector: (() -> any MeetingDetecting)? = nil,
         makeRecorder: @escaping @MainActor () -> any RecordingProvider = { DualSourceRecorder() },
     ) {
@@ -152,6 +158,7 @@ final class WatchingController {
         self.requestScreenRecording = requestScreenRecording
         self.requestAccessibility = requestAccessibility
         self.startJoinTimeout = startJoinTimeout
+        self.joinClock = joinClock
         self.makeRecorder = makeRecorder
         // Tests inject a deterministic detector; production defaults to one
         // filtered by the "Apps to Watch" toggles, re-read at each watch start.
@@ -351,14 +358,21 @@ final class WatchingController {
     /// settled, false on expiry or cancellation. See `joinStart` for why the
     /// bound and the polling shape are what they are.
     private func join(while inFlight: () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now + startJoinTimeout
-        while inFlight() {
-            if Task.isCancelled { return false }
-            if ContinuousClock.now >= deadline { return false }
-            try? await Task.sleep(for: .milliseconds(50))
+        // Opens the existential so the deadline is an instant of that clock.
+        func wait(on clock: some Clock<Duration>) async -> Bool {
+            let deadline = clock.now.advanced(by: startJoinTimeout)
+            while inFlight() {
+                if Task.isCancelled { return false }
+                if clock.now >= deadline { return false }
+                try? await clock.sleep(for: Self.joinPollInterval)
+            }
+            return true
         }
-        return true
+        return await wait(on: joinClock)
     }
+
+    /// How often a join rechecks whether the start it waits for has settled.
+    static let joinPollInterval: Duration = .milliseconds(50)
 
     // MARK: - Manual recording
 
