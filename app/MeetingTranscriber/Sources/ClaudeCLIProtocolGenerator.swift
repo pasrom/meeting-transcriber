@@ -34,6 +34,10 @@
         /// `--help` probe keeps the suspending clock.
         let clock: any Clock<Duration>
 
+        /// How long the `--help` probe may take
+        /// (`helpProbeTimeoutSeconds` in production).
+        let helpProbeTimeout: TimeInterval
+
         init(
             claudeBin: String,
             language: String,
@@ -42,6 +46,7 @@
             terminationGrace: TimeInterval = BoundedProcess.defaultTerminationGrace,
             outputDrainGrace: TimeInterval = ProcessOutput.defaultDrainGrace,
             clock: any Clock<Duration> = SuspendingClock(),
+            helpProbeTimeout: TimeInterval = Self.helpProbeTimeoutSeconds,
         ) {
             self.claudeBin = claudeBin
             self.language = language
@@ -50,6 +55,7 @@
             self.terminationGrace = terminationGrace
             self.outputDrainGrace = outputDrainGrace
             self.clock = clock
+            self.helpProbeTimeout = helpProbeTimeout
         }
 
         static let timeoutSeconds: TimeInterval = 600
@@ -71,12 +77,16 @@
             meetingStartTime: Date?,
         ) async throws -> String {
             let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language, meetingStartTime: meetingStartTime) + transcript
-            let launch = await Self.launchConfiguration(claudeBin: claudeBin, anthropicAPIKey: anthropicAPIKey)
+            let launch = await Self.launchConfiguration(
+                claudeBin: claudeBin, anthropicAPIKey: anthropicAPIKey, helpTimeout: helpProbeTimeout,
+            )
             try Task.checkCancellation()
             do {
                 return try await run(prompt: prompt, launch: launch)
             } catch let rejection as NoSessionPersistenceRejected {
-                let retry = await Self.launchWithoutRejectedFlag(after: launch, claudeBin: claudeBin)
+                let retry = await Self.launchWithoutRejectedFlag(
+                    after: launch, claudeBin: claudeBin, helpTimeout: helpProbeTimeout,
+                )
                 try Task.checkCancellation()
                 guard let retry else { throw rejection.error }
                 return try await run(prompt: prompt, launch: retry)

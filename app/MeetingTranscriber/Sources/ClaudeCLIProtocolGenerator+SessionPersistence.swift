@@ -44,14 +44,18 @@
         /// in only when `--help` lists it, since a CLI older than the flag
         /// rejects it; a help text that cannot be read counts as no, which
         /// keeps the behaviour from before the flag existed.
-        static func launchConfiguration(claudeBin: String, anthropicAPIKey: String?) async -> LaunchConfiguration {
+        static func launchConfiguration(
+            claudeBin: String, anthropicAPIKey: String?, helpTimeout: TimeInterval,
+        ) async -> LaunchConfiguration {
             let resolvedBin = resolveClaudePath(claudeBin)
             let environment = buildEnvironment(
                 baseEnvironment: ProcessInfo.processInfo.environment,
                 searchPaths: searchPaths,
                 anthropicAPIKey: anthropicAPIKey,
             )
-            let answer = await askNoSessionPersistence(resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment)
+            let answer = await askNoSessionPersistence(
+                resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment, helpTimeout: helpTimeout,
+            )
             if answer != .listed, !Task.isCancelled {
                 logger.warning(
                     "claude_cli_session_persistence_on helpRead=\(answer != .unread, privacy: .public) — the CLI keeps this run's session, transcript included",
@@ -68,12 +72,13 @@
         /// only a help text that was read and does not list the flag earns a
         /// run without it, with the same executable and environment.
         static func launchWithoutRejectedFlag(
-            after failed: LaunchConfiguration, claudeBin: String,
+            after failed: LaunchConfiguration, claudeBin: String, helpTimeout: TimeInterval,
         ) async -> LaunchConfiguration? {
             let key = cacheKey(resolvedBin: failed.resolvedBin, claudeBin: claudeBin)
             _ = binariesAcceptingNoSessionPersistence.withLock { $0.remove(key) }
             let answer = await askNoSessionPersistence(
                 resolvedBin: failed.resolvedBin, claudeBin: claudeBin, environment: failed.environment,
+                helpTimeout: helpTimeout,
             )
             logger.warning(
                 "claude_cli_rejected_no_session_persistence help=\(String(describing: answer), privacy: .public) retry=\(answer == .notListed, privacy: .public)",
@@ -99,11 +104,13 @@
 
         /// What the CLI's `--help` says about the flag, or the remembered yes.
         private static func askNoSessionPersistence(
-            resolvedBin: String, claudeBin: String, environment: [String: String],
+            resolvedBin: String, claudeBin: String, environment: [String: String], helpTimeout: TimeInterval,
         ) async -> HelpAnswer {
             let key = cacheKey(resolvedBin: resolvedBin, claudeBin: claudeBin)
             if binariesAcceptingNoSessionPersistence.withLock({ $0.contains(key) }) { return .listed }
-            let help = await readHelp(resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment)
+            let help = await readHelp(
+                resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment, timeout: helpTimeout,
+            )
             // A probe ended by a cancelled job says nothing about the CLI;
             // the job ends right after.
             guard let help, !Task.isCancelled else { return .unread }
