@@ -75,6 +75,25 @@ final class WhisperKitTranscriptionFailureTests: XCTestCase {
         }
     }
 
+    /// Live captions run the same hallucination filter and join what is left.
+    func testLiveSamplesAreFilteredAndJoined() async throws {
+        let engine = WhisperKitEngine()
+        engine.installDecodingClientForTesting(ScriptedWhisperDecodingClient(sampleResults: [
+            Self.result(segments: [
+                TranscriptionSegment(text: "<|0.00|> Hello"),
+                TranscriptionSegment(text: " Hello"),
+            ]),
+            Self.result(segments: [
+                TranscriptionSegment(text: " "),
+                TranscriptionSegment(text: " World<|1.00|>"),
+            ]),
+        ]))
+
+        let text = try await engine.transcribeSamples([0])
+
+        XCTAssertEqual(text, "Hello World")
+    }
+
     // MARK: - Through the pipeline
 
     /// The user-facing point of the change: a job whose transcription failed
@@ -123,9 +142,14 @@ final class WhisperKitTranscriptionFailureTests: XCTestCase {
 private final class ScriptedWhisperDecodingClient: WhisperDecodingClient {
     let tokenizer: (any WhisperTokenizer)? = nil
     private let fileResult: Result<[TranscriptionResult], any Error>
+    private let sampleResults: [TranscriptionResult]
 
-    init(fileResult: Result<[TranscriptionResult], any Error>) {
+    init(
+        fileResult: Result<[TranscriptionResult], any Error> = .success([]),
+        sampleResults: [TranscriptionResult] = [],
+    ) {
         self.fileResult = fileResult
+        self.sampleResults = sampleResults
     }
 
     func transcribeFile(
@@ -137,6 +161,6 @@ private final class ScriptedWhisperDecodingClient: WhisperDecodingClient {
     }
 
     func transcribeSamples(_: [Float], decodeOptions _: DecodingOptions) -> [TranscriptionResult] {
-        []
+        sampleResults
     }
 }
