@@ -362,6 +362,71 @@ extension PipelineQueue {
         return viability
     }
 
+    /// Transcribe the viable tracks of a dual-source pair, keeping whichever
+    /// transcribed when the other fails on its own file
+    /// (`DualTrackTranscription`). A dropped track downgrades the stored
+    /// verdict, which is what the transcript note and both diarization runs
+    /// read.
+    private func transcribeTracks(
+        viability: DualTrackViability, echoRemoved: Bool, tracks: (app: URL, mic: URL),
+        ctx: JobContext, engine: any TranscribingEngine,
+    ) async throws -> DualTrackTranscription.Kept {
+        // Only a `.both` pair has a track to fall back on. With one viable
+        // track, or with `.neither`, the first failure is the job's error and
+        // the other file is not decoded just to report it.
+        let canDropTrack = viability == .both
+        let appAttempt = viability == .micOnly
+            ? nil
+            : try await transcribeTrack(tracks.app, canDrop: canDropTrack, ctx: ctx, engine: engine)
+        // An engine that ignores cancellation still returns; the second track
+        // is not transcribed for a job that is gone.
+        try ensureStillQueued(ctx.jobID)
+        let micAttempt = viability == .appOnly
+            ? nil
+            : try await transcribeTrack(tracks.mic, canDrop: canDropTrack, ctx: ctx, engine: engine)
+        let kept = try DualTrackTranscription.resolve(app: appAttempt, mic: micAttempt, viability: viability)
+        if kept.viability != viability {
+            setTrackViability(id: ctx.jobID, kept.viability)
+        }
+        for warning in kept.warnings {
+            logger.warning("[\(ctx.shortID, privacy: .public)] \(warning, privacy: .public)")
+            addWarning(id: ctx.jobID, warning)
+        }
+        if echoRemoved, !kept.viability.carriesAppAudio {
+            // The canceller took the far end out of the microphone track
+            // before the app track failed, so neither track has it any more.
+            // Close to unreachable, since the canceller has just read the app
+            // file, but if it happens the note alone would say the microphone
+            // holds everything there is.
+            addWarning(
+                id: ctx.jobID,
+                "Echo cancellation had removed the other participants from the microphone track, so they are missing from this transcript",
+            )
+        }
+        return kept
+    }
+
+    /// Transcribe one track of a dual-source pair. With `canDrop`, a failure
+    /// on the track's own file is returned instead of thrown, so
+    /// `DualTrackTranscription` can keep the other track. Everything else
+    /// still ends the run here: a cancellation (a `CancellationError`, or any
+    /// error once the job is gone), and an engine-wide failure, which would
+    /// only repeat on the other track after loading the same model a second
+    /// time.
+    private func transcribeTrack(
+        _ url: URL, canDrop: Bool, ctx: JobContext, engine: any TranscribingEngine,
+    ) async throws -> DualTrackTranscription.Attempt {
+        do {
+            return try await .success(engine.transcribeSegments(audioPath: url))
+        } catch let cancellation as CancellationError {
+            throw cancellation
+        } catch {
+            try ensureStillQueued(ctx.jobID)
+            guard canDrop, TranscriptionFailureScope.of(error) == .file else { throw error }
+            return .failure(error)
+        }
+    }
+
     /// The dual-source half of stage 1: resample both tracks, measure the echo
     /// between them, transcribe them separately, and merge the two transcripts
     /// into one timeline.
@@ -428,27 +493,31 @@ extension PipelineQueue {
         announceEchoBleed(echoAnalysis, jobID: ctx.jobID, echoRemoved: echoRemoved)
 
         // The drop itself: a track with nothing in it is never handed to the
-        // engine. `.neither` deliberately stays on the unguarded path — with
-        // nothing on either side there is no transcript to save, so that job
-        // fails exactly as it did before, carrying the engine's own message.
-        let appSegments = viability == .micOnly
-            ? []
-            : try await engine.transcribeSegments(audioPath: app16k)
-        // An engine that ignores cancellation still returns; the second track
-        // is not transcribed for a job that is gone.
-        try ensureStillQueued(ctx.jobID)
-        let micSegments = viability == .appOnly
-            ? []
-            : try await engine.transcribeSegments(audioPath: mic16k)
+        // engine. `.neither` still hands both over: with nothing on either
+        // side there is no transcript to save, and the job fails with what the
+        // engine says, its refusal on the first track or, from an engine that
+        // returns nothing, "Empty transcript". A track of a `.both` pair that
+        // fails on its own file is dropped after the fact, and
+        // `transcribed.viability` says so.
+        let transcribed = try await transcribeTracks(
+            viability: viability, echoRemoved: echoRemoved,
+            tracks: (app: app16k, mic: mic16k), ctx: ctx, engine: engine,
+        )
+        let appSegments = transcribed.app
+        let micSegments = transcribed.mic
 
         // On an affected recording, work out which microphone segments are only
         // the loudspeaker coming back, so the merge can leave them out of the
-        // transcript instead of writing the far end twice.
-        let micEchoVerdicts = await classifyMicEcho(
-            remedy: remedy, analysis: echoAnalysis,
-            tracks: (app: app16k, mic: mic16k, micDelay: ctx.micDelay),
-            micSegments: micSegments,
-        )
+        // transcript instead of writing the far end twice. Not once the app
+        // track is lost: whatever is left of the far end is then on the
+        // microphone alone, and removing it as a copy would remove the only one.
+        let micEchoVerdicts = transcribed.viability.carriesAppAudio
+            ? await classifyMicEcho(
+                remedy: remedy, analysis: echoAnalysis,
+                tracks: (app: app16k, mic: mic16k, micDelay: ctx.micDelay),
+                micSegments: micSegments,
+            )
+            : []
 
         let segments = DiarizationProcess.mergeDualSourceSegments(
             appSegments: appSegments,

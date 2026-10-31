@@ -1,5 +1,6 @@
 import AppKit
 @preconcurrency import AVFoundation
+import enum FluidAudio.ASRError
 import Foundation
 @testable import MeetingTranscriber
 import UserNotifications
@@ -415,14 +416,14 @@ class MockEngine: TranscribingEngine {
     /// the far end falls silent, which one shared list cannot express.
     var segmentsByPathSuffix: [String: [TimestampedSegment]] = [:]
     var transcribeCallCount = 0
-    /// Refuses every path. `throwingPathSuffixes` below is checked first, so a
-    /// test setting both gets that one's message.
+    /// Refuses every path with an unclassified, so engine-wide, error.
+    /// `throwingPathSuffixes` is checked first.
     var shouldThrow = false
-    /// Path suffixes this engine refuses, standing in for the real engine's
-    /// `Invalid audio data provided...`. An empty-track test needs the refusal
-    /// to come from the empty track, or it asserts on the mock rather than on
-    /// the pipeline's decision not to ask it.
+    /// Paths refused with Parakeet's per-file `ASRError.invalidAudioData`, so
+    /// an empty-track test can tell the refusal came from the empty track.
     var throwingPathSuffixes: Set<String> = []
+    /// Paths on which a model fails to load (engine-wide); others transcribe.
+    var modelFailurePathSuffixes: Set<String> = []
 
     func loadModel() {
         modelState = .loaded
@@ -431,8 +432,10 @@ class MockEngine: TranscribingEngine {
     func transcribeSegments(audioPath: URL) throws -> [TimestampedSegment] {
         transcribeCallCount += 1
         if throwingPathSuffixes.contains(where: { audioPath.path.hasSuffix($0) }) {
-            let refusal = "Invalid audio data provided. Must be at least 300ms of 16kHz audio"
-            throw NSError(domain: "MockEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: refusal])
+            throw ASRError.invalidAudioData
+        }
+        if modelFailurePathSuffixes.contains(where: { audioPath.path.hasSuffix($0) }) {
+            throw ASRError.modelLoadFailed
         }
         if shouldThrow {
             throw NSError(domain: "MockEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Mock transcription error"])

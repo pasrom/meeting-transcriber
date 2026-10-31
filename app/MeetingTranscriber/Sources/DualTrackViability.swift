@@ -106,18 +106,22 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
     /// participant said. The prompt is not what makes it legible: a user's own
     /// `protocol_prompt.md` replaces the built-in one, so the line has to
     /// explain itself wherever it lands.
+    ///
+    /// Worded for both ways a track is lost, empty or failing to transcribe:
+    /// "carried nothing" would tell the user of a failed track that there was
+    /// no audio to retry.
     var transcriptNote: String? {
         switch self {
         case .both, .neither: nil
 
         case .appOnly:
-            "[Recording note: the microphone track carried nothing this transcription "
-                + "engine could use, so this transcript contains only the other "
+            "[Recording note: nothing from the microphone track could be transcribed, "
+                + "so this transcript contains only the other "
                 + "participants and nothing spoken locally.]"
 
         case .micOnly:
-            "[Recording note: the app-audio track carried nothing this transcription "
-                + "engine could use, so this transcript contains only what the "
+            "[Recording note: nothing from the app-audio track could be transcribed, "
+                + "so this transcript contains only what the "
                 + "microphone captured and nothing from the other participants.]"
         }
     }
