@@ -172,11 +172,13 @@ enum PersistentDiagnosticLog {
         /// fails, hits `timeout`, or its output was cut off — best-effort, so a
         /// `ps` failure simply reaps nothing. The `=` suffixes suppress the
         /// header row; the first two fields are numeric, the remainder (which
-        /// can contain spaces) is the command.
+        /// can contain spaces) is the command. `clock` is what `timeout` is
+        /// measured on; see `BoundedProcess.init`.
         static func snapshotProcessTable(
             executable: String = "/bin/ps",
             timeout: TimeInterval = psTimeoutSeconds,
             drainGrace: TimeInterval = ProcessOutput.defaultDrainGrace,
+            clock: any Clock<Duration> = SuspendingClock(),
         ) async -> [(pid: Int32, ppid: Int32, command: String)] {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: executable)
@@ -189,7 +191,7 @@ enum PersistentDiagnosticLog {
             let run: (outcome: BoundedProcess.Outcome, output: Data)
             do {
                 run = try await ProcessOutput.run(
-                    BoundedProcess(proc),
+                    BoundedProcess(proc, clock: clock),
                     timeout: timeout,
                     ending: [stdout.end],
                     drainGrace: drainGrace,
