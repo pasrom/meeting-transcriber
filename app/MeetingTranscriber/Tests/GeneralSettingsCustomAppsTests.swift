@@ -101,4 +101,13 @@ final class GeneralSettingsCustomAppsTests: XCTestCase {
             info: ["CFBundleExecutable": "Call App"],
         ))
     }
+
+    /// Refusal uses the built-in's own `matches`, so a helper is refused only
+    /// where that built-in matches helpers; WeChat's deliberately does not.
+    func testWatchRefusalAcceptsAHelperItsBuiltInDoesNotMatch() {
+        XCTAssertNil(
+            GeneralSettingsView.watchRefusal(name: "WeChat Helper", bundleID: "com.tencent.xinWeChat.IPCHelper", info: [:]),
+            "WeChat's pattern does not match helpers, so one is not refused, just as the detector keeps it",
+        )
+    }
 }

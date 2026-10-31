@@ -64,6 +64,19 @@ final class WatchSlackTests: XCTestCase {
         XCTAssertEqual(patterns[1].bundleIDs, ["com.example.callapp"])
     }
 
+    /// Pins the dedup rule for a helper entry however it got stored (Settings
+    /// now refuses one up front): every selected built-in's own `matches` is
+    /// asked, helpers included, so Slack is deliberately not the first here.
+    func testCustomSlackHelperEntryIsDroppedWhileTheToggleIsOn() throws {
+        let weChat = try XCTUnwrap(MicInputDetector.defaultPatterns.first { $0.appName == "WeChat" })
+        let slack = try XCTUnwrap(MicInputDetector.defaultPatterns.first { $0.appName == "Slack" })
+        let patterns = MicInputDetector.patterns(
+            watching: ["WeChat", "Slack"],
+            customBundleIDs: ["\(slackBundleID).helper"],
+        )
+        XCTAssertEqual(patterns.map(\.bundleIDs), [weChat.bundleIDs, slack.bundleIDs])
+    }
+
     func testCustomSlackEntryStillWorksWhileTheToggleIsOff() {
         let patterns = MicInputDetector.patterns(watching: [], customBundleIDs: [slackBundleID])
         XCTAssertEqual(patterns.map(\.bundleIDs), [[slackBundleID]])
