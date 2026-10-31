@@ -57,6 +57,40 @@ extension DualSourceRecorder {
         }
     }
 
+    /// Cross-check the device-reported sample rate against raw file size and mic duration.
+    /// Returns the corrected rate (snapped to standard), or the device rate if cross-check
+    /// is unavailable or agrees.
+    nonisolated static func crossCheckAppRate(
+        deviceRate: Int,
+        appRawBytes: Int,
+        appChannels: Int,
+        micDurationSeconds: Double?,
+        micDelay: TimeInterval,
+    ) -> Int {
+        guard let micDuration = micDurationSeconds, micDuration > 3.0 else {
+            return deviceRate
+        }
+        let appDuration = micDuration + micDelay
+        guard appDuration > 3.0 else { return deviceRate }
+
+        guard let inferred = SampleRateQuery.inferRateFromDuration(
+            rawBytes: appRawBytes,
+            bytesPerSample: MemoryLayout<Float>.size,
+            channels: max(appChannels, 1),
+            durationSeconds: appDuration,
+        ) else { return deviceRate }
+
+        let snapped = SampleRateQuery.snapToStandardRate(inferred)
+
+        // Only override if significantly different (> 5% deviation)
+        let deviation = abs(Double(snapped - deviceRate)) / Double(max(deviceRate, 1))
+        if deviation > 0.05 {
+            logger.warning("Rate cross-check: device=\(deviceRate), inferred=\(inferred), snapped=\(snapped) — overriding")
+            return snapped
+        }
+        return deviceRate
+    }
+
     /// Convert a finished `AudioCaptureResult` (raw app `.tmp` + optional mic
     /// WAV) into a mixed 16 kHz `RecordingResult`: cross-check the rate, downmix
     /// + resample the app track, load the mic track, then mix or fall back to a
@@ -280,7 +314,7 @@ extension DualSourceRecorder {
     /// The file half of a stop: build the tracks and the mix, then drop the
     /// in-progress marker. Touches no recorder state, so it runs anywhere.
     nonisolated static func finish(_ stopped: StoppedCapture) throws -> RecordingResult {
-        let recording = try buildRecording(
+        var recording = try buildRecording(
             from: stopped.captureResult,
             recordingsDir: stopped.recordingsDir,
             timestamp: stopped.timestamp,
@@ -298,6 +332,8 @@ extension DualSourceRecorder {
         try? FileManager.default.removeItem(
             at: inProgressMarker(stem: stopped.timestamp, in: stopped.recordingsDir),
         )
+        recording.micMuteIntervals = stopped.captureResult.micMuteIntervals
+        MicMuteLog.remove(stem: stopped.timestamp, in: stopped.recordingsDir)
         return recording
     }
 }

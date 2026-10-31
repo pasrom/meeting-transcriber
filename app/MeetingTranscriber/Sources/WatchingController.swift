@@ -27,7 +27,16 @@ import Observation
 @Observable
 @MainActor
 final class WatchingController {
-    var watchLoop: WatchLoop?
+    var watchLoop: WatchLoop? {
+        didSet {
+            watchLoop?.onMicMuteAvailabilityChange = { [weak self] in self?.syncMicMuteHotkey() }
+            syncMicMuteHotkey()
+        }
+    }
+
+    /// Registered only while a recording can be muted, so the rest of the time
+    /// the key combination still reaches whichever app the user is in.
+    let micMuteHotkeyRegistrar = GlobalHotkeyRegistrar()
 
     /// Non-nil while `toggleWatching`'s async start is in flight — it awaits mic
     /// access before `watchLoop` is assigned, so without this a second toggle in
@@ -48,7 +57,7 @@ final class WatchingController {
     var isQuitting = false
 
     let settings: AppSettings
-    private let notifier: any AppNotifying
+    let notifier: any AppNotifying
     private let pipeline: PipelineController
     private let channelHealth: ChannelHealthController
     private let permissions: PermissionsController

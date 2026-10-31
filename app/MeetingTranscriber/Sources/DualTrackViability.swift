@@ -37,6 +37,10 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
     /// why nothing reported from here claims the file was empty.
     case appOnly
 
+    /// Only the app track, because the user muted the microphone throughout. Not
+    /// a fault, so unlike `appOnly` it raises no warning and its note says why.
+    case appOnlyMicMuted
+
     /// Only the microphone track. The mirror case, a solo meeting or a far end
     /// that never played.
     case micOnly
@@ -55,13 +59,14 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
     ///     here so the threshold that decides and the one that throws cannot
     ///     drift apart, so no backend inherits a floor it does not have, and so
     ///     the arms stay testable without any engine at all.
-    static func resolve(appFrames: Int, micFrames: Int, minimumFrames: Int) -> Self {
+    ///   - micMutedFrames: How much of the microphone track the user muted.
+    static func resolve(appFrames: Int, micFrames: Int, minimumFrames: Int, micMutedFrames: Int = 0) -> Self {
         // `>=`, not `>`: the engine accepts exactly its minimum, and a guard
         // that rejected what the engine would take would drop audio for no
         // reason.
-        switch (appFrames >= minimumFrames, micFrames >= minimumFrames) {
+        switch (appFrames >= minimumFrames, micFrames - micMutedFrames >= minimumFrames) {
         case (true, true): .both
-        case (true, false): .appOnly
+        case (true, false): micFrames >= minimumFrames ? .appOnlyMicMuted : .appOnly
         case (false, true): .micOnly
         case (false, false): .neither
         }
@@ -70,7 +75,7 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
     /// Whether the app track holds audio. Read by the stages that would
     /// otherwise hand an empty file to a model.
     var carriesAppAudio: Bool {
-        self == .both || self == .appOnly
+        self == .both || self == .appOnly || self == .appOnlyMicMuted
     }
 
     /// Whether the microphone track holds audio. Mirror of the above.
@@ -83,7 +88,7 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
     /// error is what the user sees.
     var droppedTrackWarning: String? {
         switch self {
-        case .both, .neither: nil
+        case .both, .neither, .appOnlyMicMuted: nil
 
         case .appOnly:
             "The microphone track carried nothing the transcription engine could use — transcribed the app audio only"
@@ -109,6 +114,10 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
     var transcriptNote: String? {
         switch self {
         case .both, .neither: nil
+
+        case .appOnlyMicMuted:
+            "[Recording note: the microphone was muted for this whole recording, so this "
+                + "transcript contains only the other participants and nothing spoken locally.]"
 
         case .appOnly:
             "[Recording note: the microphone track carried nothing this transcription "

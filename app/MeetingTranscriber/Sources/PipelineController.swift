@@ -450,7 +450,8 @@ final class PipelineController {
             let job = PipelineJob(
                 meetingTitle: title, appName: appName,
                 mixPath: group.mix, appPath: group.app, micPath: group.mic,
-                micDelay: micDelay, participants: participants,
+                micDelay: micDelay, micMuteIntervals: sidecar?.micMuteIntervals ?? [],
+                participants: participants,
                 // Record-only fleet flow: a separate host reprocesses recordings
                 // captured elsewhere. Anchor the output basename on the sidecar's
                 // real meeting-start time, not this reprocessing moment.

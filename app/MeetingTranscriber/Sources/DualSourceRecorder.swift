@@ -18,6 +18,8 @@ struct RecordingResult {
     /// Not derived from `systemUptime` (which doesn't advance during sleep, so
     /// a meeting spanning a sleep would skew the anchor) — this is exact.
     let recordingStartDate: Date
+    /// The stretches of the mic track the user muted, in seconds of that track.
+    var micMuteIntervals: [MicMuteInterval] = []
 }
 
 /// The format `buildRecording` should expect the app track to arrive in, passed
@@ -411,6 +413,23 @@ class DualSourceRecorder: RecordingProvider {
     /// doubles, which record nothing, do not all have to learn it.
     var silentTrackWatchdogEnabled = false
 
+    /// Whether the next recording silences its microphone from the first buffer.
+    /// Set before `start(...)`, like the property above. A microphone-only
+    /// recording ignores it: the microphone is the only thing it records.
+    var micStartsMuted = false
+
+    private(set) var canMuteMic = false
+    private(set) var isMicMuted = false
+
+    /// Mutes this recording only. The call, and the OS microphone indicator, are
+    /// unaffected. Saved at each toggle so a crash cannot lose the mute times.
+    func setMicMuted(_ muted: Bool) {
+        guard let timeline = captureSession?.setMicMuted(muted), let stem = startTimestamp else { return }
+
+        isMicMuted = timeline.isMuted
+        MicMuteLog.write(timeline, stem: stem, in: recordingsDir)
+    }
+
     /// Start recording whichever channels `source` asks for.
     func start(
         source: RecordingSource,
@@ -471,6 +490,7 @@ class DualSourceRecorder: RecordingProvider {
                 silentTrackWatchdog: silentTrackWatchdogEnabled,
                 appLiveSink: appLiveSink,
                 micLiveSink: micLiveSink,
+                micStartsMuted: micStartsMuted && source.capturesAppAudio,
             ))
             try session.start()
         } catch {
@@ -483,6 +503,14 @@ class DualSourceRecorder: RecordingProvider {
             throw error
         }
         captureSession = session
+        // A probe rather than a stored answer: a microphone that failed to open
+        // on an app recording is swallowed by the session, which then returns nil.
+        let openMicTimeline = session.setMicMuted(micStartsMuted && source.capturesAppAudio)
+        canMuteMic = openMicTimeline != nil
+        isMicMuted = openMicTimeline?.isMuted ?? false
+        if let openMicTimeline, openMicTimeline.isMuted {
+            MicMuteLog.write(openMicTimeline, stem: ts, in: recordingsDir)
+        }
 
         isRecording = true
         recordingStartDate = Date()
@@ -513,6 +541,8 @@ class DualSourceRecorder: RecordingProvider {
         }
 
         isRecording = false
+        canMuteMic = false
+        isMicMuted = false
 
         guard let session = captureSession else {
             throw RecorderError.noAudioData
@@ -541,40 +571,6 @@ class DualSourceRecorder: RecordingProvider {
     /// lives once (the capture-time resampler uses the same function).
     nonisolated static func downmixToMono(_ samples: [Float], channels: Int) -> [Float] {
         AudioTapLib.downmixToMono(samples, channels: channels)
-    }
-
-    /// Cross-check the device-reported sample rate against raw file size and mic duration.
-    /// Returns the corrected rate (snapped to standard), or the device rate if cross-check
-    /// is unavailable or agrees.
-    nonisolated static func crossCheckAppRate(
-        deviceRate: Int,
-        appRawBytes: Int,
-        appChannels: Int,
-        micDurationSeconds: Double?,
-        micDelay: TimeInterval,
-    ) -> Int {
-        guard let micDuration = micDurationSeconds, micDuration > 3.0 else {
-            return deviceRate
-        }
-        let appDuration = micDuration + micDelay
-        guard appDuration > 3.0 else { return deviceRate }
-
-        guard let inferred = SampleRateQuery.inferRateFromDuration(
-            rawBytes: appRawBytes,
-            bytesPerSample: MemoryLayout<Float>.size,
-            channels: max(appChannels, 1),
-            durationSeconds: appDuration,
-        ) else { return deviceRate }
-
-        let snapped = SampleRateQuery.snapToStandardRate(inferred)
-
-        // Only override if significantly different (> 5% deviation)
-        let deviation = abs(Double(snapped - deviceRate)) / Double(max(deviceRate, 1))
-        if deviation > 0.05 {
-            logger.warning("Rate cross-check: device=\(deviceRate), inferred=\(inferred), snapped=\(snapped) — overriding")
-            return snapped
-        }
-        return deviceRate
     }
 
     // Pinned Gregorian/POSIX: these stems are the final user-visible filenames

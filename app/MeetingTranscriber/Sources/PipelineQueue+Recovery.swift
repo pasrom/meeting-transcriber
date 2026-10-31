@@ -524,6 +524,9 @@ extension PipelineQueue {
                 appPath: group.app,
                 micPath: group.mic,
                 micDelay: 0,
+                micMuteIntervals: MicMuteLog.recoveredIntervals(
+                    stem: group.stem, in: recordingsDir, track: group.mic ?? mixURL,
+                ),
             )
             stampTranscriptOutputOptions(on: &job)
             jobs.append(job)

@@ -546,7 +546,7 @@ final class AppState {
     /// `hasPermissionProblem` — reading two `channelHealth.*` flags through the
     /// sub-controller inline is more than the body can afford on slow CI.
     var micSilentOverlay: Bool {
-        channelHealth.micSilentOverlay
+        channelHealth.micSilentOverlay && !isMicMuted
     }
 
     /// Menu-bar **bottom-half** red tint: app-audio channel silent, OR both

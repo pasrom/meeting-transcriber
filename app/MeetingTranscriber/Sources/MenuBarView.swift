@@ -18,6 +18,17 @@ struct MenuBarView: View {
     /// to avoid on the picker.
     let manualRecordingPendingOrActive: Bool
     let onStopManualRecording: (() -> Void)?
+    var isMicMuted = false
+    /// Non-nil while a recording with an open microphone is running.
+    var onToggleMicMute: (() -> Void)?
+    /// The global shortcut, which replaces the item's default when one is set.
+    var micMuteShortcut: KeyboardShortcut?
+
+    /// Free by default: "Record Microphone" holds ⌘M, and is hidden while recording.
+    var micMuteItemShortcut: KeyboardShortcut {
+        micMuteShortcut ?? KeyboardShortcut("m")
+    }
+
     let onOpenLastProtocol: () -> Void
     let onOpenProtocol: (URL) -> Void
     let onOpenProtocolsFolder: () -> Void
@@ -160,6 +171,20 @@ struct MenuBarView: View {
             }
         }
         .keyboardShortcut("s")
+
+        if let onToggleMicMute {
+            Button {
+                onToggleMicMute()
+            } label: {
+                if isMicMuted {
+                    Label("Unmute Mic in Recording", systemImage: "mic.fill")
+                } else {
+                    Label("Mute Mic in Recording", systemImage: "mic.slash.fill")
+                }
+            }
+            .keyboardShortcut(micMuteItemShortcut)
+            .help("Only affects this recording. People on the call can still hear you.")
+        }
 
         if let onStopManualRecording {
             Button {

@@ -1,3 +1,4 @@
+import AudioTapLib
 import Foundation
 import os.log
 
@@ -543,6 +544,7 @@ extension SpeakerNamingSession {
             run: run, cachedSegments: cachedSegments,
             isDualSource: isDualSource, autoNames: autoNames,
             note: delegate.job(withID: jobID)?.trackViability?.transcriptNote,
+            micMuted: delegate.job(withID: jobID)?.micMuteSpansOnTranscript ?? [],
         ) else { return }
         do {
             try rebuilt.write(to: transcriptPath, atomically: true, encoding: .utf8)

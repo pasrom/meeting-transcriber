@@ -19,6 +19,8 @@ import Foundation
 enum A11yID {
     // Settings — section anchors + record-only controls.
     static let recordOnlyToggle = "recordOnlyToggle"
+    static let startRecordingsMicMutedToggle = "startRecordingsMicMutedToggle"
+    static let micMuteHotkeyButton = "micMuteHotkeyButton"
     static let watchBrowserToggle = "watchBrowserToggle"
     static let watchSlackToggle = "watchSlackToggle"
     static let browserConsentWarning = "browserConsentWarning"

@@ -307,6 +307,16 @@ final class AppSettings { // swiftlint:disable:this type_body_length
     /// unmeasured, each rebuild costs a moment of audio and is exposed to the
     /// restart wedge of issue #588, and a far end that is genuinely silent can
     /// trip it. Read when a recording starts, like the other capture options.
+    /// Whether app recordings begin with the microphone muted in the recording.
+    var startRecordingsMicMuted: Bool {
+        didSet { defaults.set(startRecordingsMicMuted, forKey: "startRecordingsMicMuted") }
+    }
+
+    /// The shortcut that toggles the mute while a recording runs. Off when nil.
+    var micMuteHotkey: GlobalHotkey? {
+        didSet { defaults.set(micMuteHotkey.flatMap { try? JSONEncoder().encode($0) }, forKey: "micMuteHotkey") }
+    }
+
     var silentTrackWatchdogEnabled: Bool {
         didSet { defaults.set(silentTrackWatchdogEnabled, forKey: "silentTrackWatchdogEnabled") }
     }
@@ -761,6 +771,8 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         micDeviceUID = defaults.object(forKey: "micDeviceUID") as? String ?? ""
         micName = defaults.object(forKey: "micName") as? String ?? "Me"
         perChannelIndicatorEnabled = defaults.bool(forKey: "perChannelIndicatorEnabled", default: true)
+        startRecordingsMicMuted = defaults.bool(forKey: "startRecordingsMicMuted", default: false)
+        micMuteHotkey = defaults.data(forKey: "micMuteHotkey").flatMap { try? JSONDecoder().decode(GlobalHotkey.self, from: $0) }
         silentTrackWatchdogEnabled = defaults.bool(forKey: "silentTrackWatchdogEnabled", default: false)
         liveTranscriptionEnabled = defaults.bool(forKey: "liveTranscriptionEnabled", default: false)
         liveCaptionsOverlayEnabled = defaults.bool(forKey: "liveCaptionsOverlayEnabled", default: true)

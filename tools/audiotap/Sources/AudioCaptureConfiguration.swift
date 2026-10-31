@@ -61,6 +61,9 @@ public struct AudioCaptureConfiguration: Sendable {
     /// tap thread — non-blocking.
     public let micLiveSink: LiveAudioSink?
 
+    /// Silence the microphone track from its first buffer, until the user unmutes.
+    public let micStartsMuted: Bool
+
     /// Set after the configuration is built, never at construction, because it
     /// is not the caller's decision: the e2e build's composition root injects it
     /// into a configuration the recording path assembled, and every shipped
@@ -91,6 +94,7 @@ public struct AudioCaptureConfiguration: Sendable {
         silentTrackWatchdog: Bool = false,
         appLiveSink: LiveAudioSink? = nil,
         micLiveSink: LiveAudioSink? = nil,
+        micStartsMuted: Bool = false,
     ) {
         self.pids = pids
         self.appOutputURL = appOutputURL
@@ -102,5 +106,6 @@ public struct AudioCaptureConfiguration: Sendable {
         self.silentTrackWatchdog = silentTrackWatchdog
         self.appLiveSink = appLiveSink
         self.micLiveSink = micLiveSink
+        self.micStartsMuted = micStartsMuted
     }
 }

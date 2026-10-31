@@ -36,6 +36,11 @@ protocol AudioCapturing: AnyObject {
     /// protocol it sits behind.
     var appSignalAges: ChannelSignalAges { get }
     var micSignalAges: ChannelSignalAges { get }
+
+    /// Silence or restore the microphone track. Nil when the session has no open
+    /// microphone, otherwise the timeline after the change.
+    @discardableResult
+    func setMicMuted(_ muted: Bool) -> MicMuteTimeline?
 }
 
 @available(macOS 14.2, *)

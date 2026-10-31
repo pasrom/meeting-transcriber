@@ -1,3 +1,4 @@
+import AudioTapLib
 import Foundation
 import os.log
 
@@ -49,9 +50,9 @@ protocol SpeakerNamingSessionDelegate: AnyObject {
     ) async throws -> DiarizationRun
     /// Render the speaker-labeled transcript from a diarization run + cached
     /// transcript segments (a queue pipeline stage, reused by the late rewrite).
-    func renderLabeledTranscript(
+    func renderLabeledTranscript( // swiftlint:disable:this function_parameter_count
         run: DiarizationRun, cachedSegments: [TimestampedSegment],
-        isDualSource: Bool, autoNames: [String: String], note: String?,
+        isDualSource: Bool, autoNames: [String: String], note: String?, micMuted: [MicMuteInterval],
     ) -> String?
 }
 

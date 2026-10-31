@@ -1,4 +1,5 @@
 // swiftlint:disable file_length
+import AudioTapLib
 import Foundation
 import os.log
 
@@ -37,6 +38,8 @@ extension PipelineQueue {
         /// the same one. The job holds the fact it comes from; this is that
         /// fact's rendering for the length of one run.
         let note: String?
+        /// Muted stretches on the transcript's timeline, rendered as markers.
+        let micMuted: [MicMuteInterval]
         /// Segments cached for diarization reuse (avoids double transcription).
         let cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
         let isDualSource: Bool
@@ -50,11 +53,13 @@ extension PipelineQueue {
     enum PipelineError: LocalizedError {
         case missingMixPath
         case noMixAudioForDiarization
+        case micMutedThroughout
 
         var errorDescription: String? {
             switch self {
             case .missingMixPath: "Single-source job missing mixPath"
             case .noMixAudioForDiarization: "No mix audio available for diarization"
+            case .micMutedThroughout: "The microphone was muted for the whole recording, so there is nothing to transcribe"
             }
         }
     }
@@ -254,7 +259,7 @@ extension PipelineQueue {
             // segments, and the rendered string would then pass a check meant
             // to catch exactly that: a note-only transcript saved as a success,
             // with a protocol generated from one sentence.
-            let body = transcription.cachedSegments?.transcriptText(note: nil) ?? transcription.transcript
+            let body = transcription.cachedSegments?.transcriptText(note: nil, micMuted: []) ?? transcription.transcript
             guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 // Compute input RMS only on the failure path — loading the whole
                 // mix file is expensive (~MB-per-minute) and we only need it when
@@ -331,6 +336,10 @@ extension PipelineQueue {
         job(withID: jobID)?.trackViability?.transcriptNote
     }
 
+    private func mutedFrames(_ jobID: UUID) -> Int {
+        (job(withID: jobID)?.micMuteIntervals ?? []).mutedFrames(rate: AudioConstants.targetSampleRate)
+    }
+
     /// Which tracks of a dual-source recording carry audio, and the record of
     /// a dropped one on the job.
     ///
@@ -348,6 +357,7 @@ extension PipelineQueue {
             appFrames: AudioMixer.frameCount(of: app16k),
             micFrames: AudioMixer.frameCount(of: mic16k),
             minimumFrames: engine.minimumAudioFrames,
+            micMutedFrames: mutedFrames(ctx.jobID),
         )
         // Recorded for every dual-source job, not only when a track was
         // dropped: the stages after this one read it, and nil has to keep
@@ -437,9 +447,12 @@ extension PipelineQueue {
         // An engine that ignores cancellation still returns; the second track
         // is not transcribed for a job that is gone.
         try ensureStillQueued(ctx.jobID)
-        let micSegments = viability == .appOnly
+        // Filtered on the mic track's own timeline, before the merge moves it. The
+        // engines are not trusted to stay silent on the zeroes of a muted stretch.
+        let micSegments = viability == .appOnly || viability == .appOnlyMicMuted
             ? []
             : try await engine.transcribeSegments(audioPath: mic16k)
+            .removingMuted(job(withID: ctx.jobID)?.micMuteIntervals ?? [])
 
         // On an affected recording, work out which microphone segments are only
         // the loudspeaker coming back, so the merge can leave them out of the
@@ -496,6 +509,7 @@ extension PipelineQueue {
         // Segments cached for potential diarization reuse (avoids double transcription)
         var cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
         let isDualSource = ctx.appPath != nil && ctx.micPath != nil
+        let micMuted = job(withID: ctx.jobID)?.micMuteSpansOnTranscript ?? []
         if let appAudioPath = ctx.appPath, let micAudioPath = ctx.micPath {
             let segments = try await transcribeDualSource(
                 ctx, engine: engine, workDir: workDir,
@@ -503,7 +517,7 @@ extension PipelineQueue {
             )
             let normalizedSegments = normalize(segments, with: normalizer)
             cachedSegments = normalizedSegments
-            transcript = normalizedSegments.transcriptText(note: transcriptNote(ctx.jobID))
+            transcript = normalizedSegments.transcriptText(note: transcriptNote(ctx.jobID), micMuted: micMuted)
         } else {
             // Single-source: resample mix to 16kHz
             guard let mixPath = ctx.mixPath else {
@@ -511,6 +525,12 @@ extension PipelineQueue {
             }
             let mix16k = workDir.appendingPathComponent("mix_16k.wav")
             try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
+
+            // Only a microphone-only recording reaches here with mute times: a
+            // file import has none, and the mix of an app recording has two tracks.
+            if !micMuted.isEmpty, AudioMixer.frameCount(of: mix16k) - mutedFrames(ctx.jobID) < engine.minimumAudioFrames {
+                throw PipelineError.micMutedThroughout
+            }
 
             // Optional VAD preprocessing: trim silence before transcription
             var vadMap: VadSegmentMap?
@@ -530,11 +550,11 @@ extension PipelineQueue {
             if let map = vadMap {
                 segments = map.remapTimestamps(segments)
             }
+            segments = segments.removingMuted(micMuted)
 
             cachedSegments = segments
-            // Single-source has one track and no viability verdict, so nothing
-            // to annotate.
-            transcript = segments.transcriptText(note: nil)
+            // Single-source has one track and no viability verdict, so no note.
+            transcript = segments.transcriptText(note: nil, micMuted: micMuted)
         }
 
         let segCount = cachedSegments?.count ?? 0
@@ -551,6 +571,7 @@ extension PipelineQueue {
         return TranscriptionOutput(
             transcript: transcript,
             note: transcriptNote(ctx.jobID),
+            micMuted: micMuted,
             cachedSegments: cachedSegments,
             isDualSource: isDualSource,
             terminologyNormalizer: normalizer,
@@ -839,7 +860,7 @@ extension PipelineQueue {
         return renderLabeledTranscript(
             run: run, cachedSegments: cachedSegments,
             isDualSource: transcription.isDualSource, autoNames: autoNames,
-            note: transcription.note,
+            note: transcription.note, micMuted: transcription.micMuted,
         )
     }
 
@@ -851,9 +872,9 @@ extension PipelineQueue {
     /// identically. Returns nil when the run carries no usable diarization.
     /// Internal (not private) because it is a `SpeakerNamingSessionDelegate`
     /// witness.
-    func renderLabeledTranscript(
+    func renderLabeledTranscript( // swiftlint:disable:this function_parameter_count
         run: DiarizationRun, cachedSegments: [TimestampedSegment],
-        isDualSource: Bool, autoNames: [String: String], note: String?,
+        isDualSource: Bool, autoNames: [String: String], note: String?, micMuted: [MicMuteInterval],
     ) -> String? {
         // Suppressed copies leave before anything gets a speaker. Left in,
         // they would be labeled like real speech and merged into adjacent
@@ -883,7 +904,7 @@ extension PipelineQueue {
         }
         guard let topology else { return nil }
         let labeled = DiarizationProcess.labelSegments(topology, autoNames: autoNames)
-        return DiarizationProcess.mergeConsecutiveSpeakers(labeled).transcriptText(note: note)
+        return DiarizationProcess.mergeConsecutiveSpeakers(labeled).transcriptText(note: note, micMuted: micMuted)
     }
 
     /// Stage 3 — persist the transcript + audio, run protocol generation

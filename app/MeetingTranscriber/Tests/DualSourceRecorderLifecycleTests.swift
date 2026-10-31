@@ -39,16 +39,29 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         /// The configuration the recorder handed the factory, so a test can
         /// assert on the choices and write to the URLs it picked.
         var lastConfiguration: AudioCaptureConfiguration?
+        /// False stands in for a microphone that failed to open.
+        var micOpen = true
+        var muteTimeline = MicMuteTimeline()
+        var micMuteIntervals: [MicMuteInterval] = []
+
+        func setMicMuted(_ muted: Bool) -> MicMuteTimeline? {
+            guard micOpen else { return nil }
+
+            muteTimeline.setMuted(muted)
+            return muteTimeline
+        }
 
         func start() throws {
             if let startError { throw startError }
         }
 
         func stop() -> AudioCaptureResult {
-            AudioCaptureResult(
+            var result = AudioCaptureResult(
                 appAudioFileURL: appTrack, micAudioFileURL: micTrack,
                 actualSampleRate: 16000, actualChannels: 1, micDelay: 0,
             )
+            result.micMuteIntervals = micMuteIntervals
+            return result
         }
     }
 
@@ -316,6 +329,65 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         recorder.silentTrackWatchdogEnabled = true
         try recorder.start(source: .micOnly)
         XCTAssertEqual(session.lastConfiguration?.silentTrackWatchdog, true)
+    }
+
+    // MARK: - Mic mute
+
+    private func logStems(in dir: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasSuffix(RecordingFileSuffix.micMuteLog) }
+    }
+
+    func testStartMutedAppliesToAnAppRecordingAndIsSavedAtOnce() throws {
+        let dir = try makeTempDirectory(prefix: "lifecycle_mute_app")
+        let (recorder, session) = makeRecorder(dir: dir)
+        recorder.micStartsMuted = true
+        try recorder.start(source: .forApp(pid: getpid(), noMic: false))
+
+        XCTAssertEqual(session.lastConfiguration?.micStartsMuted, true)
+        XCTAssertTrue(recorder.isMicMuted)
+        XCTAssertEqual(try logStems(in: dir).count, 1)
+    }
+
+    func testStartMutedDoesNotApplyToAMicrophoneOnlyRecording() throws {
+        let dir = try makeTempDirectory(prefix: "lifecycle_mute_mic")
+        let (recorder, session) = makeRecorder(dir: dir)
+        recorder.micStartsMuted = true
+        try recorder.start(source: .micOnly)
+
+        XCTAssertEqual(session.lastConfiguration?.micStartsMuted, false)
+        XCTAssertFalse(recorder.isMicMuted)
+        XCTAssertTrue(recorder.canMuteMic, "it can still be muted by hand")
+    }
+
+    func testAMicThatFailedToOpenCannotBeMuted() throws {
+        let dir = try makeTempDirectory(prefix: "lifecycle_mute_noopen")
+        let (recorder, session) = makeRecorder(dir: dir)
+        session.micOpen = false
+        try recorder.start(source: .forApp(pid: getpid(), noMic: false))
+        XCTAssertFalse(recorder.canMuteMic)
+
+        recorder.setMicMuted(true)
+        XCTAssertFalse(recorder.isMicMuted)
+        XCTAssertTrue(try logStems(in: dir).isEmpty)
+    }
+
+    func testStopHandsOverTheIntervalsAndRemovesTheLog() throws {
+        let dir = try makeTempDirectory(prefix: "lifecycle_mute_stop")
+        let (recorder, session) = makeRecorder(dir: dir)
+        try recorder.start(source: .micOnly)
+        recorder.setMicMuted(true)
+        XCTAssertEqual(try logStems(in: dir).count, 1)
+
+        let micURL = try XCTUnwrap(session.lastConfiguration?.micOutputURL)
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.1, count: 16000), sampleRate: 16000, url: micURL)
+        session.micTrack = micURL
+        session.micMuteIntervals = [MicMuteInterval(start: 0, end: 1)]
+        let recording = try recorder.stop()
+
+        XCTAssertEqual(recording.micMuteIntervals, [MicMuteInterval(start: 0, end: 1)])
+        XCTAssertTrue(try logStems(in: dir).isEmpty)
+        XCTAssertFalse(recorder.canMuteMic)
     }
 
     /// The setting reaches a recording that `WatchingController` starts, read

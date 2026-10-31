@@ -1,3 +1,4 @@
+import AudioTapLib
 import Foundation
 
 enum JobState: String, Codable {
@@ -71,6 +72,9 @@ struct PipelineJob: Identifiable, Codable {
     private(set) var appPath: URL?
     private(set) var micPath: URL?
     let micDelay: TimeInterval
+    /// The stretches of the mic track the user muted, in seconds of that track.
+    /// Optional because a snapshot from before this field must still decode.
+    private(set) var micMuteIntervals: [MicMuteInterval]? // swiftlint:disable:this discouraged_optional_collection
     let participants: [String]
     let enqueuedAt: Date
     /// Wall-clock time the recording started (meeting start), captured directly
@@ -273,6 +277,7 @@ struct PipelineJob: Identifiable, Codable {
         appPath: URL?,
         micPath: URL?,
         micDelay: TimeInterval,
+        micMuteIntervals: [MicMuteInterval] = [],
         participants: [String] = [],
         meetingStartTime: Date? = nil,
         autoSkipNaming: Bool = false,
@@ -290,6 +295,7 @@ struct PipelineJob: Identifiable, Codable {
         self.appPath = appPath
         self.micPath = micPath
         self.micDelay = micDelay
+        self.micMuteIntervals = micMuteIntervals
         self.participants = participants
         self.enqueuedAt = Date()
         self.meetingStartTime = meetingStartTime
@@ -305,6 +311,12 @@ struct PipelineJob: Identifiable, Codable {
         self.useAITitleForFilenames = useAITitleForFilenames
         self.usedDiarizerMode = nil
         self.autoSkipNaming = autoSkipNaming
+    }
+
+    /// The muted stretches as the transcript times them: `mergeDualSourceSegments`
+    /// moves everything from the mic track by `micDelay`.
+    var micMuteSpansOnTranscript: [MicMuteInterval] {
+        (micMuteIntervals ?? []).shifted(by: micDelay)
     }
 
     /// When the stale-naming cleanup starts counting for this job: when it
