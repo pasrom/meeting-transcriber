@@ -397,6 +397,61 @@ PRs are excluded from the self-hosted runner.
    one needs the grant. A second runner given that label would need its own node
    binary added, since the grant is per path.
 
+   **macOS 27 renamed Accessibility** to **Device Control and Data Access**
+   (System Settings → Privacy & Security). Same grant, same chooser; every
+   "Accessibility" in this file means that pane on macOS 27.
+
+   **A runner update can move node, and then every grant goes at once.**
+   `runsvc.sh` picks the node directory (`externals/node20` → `externals/node24`
+   after a macOS update and runner restart, measured on the mini), and the
+   grants are per binary path, so the new node holds none of them: not Device
+   Control, not **Files & Folders → Downloads** (the lanes read and write the
+   app's output folder under `~/Downloads`), not **Automation → System Events**,
+   and not **Automation → MeetingTranscriber-Dev** (`quit_running_app` asks the
+   dev app to quit through an Apple Event at the start of nearly every lane,
+   which is what runs the app's quit hold: stopping a recording, flushing the
+   pipeline snapshots. The call is bounded at twice that hold plus a margin.
+   Refused (-1743), it reports `TCC Automation → MeetingTranscriber-Dev not
+   usable`, ends the app by signal so the next lane does not inherit it, and
+   fails the calling lane, since a signal skips the hold. Unanswered, which a
+   pending prompt causes but so do a modal run loop or a slow teardown, it
+   waits for the app as after an answer and, if the app stays, warns `dev app
+   did not quit` with all of those causes and ends it by signal without failing
+   the lane).
+   Each first access then raises a NEW consent prompt on the mini's screen, and
+   while a prompt is open the call that raised it **blocks** rather than fails.
+   Seen that way: a `wc -c` on a transcript hung until the step timeout and the
+   orphaned driver then blocked the rerun ("another e2e-app.sh is already
+   running"); the silent-recording lane printed an empty "Final state:" and
+   blamed the detector; `osascript` timed out with -1712.
+
+   How to recognise it now: the **Preflight TCC grants** step
+   (`scripts/ci/tcc-preflight.sh`), the first step of each self-hosted e2e
+   workflow that touches these resources, probes each one under a short bound
+   (`E2E_TCC_PROMPT_TIMEOUT`, 10 s) and reports `TCC <grant> not usable` with
+   the binary to allow, resolved from the running service rather than assumed,
+   and, for a probe that got no answer, that a prompt is probably waiting on the
+   screen. A missing Downloads grant fails the job there, since nearly every
+   lane would hang or misreport behind it (and a green job that ran nothing
+   would also satisfy the stable-tag check); Device Control only warns, because
+   the two naming lanes that need it host-skip on their own (below). Automation
+   is not probed at job start: on an ungranted host the probe would leave a
+   prompt on screen over every later lane, so the `--naming-escape` lane's own
+   probe (now under a hard bound as well) raises it last and host-skips. Inside
+   the lanes, the first transcript read and the silent lane's `/state` reads
+   are bounded too and say "blocked" rather than give a verdict. The fix:
+   answer the open prompts at the mini's screen, or allow the named node under
+   each of those panes (both Automation entries), then re-run. By hand:
+   `bash scripts/ci/tcc-preflight.sh --downloads --automation --accessibility`.
+
+   A driver that a step timeout leaves behind is ended by the pid and start
+   time each self-hosted `e2e-*.sh` driver records in `$RUNNER_TEMP` right after it sources the
+   helpers (`e2e_reap_registered_drivers` in `scripts/lib/e2e-helpers.sh`),
+   never by name: at the start of every later driver in the job, for the steps
+   that still run after a timeout (`always()`, `!cancelled()`, after a
+   `continue-on-error` lane), and in an `if: always()` step at the end of each
+   job, so the next run does not find it still holding the host.
+
    To raise the prompts by hand, run the lane once in the runner's GUI session:
    `E2E_TCC_PROMPT_TIMEOUT=300 bash scripts/e2e-app.sh --no-build --naming-escape`.
    The env var widens the preflight's probe window from its 10 s CI default so

@@ -117,7 +117,8 @@ a `.keyboardShortcut(.cancelAction)` carrier, which rides the focus-independent
 key-equivalent pass (`SpeakerNamingView.escapeDismissShortcut`). A physical Escape is
 drivable only from outside the process, via a WindowServer keystroke: that is what
 `scripts/e2e-app.sh --naming-escape` does, and it is why that lane (alone) needs an
-Accessibility grant on the runner. Below that layer, ViewInspector pins the handler
+Accessibility grant on the runner ("Device Control and Data Access" on macOS 27;
+see the e2e-architecture skill, runner setup step 6). Below that layer, ViewInspector pins the handler
 wiring and `/state` pins the resulting window/job state.
 
 **Typing** is automatable via `POST /ui/type` (allowlisted plain text fields only —
