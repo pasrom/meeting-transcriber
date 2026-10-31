@@ -415,7 +415,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// VAD-bounded windows out of the audio sink and hands them here. The
     /// returned string is the joined plain text (no timestamps, no
     /// segments) because the live overlay only renders one line at a time.
-    /// Hallucination-filter logic matches `transcribeSegments`.
+    /// Same hallucination filter as `transcribeSegments`.
     func transcribeSamples(_ samples: [Float]) async throws -> String {
         try await ensureModel()
         guard let decodingClient else { throw TranscriptionError.modelNotLoaded() }
@@ -429,16 +429,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             samples,
             decodeOptions: options,
         )
-        var lastText = ""
-        var pieces: [String] = []
-        for segment in results.flatMap(\.segments) {
-            let text = Self.stripWhisperTokens(segment.text)
-                .trimmingCharacters(in: .whitespaces)
-            if text.isEmpty || text == lastText { continue }
-            lastText = text
-            pieces.append(text)
-        }
-        return pieces.joined(separator: " ")
+        return Self.filteredSegments(results).map(\.text).joined(separator: " ")
     }
 
     // Build the WhisperKit `DecodingOptions` for a transcription run.
