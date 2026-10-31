@@ -80,6 +80,7 @@ extension XCTestCase {
         noMic: Bool = false,
         permissionHealth: HealthCheckResult? = nil,
         startJoinTimeout: Duration = WatchingController.defaultStartJoinTimeout,
+        joinClock: any Clock<Duration> = ContinuousClock(),
         channelFaultWindow: TimeInterval = 0,
         makeDetector: @escaping () -> any MeetingDetecting = { makeSilentDetector() },
         makeRecorder: @escaping @MainActor () -> any RecordingProvider = { makeMockRecorder() },
@@ -151,6 +152,7 @@ extension XCTestCase {
             requestScreenRecording: requestScreenRecording,
             requestAccessibility: requestAccessibility,
             startJoinTimeout: startJoinTimeout,
+            joinClock: joinClock,
             makeDetector: makeDetector,
             makeRecorder: makeRecorder,
         )

@@ -173,15 +173,21 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// otherwise never be exercised: a start already in flight has to be waited
     /// for, once, and the wait has to give up rather than hang on the microphone
     /// prompt the docs name as the cause of a 503.
+    ///
+    /// The bound runs on a clock the test advances by exactly one bound: a
+    /// second bound in sequence would still be asleep on it, and an unbounded
+    /// wait never answers.
     func testAStartWaitsForAnInFlightOneWithinASingleBound() async {
         let gate = AsyncGate()
+        let clock = ManualClock()
         let controller = makeWatchingController(
             logDir: tmpDir,
             ensureMicAccess: {
                 await gate.wait()
                 return true
             },
-            startJoinTimeout: .milliseconds(80),
+            startJoinTimeout: Self.joinBound,
+            joinClock: clock,
         )
         addTeardownBlock {
             await gate.open()
@@ -190,12 +196,9 @@ final class WatchingControllerRecordControlTests: XCTestCase {
         controller.startMicrophoneRecording()
         await waitFor { await gate.hasWaiter }
 
-        let began = ContinuousClock.now
-        let outcome = await controller.applyRecordAction(.start)
-        let elapsed = ContinuousClock.now - began
+        let outcome = await startOutcome(on: controller, advancing: clock)
 
-        XCTAssertEqual(outcome, .failed, "a start that never settles is a 503, not a hang")
-        XCTAssertLessThan(elapsed, .milliseconds(400), "one bound, not two, and not unbounded")
+        XCTAssertEqual(outcome, .failed, "one bound, not two, and not unbounded: a start that never settles is a 503")
     }
 
     /// The guard behind the race above, at the only layer that can be pinned:
@@ -211,16 +214,13 @@ final class WatchingControllerRecordControlTests: XCTestCase {
         }
     }
 
-    /// D1, directly: the start this call launches must be bounded too. The
-    /// earlier case bounds a start it *found*; remove the wait on the one it
-    /// creates and only this one goes red — the endpoint would then hang for as
-    /// long as the microphone prompt sits unanswered.
-    ///
-    /// Driven from a child task with its own deadline rather than awaited
-    /// inline, so a regression fails in under a second instead of wedging the
-    /// whole run: without the bound the call never returns at all.
+    /// The start this call launches must be bounded too. The earlier case
+    /// bounds a start it *found*; remove the wait on the one it creates and
+    /// only this one goes red — the endpoint would then hang for as long as the
+    /// microphone prompt sits unanswered.
     func testTheStartThisCallLaunchesIsBoundedToo() async {
         let gate = AsyncGate()
+        let clock = ManualClock()
         let controller = makeWatchingController(
             logDir: tmpDir,
             ensureMicAccess: {
@@ -228,28 +228,37 @@ final class WatchingControllerRecordControlTests: XCTestCase {
                 return true
             },
             permissionHealth: .allHealthy,
-            startJoinTimeout: .milliseconds(80),
+            startJoinTimeout: Self.joinBound,
+            joinClock: clock,
         )
         addTeardownBlock {
             await gate.open()
             await controller.stopManualRecording()
         }
 
-        let settled = OutcomeBox()
-        let call = Task { @MainActor in
-            await settled.store(controller.applyRecordAction(.start))
-        }
-        var outcome: RecordControlOutcome?
-        for _ in 0 ..< 80 where outcome == nil {
-            outcome = await settled.read()
-            if outcome == nil { try? await Task.sleep(for: .milliseconds(10)) }
-        }
-        call.cancel()
+        let outcome = await startOutcome(on: controller, advancing: clock)
 
         XCTAssertEqual(
             outcome, .failed,
             "an unanswered permission prompt must answer 503, not hold the request open",
         )
+    }
+
+    /// Any value works on a clock the test advances; the default keeps it real.
+    private static let joinBound = WatchingController.defaultStartJoinTimeout
+
+    /// What a `.start` answers once `clock` has moved one join bound and one
+    /// poll past it (so the verdict does not hinge on the comparison at the
+    /// deadline itself), or nil when it has not answered: it runs in a child
+    /// task, so a regression fails instead of wedging the run.
+    private func startOutcome(on controller: WatchingController, advancing clock: ManualClock) async -> RecordControlOutcome? {
+        let call = Task { @MainActor in await controller.applyRecordAction(.start) }
+        defer { call.cancel() }
+        guard await clock.advance(by: Self.joinBound + WatchingController.joinPollInterval) else {
+            XCTFail("the join never slept on its clock")
+            return nil
+        }
+        return await value(of: call)
     }
 
     // MARK: - Stop
@@ -342,19 +351,5 @@ final class WatchingControllerRecordControlTests: XCTestCase {
         try await loop.startManualRecording(pid: 99, appName: "Chrome", title: "Meeting")
         addTeardownBlock { await loop.stop() }
         return loop
-    }
-}
-
-/// Collects an outcome produced by a child task, so a test can put a deadline
-/// on a call that is supposed to be bounded and fail fast when it is not.
-actor OutcomeBox {
-    private var value: RecordControlOutcome?
-
-    func store(_ outcome: RecordControlOutcome) {
-        value = outcome
-    }
-
-    func read() -> RecordControlOutcome? {
-        value
     }
 }
