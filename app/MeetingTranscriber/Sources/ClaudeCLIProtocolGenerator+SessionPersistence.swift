@@ -162,11 +162,13 @@
         /// then SIGKILL after the termination grace) and its exit awaited
         /// before the directory is removed, so the probe takes at most
         /// `timeout` plus that grace. Cancellation stops it the same way.
+        /// `clock` is what `timeout` is measured on; see `BoundedProcess.init`.
         static func readHelp(
             resolvedBin: String,
             claudeBin: String,
             environment: [String: String],
             timeout: TimeInterval = helpProbeTimeoutSeconds,
+            clock: any Clock<Duration> = SuspendingClock(),
         ) async -> String? {
             guard let directory = try? makeWorkingDirectory() else { return nil }
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -183,7 +185,7 @@
             process.standardError = FileHandle.nullDevice
             process.standardInput = FileHandle.nullDevice
 
-            let outcome = try? await BoundedProcess(process).run(timeout: timeout)
+            let outcome = try? await BoundedProcess(process, clock: clock).run(timeout: timeout)
             try? output.close()
             guard case .exited = outcome, let data = try? Data(contentsOf: outputFile) else { return nil }
             return String(bytes: data, encoding: .utf8)
