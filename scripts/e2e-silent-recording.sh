@@ -100,7 +100,7 @@ cleanup() {
     # The app was kill -9'd mid-recording above, orphaning a raw temp; sweep
     # this run's artifacts so the next run doesn't crash-recover a stale temp.
     sweep_run_artifacts "$REC_DIR" "$RUN_START_MARKER"
-    rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
+    rm -f "${RUN_START_MARKER:-}" "${STATE_ERR_FILE:-}" 2>/dev/null || true
     # Restore defaults to whatever they were before we ran (or delete the
     # keys if they didn't exist).
     # Only restore what was actually snapshotted. An empty snapshot means
@@ -249,6 +249,33 @@ SIM_PID=$!
 
 # --- 6. Wait for WatchLoop to enter recording state ------------------------
 
+# One /state read into STATE, `{}` when the app did not answer; answers are
+# counted and STATE_LAST_ANSWERED says whether the latest read got one. That
+# keeps the verdict honest: an app that does not answer reads as "flag false"
+# on every poll, and this lane once blamed the detector, with an empty state
+# dump, while the app was blocked behind a TCC consent prompt. mt-cli has its
+# own 5 s request timeout; the bound is for an mt-cli that blocks before it
+# gets that far.
+STATE_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/e2e-silent-state-err.XXXXXX")"
+_read_state() {
+    local status=0
+    STATE="$(run_bounded 8 "$MTCLI" state 2>"$STATE_ERR_FILE")" || status=$?
+    if [ "$status" -eq 0 ] && [ -n "$STATE" ]; then
+        STATE_ANSWERED=$(( ${STATE_ANSWERED:-0} + 1 ))
+        STATE_LAST_ANSWERED=1
+        STATE_LAST_GOOD="$STATE"
+    else
+        STATE='{}'
+        STATE_LAST_ANSWERED=0
+        # What the last failed read said, for the verdict below.
+        if [ "$status" -eq 124 ]; then
+            STATE_LAST_ERR="mt-cli did not return within 8 s"
+        else
+            STATE_LAST_ERR="$(tr '\n' ' ' <"$STATE_ERR_FILE")"
+        fi
+    fi
+}
+
 echo "▸ Waiting for app to detect + start recording (max 30 s)…"
 # `isProcessing` flips true while a job is in the queue. It's informational
 # only — if it never flips we still let step 7 run and time out there,
@@ -256,8 +283,8 @@ echo "▸ Waiting for app to detect + start recording (max 30 s)…"
 # bailing here would. Hence `|| true`: a timeout here is non-fatal.
 _processing_started() {
     assert_app_alive
-    local state; state="$("$MTCLI" state 2>/dev/null || echo '{}')"
-    [ "$(echo "$state" | jq -r '.pipeline.isProcessing // false')" = "true" ]
+    _read_state
+    [ "$(jq -r '.pipeline.isProcessing // false' <<<"$STATE")" = "true" ]
 }
 poll_until 30 1 _processing_started || true
 
@@ -272,18 +299,32 @@ echo "▸ Polling for channelHealth.recordingSilent (threshold 30 s + 20 s slack
 # and APP_SILENT leak to caller scope for the success log line below.
 _recording_silent() {
     assert_app_alive
-    local state; state="$("$MTCLI" state 2>/dev/null || echo '{}')"
+    _read_state
     IFS=$'\t' read -r RECORDING_SILENT MIC_SILENT APP_SILENT < <(
-        echo "$state" \
+        echo "$STATE" \
             | jq -r '[.channelHealth.recordingSilent // false, .channelHealth.micSilent // false, .channelHealth.appSilent // false] | @tsv'
     )
     [ "$RECORDING_SILENT" = "true" ]
 }
+STATE_ANSWERED=0
+STATE_LAST_GOOD=""
 if poll_until 50 2 _recording_silent; then
     echo "  recordingSilent=true (mic=$MIC_SILENT app=$APP_SILENT)"
 else
-    echo "Final state:" >&2
-    "$MTCLI" state 2>/dev/null | jq . >&2 || true
+    # No verdict on the flag unless the app answered during the window and is
+    # still answering at its end: one more read, and the window's last read or
+    # that one must have answered, so a single dropped read does not count.
+    # The extra read below only asks whether the app still answers; the
+    # verdict and the state printed with it are the window's own last answer.
+    window_answered="$STATE_ANSWERED" last_answered="$STATE_LAST_ANSWERED" window_state="${STATE_LAST_GOOD:-}"
+    [ -n "$window_state" ] || window_state="{}"
+    assert_app_alive
+    _read_state
+    if [ "$window_answered" -eq 0 ] || { [ "$last_answered" = 0 ] && [ "$STATE_LAST_ANSWERED" = 0 ]; }; then
+        die "the app did not answer /state through the end of the 50 s window (answered $window_answered read(s) in it), so whether recordingSilent went true is unknown (last mt-cli error: ${STATE_LAST_ERR:-<none>}). The app process is alive. If mt-cli timed out rather than being refused, the app is blocked, and on the runner the likeliest cause is a TCC consent prompt waiting on its screen (this lane starts the binary directly, so TCC may attribute the app's accesses to the runner's node). Fix: $(tcc_fix_hint 'the pane the prompt names')"
+    fi
+    echo "Last state the app answered within the window:" >&2
+    jq . <<<"$window_state" >&2 || true
     die "channelHealth.recordingSilent never went true within 50 s"
 fi
 
