@@ -72,27 +72,33 @@ final class MicProbeDeadlineTests: XCTestCase {
     }
 
     func testABringUpThatDoesNotReturnInTimeIsReportedAsNoneAndDiscardedLater() async {
-        // Measured on the wall clock, not a manual clock moved to the end: the
-        // bound is the behaviour under test.
+        // Judged by an event: the wait has to answer while the bring-up is
+        // still parked on a semaphore only the test releases.
         let gate = DispatchSemaphore(value: 0)
         let discarded = Recorded()
-        let startedAt = Date()
-        let built = await PermissionHealthCheck.awaitBringUp(
-            deadline: 0.2,
-            on: BringUpLane(label: "test.mic-probe.wedged"),
-            bringUp: { gate.wait(); return 7 },
-            discardLate: { discarded.record($0) },
-        )
-        let elapsed = Date().timeIntervalSince(startedAt)
+        let startedAt = ContinuousClock.now
+        let call = Task {
+            await PermissionHealthCheck.awaitBringUp(
+                deadline: 0.2,
+                on: BringUpLane(label: "test.mic-probe.wedged"),
+                bringUp: { gate.wait(); return 7 },
+                discardLate: { discarded.record($0) },
+            )
+        }
+        guard let built = await value(of: call) else {
+            gate.signal()
+            XCTFail("the wait ends at the deadline, not when the call returns")
+            return
+        }
         XCTAssertNil(built, "a bring-up that has not returned is reported as none")
-        XCTAssertGreaterThanOrEqual(elapsed, 0.2)
-        XCTAssertLessThan(elapsed, 1.5, "the wait ends at the deadline, not when the call returns")
+        // A lower bound, which a slow runner cannot break: not cut short.
+        XCTAssertGreaterThanOrEqual(ContinuousClock.now - startedAt, .milliseconds(200))
         XCTAssertEqual(discarded.values, [], "nothing came back yet, so there is nothing to discard")
 
         // The call returns later: what it built goes to the discard, not to
         // a caller that has long moved on.
         gate.signal()
-        await waitFor(discarded.values == [7], timeout: .seconds(2))
+        await waitFor(discarded.values == [7], timeout: regressionCeiling)
         XCTAssertEqual(discarded.values, [7])
     }
 
@@ -100,35 +106,43 @@ final class MicProbeDeadlineTests: XCTestCase {
         // The production lane is serial on purpose: once one bring-up is
         // wedged, the next probe reports none at its deadline without running
         // its own bring-up, so the process loses one thread to the wedge, not
-        // one per probe. Uses that lane, not a test one, so a concurrent queue
-        // there would be caught; the wedge is released at the end.
+        // one per probe. Runs on a lane of its own, built the way the
+        // production lane is, so a concurrent queue there would be caught and
+        // a probe from elsewhere in the run cannot queue into this one; the
+        // wedge is released at the end.
         let gate = DispatchSemaphore(value: 0)
         let discarded = Recorded()
         let entered = Recorded()
-        // The wedged bring-up gets a deadline well past the second one's, so
-        // the second is enqueued behind it rather than refused for an overrun
-        // (the next test), however slowly the runner schedules the wait below.
+        // The wedged bring-up gets a deadline no run reaches, so the second is
+        // always enqueued behind it rather than refused for an overrun (the
+        // next test), however slowly the runner gets to the second call.
+        let lane = BringUpLane(label: "test.mic-probe.queued")
         async let wedged: Int? = PermissionHealthCheck.awaitBringUp(
-            deadline: 1.0,
+            deadline: 3600,
+            on: lane,
             bringUp: { entered.record(1); gate.wait(); return 1 },
             discardLate: { discarded.record($0) },
         )
         // The wedged bring-up has the queue before the next one is enqueued.
-        await waitFor(entered.values == [1], timeout: .seconds(2))
+        await waitFor(entered.values == [1], timeout: regressionCeiling)
         XCTAssertEqual(entered.values, [1])
         let second = await PermissionHealthCheck.awaitBringUp(
             deadline: 0.2,
+            on: lane,
             bringUp: { entered.record(2); return 2 },
             discardLate: { discarded.record($0) },
         )
         XCTAssertNil(second)
         XCTAssertEqual(entered.values, [1], "the second bring-up must not have run behind the wedged one")
-        let first = await wedged
-        XCTAssertNil(first)
 
+        // Released, the first returns within its own deadline and is handed
+        // back; the second runs only now, after its deadline, and is discarded.
         gate.signal()
-        await waitFor(discarded.values.count == 2, timeout: .seconds(2))
-        XCTAssertEqual(discarded.values, [1, 2], "both late returns release what they built, in order")
+        let first = await wedged
+        XCTAssertEqual(first, 1)
+        await waitFor(discarded.values == [2], timeout: regressionCeiling)
+        XCTAssertEqual(entered.values, [1, 2], "the second bring-up ran only after the wedge was released")
+        XCTAssertEqual(discarded.values, [2], "the late return releases what it built")
     }
 
     func testABringUpBehindAnOverrunOneIsRefusedAtOnceUntilTheOverrunReturns() async {
@@ -150,18 +164,25 @@ final class MicProbeDeadlineTests: XCTestCase {
         )
         XCTAssertNil(overrun)
 
-        let startedAt = Date()
-        let refused = await PermissionHealthCheck.awaitBringUp(
-            deadline: 0.5,
-            on: lane,
-            bringUp: { entered.record(2); return 2 },
-            discardLate: { discarded.record($0) },
-        )
+        // A deadline no run reaches: answering while the lane is still wedged
+        // can only be the refusal itself.
+        let refusal = Task {
+            await PermissionHealthCheck.awaitBringUp(
+                deadline: 3600,
+                on: lane,
+                bringUp: { entered.record(2); return 2 },
+                discardLate: { discarded.record($0) },
+            )
+        }
+        guard let refused = await value(of: refusal) else {
+            gate.signal()
+            XCTFail("refused at once, not at its deadline")
+            return
+        }
         XCTAssertNil(refused)
-        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.2, "refused at once, not at its deadline")
 
         gate.signal()
-        await waitFor(discarded.values == [1], timeout: .seconds(2))
+        await waitFor(discarded.values == [1], timeout: regressionCeiling)
         XCTAssertEqual(entered.values, [1], "the refused bring-up was never enqueued")
 
         let reopened = await PermissionHealthCheck.awaitBringUp(
@@ -193,12 +214,12 @@ final class MicProbeDeadlineTests: XCTestCase {
         XCTAssertTrue(lane.isWedged)
 
         gate.signal()
-        await waitFor(entered.values == [1], timeout: .seconds(2))
+        await waitFor(entered.values == [1], timeout: regressionCeiling)
         XCTAssertTrue(lane.isWedged, "the late engine is still being torn down on the lane")
 
         discarding.signal()
-        await waitFor(discarded.values == [1], timeout: .seconds(2))
-        await waitFor(!lane.isWedged, timeout: .seconds(2))
+        await waitFor(discarded.values == [1], timeout: regressionCeiling)
+        await waitFor(!lane.isWedged, timeout: regressionCeiling)
         XCTAssertFalse(lane.isWedged)
     }
 }
