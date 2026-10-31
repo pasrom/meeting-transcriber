@@ -32,10 +32,9 @@
         /// fake binary answers `--help` with one option line and otherwise
         /// replies with the arguments it was started with.
         func testGeneratePassesTheFlagToACLIThatListsIt() async throws {
-            let script = try Self.makeFakeClaudeScript(helpLine: "  --no-session-persistence  Disable session persistence")
-            defer { try? FileManager.default.removeItem(atPath: script) }
+            let script = try makeFakeClaudeScript(helpLine: "  --no-session-persistence  Disable session persistence")
 
-            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
+            let generator = Self.makeGenerator(script: script)
             let result = try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false)
 
             XCTAssertTrue(result.contains("--no-session-persistence"), "arguments were: \(result)")
@@ -44,10 +43,9 @@
         /// A CLI older than the flag would reject it as an unknown option and
         /// fail every protocol, so it must not get it.
         func testGenerateLeavesTheFlagOffForACLIThatDoesNotListIt() async throws {
-            let script = try Self.makeFakeClaudeScript(helpLine: "  -p, --print  Print response and exit")
-            defer { try? FileManager.default.removeItem(atPath: script) }
+            let script = try makeFakeClaudeScript(helpLine: "  -p, --print  Print response and exit")
 
-            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
+            let generator = Self.makeGenerator(script: script)
             let result = try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false)
 
             XCTAssertFalse(result.contains("--no-session-persistence"), "arguments were: \(result)")
@@ -56,31 +54,35 @@
 
         /// A wrapper that ignores SIGTERM and does not exit must not hold up
         /// the protocol: the probe kills it after its timeout and the
-        /// termination grace, and the run goes ahead without the flag.
+        /// termination grace, and the run goes ahead without the flag. The
+        /// limit must pass after the trap and the help line.
         func testHelpProbeGivesUpOnACLIThatDoesNotExit() async throws {
-            let path = NSTemporaryDirectory() + "fake-claude-\(UUID().uuidString).sh"
-            try "#!/bin/sh\ntrap '' TERM\necho '--no-session-persistence'\nsleep 5\n"
-                .write(toFile: path, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
-            defer { try? FileManager.default.removeItem(atPath: path) }
+            let folder = try makeTempDirectory(prefix: "help-probe")
+            let cli = try makeHeldFake(in: folder, name: "cli")
+            let path = try makeExecutableScript(in: folder, name: "claude", body: """
+            trap '' TERM
+            echo '--no-session-persistence'
+            exec '\(cli.path)'
+            """)
 
-            let start = Date()
-            let help = await ClaudeCLIProtocolGenerator.readHelp(
-                resolvedBin: path, claudeBin: path, environment: ProcessInfo.processInfo.environment, timeout: 0.5,
-            )
+            let help = try await passLimit(of: cli, "the probe waited for a CLI that never exits") { clock, timeout in
+                await ClaudeCLIProtocolGenerator.readHelp(
+                    resolvedBin: path, claudeBin: path, environment: ProcessInfo.processInfo.environment,
+                    timeout: timeout, clock: clock,
+                )
+            }.get()
 
             XCTAssertNil(help, "a probe that ran out of time counts as no help text")
-            XCTAssertLessThan(Date().timeIntervalSince(start), 3, "the probe waited for a CLI that never exits")
         }
 
         func testHelpProbeReadsTheHelpOfACLIThatExits() async throws {
-            let path = NSTemporaryDirectory() + "fake-claude-\(UUID().uuidString).sh"
-            try "#!/bin/sh\necho \"called with $1\"\n".write(toFile: path, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
-            defer { try? FileManager.default.removeItem(atPath: path) }
+            let path = try makeExecutableScript(
+                in: makeTempDirectory(prefix: "help-probe"), name: "claude", body: "echo \"called with $1\"",
+            )
 
             let help = await ClaudeCLIProtocolGenerator.readHelp(
                 resolvedBin: path, claudeBin: path, environment: ProcessInfo.processInfo.environment,
+                timeout: HeldFake.noLimit,
             )
 
             XCTAssertEqual(help, "called with --help\n")
@@ -100,13 +102,12 @@
         /// The variable reaches the started CLI, not just `buildEnvironment`'s
         /// output: the fake binary replies with the value it sees.
         func testGeneratePassesTheAutoMemoryVariableToTheCLI() async throws {
-            let script = try Self.makeFakeClaudeScript(
+            let script = try makeFakeClaudeScript(
                 helpLine: "  -p, --print  Print response and exit",
                 reply: "$\(ClaudeCLIProtocolGenerator.disableAutoMemoryVariable)",
             )
-            defer { try? FileManager.default.removeItem(atPath: script) }
 
-            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
+            let generator = Self.makeGenerator(script: script)
             let result = try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false)
 
             XCTAssertEqual(result, "1")
@@ -235,20 +236,22 @@
         /// A fake `claude`: `--help` prints `helpLine`, any other call drains
         /// stdin and replies with `reply`, its own arguments by default, as
         /// one stream-json text.
-        private static func makeFakeClaudeScript(helpLine: String, reply: String = "$*") throws -> String {
-            let path = NSTemporaryDirectory() + "fake-claude-\(UUID().uuidString).sh"
-            let body = """
-            #!/bin/sh
+        private func makeFakeClaudeScript(helpLine: String, reply: String = "$*") throws -> String {
+            try makeExecutableScript(in: makeTempDirectory(prefix: "fake-claude"), name: "claude", body: """
             if [ "$1" = "--help" ]; then
                 printf '%s\\n' '\(helpLine)'
                 exit 0
             fi
             cat > /dev/null
             printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s"}}\\n' "\(reply)"
-            """
-            try body.write(toFile: path, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
-            return path
+            """)
+        }
+
+        /// A generator for `script` whose `--help` probe has no limit that a
+        /// slow runner could reach: the probe running out would drop the flag
+        /// and fail a correct run.
+        private static func makeGenerator(script: String) -> ClaudeCLIProtocolGenerator {
+            ClaudeCLIProtocolGenerator(claudeBin: script, language: "German", helpProbeTimeout: HeldFake.noLimit)
         }
 
         private static func makeScratchFolder() throws -> URL {
