@@ -179,6 +179,16 @@ rpc_post_status() {
     echo "${code:-000}"
 }
 
+# rpc_post <path> <json> — POST a JSON body to the dev RPC server and print the
+# response body, `{}` when nothing answered, so a caller's jq reads a missing
+# answer as a missing field. Same base, token and timeout as rpc_post_status.
+rpc_post() {
+    curl --silent --show-error --max-time 15 -X POST \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data "$2" "$RPC_BASE$1" 2>/dev/null || echo '{}'
+}
+
 # Assert that a process matching `$pattern` is running. Exits 1 with a
 # clear error if not. Intended for polling loops that would otherwise
 # burn their full timeout if the app crashed mid-poll — the loop just
