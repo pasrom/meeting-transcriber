@@ -58,14 +58,20 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(jobs[0].meetingTitle, "Standup")
     }
 
-    func testSaveSnapshotDoesNotBlockMainActor() {
+    func testSaveSnapshotDoesNotBlockMainActor() async {
         // Regression guard — if saveSnapshot ever goes synchronous again,
         // a stalled `replaceItemAt` would freeze the UI / RPC / watch loop.
-        queue.enqueue(makeJob())
-        let start = Date()
-        queue.saveSnapshot()
-        let elapsed = Date().timeIntervalSince(start)
-        XCTAssertLessThan(elapsed, 0.05, "saveSnapshot returned in \(elapsed)s — should be near-instant")
+        // The save has to return while its own write is still parked.
+        let writer = GatedSnapshotWriter()
+        let testQueue = PipelineQueue(logDir: tmpDir, snapshotWriter: writer.write)
+        testQueue.insertJobForTesting(makeJob())
+
+        testQueue.saveSnapshot()
+        XCTAssertEqual(writer.finished, 0, "saveSnapshot waited for its write to land")
+
+        writer.release()
+        await testQueue.awaitSnapshotFlush()
+        XCTAssertEqual(writer.finished, 1, "the save must still write once released")
     }
 
     // MARK: - Terminal job record (durable readback)
@@ -191,25 +197,18 @@ final class PipelineQueueTests: XCTestCase {
         // saveSnapshot calls on the main actor. With the synchronous-on-
         // main implementation, the second call would hang waiting on the
         // first; with the off-main worker, it returns instantly.
-        let gate = DispatchSemaphore(value: 0)
-        // swiftlint:disable trailing_closure
-        let testQueue = PipelineQueue(
-            logDir: tmpDir,
-            snapshotWriter: { _, _ in
-                gate.wait()
-                gate.signal() // re-arm so subsequent callers fall through
-            },
-        )
-        // swiftlint:enable trailing_closure
+        let writer = GatedSnapshotWriter()
+        let testQueue = PipelineQueue(logDir: tmpDir, snapshotWriter: writer.write)
         testQueue.enqueue(makeJob()) // triggers worker → blocks in writer
+        await waitFor(writer.entered == 1, timeout: regressionCeiling)
+        XCTAssertEqual(writer.entered, 1, "precondition: the first write is wedged in the writer")
 
-        let start = Date()
         testQueue.saveSnapshot() // would deadlock if main-actor were waiting
-        let elapsed = Date().timeIntervalSince(start)
-        XCTAssertLessThan(elapsed, 0.05, "saveSnapshot blocked while writer was wedged (\(elapsed)s)")
+        XCTAssertEqual(writer.finished, 0, "saveSnapshot blocked while writer was wedged")
 
-        gate.signal() // release the wedged write so the worker can drain
+        writer.release() // release the wedged write so the worker can drain
         await testQueue.awaitSnapshotFlush()
+        XCTAssertEqual(writer.finished, 2, "both the wedged write and the later save must land")
     }
 
     func testSnapshotMatchesInMemoryStateAfterStateTransitionBurst() async throws {
@@ -5327,5 +5326,42 @@ final class PipelineQueueTests: XCTestCase {
             slug.lowercased().contains("daily") && slug.lowercased().contains("standup"),
             "Slug should still encode the title for human-readable filenames",
         )
+    }
+}
+
+/// A snapshot writer that parks every write on a gate the test opens, and
+/// counts the writes that entered and the ones that finished. A write gives up
+/// waiting after a coarse ceiling, so a save that wrongly waits for its write
+/// fails its assertion instead of hanging the run.
+private final class GatedSnapshotWriter: Sendable {
+    private let gate = DispatchSemaphore(value: 0)
+    private let enteredCount = OSAllocatedUnfairLock(initialState: 0)
+    private let finishedCount = OSAllocatedUnfairLock(initialState: 0)
+
+    /// `regressionCeiling` in seconds, for the semaphore's dispatch deadline.
+    private static let ceiling = regressionCeiling / .seconds(1)
+
+    var entered: Int {
+        enteredCount.withLock { $0 }
+    }
+
+    var finished: Int {
+        finishedCount.withLock { $0 }
+    }
+
+    var write: PipelineSnapshotStore.Writer {
+        { [self] _, _ in
+            enteredCount.withLock { $0 += 1 }
+            // Re-arm only after a real release: re-signalling after a timeout
+            // would leave a permit behind and open the gate for good.
+            if gate.wait(timeout: .now() + Self.ceiling) == .success {
+                gate.signal() // re-arm so later writes fall through
+            }
+            finishedCount.withLock { $0 += 1 }
+        }
+    }
+
+    func release() {
+        gate.signal()
     }
 }
