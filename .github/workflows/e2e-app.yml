@@ -532,6 +532,14 @@ jobs:
         timeout-minutes: 10
         run: bash scripts/e2e-app.sh --no-build --crash-recovery
 
+      # A step timeout does not reliably end its driver, and a leftover one
+      # blocks the next run; this ends exactly the drivers this job recorded
+      # (see e2e_reap_registered_drivers in scripts/lib/e2e-helpers.sh).
+      - name: End e2e drivers a step timeout left behind
+        if: always()
+        timeout-minutes: 3
+        run: source scripts/lib/e2e-helpers.sh && e2e_reap_registered_drivers
+
       # Best-effort: capture the simulator's stdout for post-mortem if
       # the driver failed before tearing it down. Above the host-skip gate, so
       # a run that failed only there does not upload a log nobody needs.

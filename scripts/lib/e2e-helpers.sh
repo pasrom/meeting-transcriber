@@ -1235,3 +1235,139 @@ tcc_fix_hint() {
     printf 'System Settings → Privacy & Security → %s: allow %s (answer the prompt on the runner'"'"'s screen if one is open), then re-run; see the e2e-architecture skill, runner setup step 6.' \
         "$1" "${2:-$(tcc_grantee)}"
 }
+
+# --- drivers a step timeout left behind ---------------------------------------
+#
+# A step that times out does not reliably take its driver down: one blocked in
+# a TCC-guarded read outlived its step, and the rerun's e2e-app.sh refused to
+# start next to it. So every e2e driver records itself in CI, by pid AND start
+# time, and the next driver of the job and the workflow's `if: always()` step
+# end exactly those: a pid alone may have been reused, and a pattern would
+# match whatever else names the script.
+
+# _ancestor_pids [pid] — pid (default: this shell) and each ancestor up to,
+# not including, launchd, space-delimited with a leading and trailing space so
+# a caller can test membership with `case " $list " in *" $p "*`.
+_ancestor_pids() {
+    local p="${1:-$$}" out=" "
+    while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+        out="$out$p "
+        p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    done
+    echo "$out"
+}
+
+# e2e_register_driver — record this script's pid in the job's driver list,
+# after ending what an earlier step left in it (a step that runs after a
+# timeout, `if: always()` or `!cancelled()` or after a continue-on-error lane,
+# would otherwise start next to the leftover driver). Every e2e-*.sh driver
+# that sources this file calls it right after; it is explicit rather than a
+# side effect of `source`, since it can signal processes and wait. CI only
+# ($RUNNER_TEMP is per job); a no-op elsewhere.
+e2e_register_driver() {
+    [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -n "${RUNNER_TEMP:-}" ] || return 0
+    e2e_reap_registered_drivers || true
+    local started
+    started="$(ps -o lstart= -p $$ 2>/dev/null)" || return 0
+    printf '%s\t%s\t%s\n' "$$" "$started" "$(basename "$0")" 2>/dev/null >>"$RUNNER_TEMP/e2e-driver-pids" || true
+}
+
+# e2e_reap_registered_drivers [list] — end every driver in the list that is
+# still running as the process recorded (same pid, same start time).
+#
+# Every driver gets SIGTERM at the same moment, together rather than one by
+# one: a nested driver that exits early would otherwise start its parent's
+# cleanup, and a TERM sent to the parent a moment later would cut it off. A
+# driver whose trap can run then runs it with its children still there (the
+# drivers that trap only EXIT clean up at once, and some of them quit or sweep
+# an app that is their own child). After E2E_REAP_UNBLOCK_S (10) seconds, the
+# drivers still running have the non-driver descendants they had before the
+# TERM SIGKILLed: bash holds a TERM trap until its foreground child returns,
+# and that child is the call blocked behind the prompt. What a trap started
+# after the TERM is left alone. A descendant that is itself a registered
+# driver (an e2e-app.sh --redeploy-only under e2e-browser.sh, e2e-soak.sh or
+# e2e-channel-fault.sh) is spared, and gets its own TERM. The drivers share
+# E2E_REAP_GRACE_S (90) seconds in all for their traps. The arithmetic: a
+# trap held until the unblock starts by about 11 s (10 s plus the poll's
+# whole-second overshoot); quit_running_app's worst case is about 52 s (see
+# there); restoring routing, settings and shared state, and sweeping
+# recordings, is allowed 10 s; that is 73 s, and 90 leaves 17 s of margin.
+# Then SIGKILL for what is left, with whatever the traps started, which with
+# its 3 s wait keeps the whole reap under 100 s; the workflows' reaper steps
+# allow 3 minutes. This shell and its ancestors are never touched. Entries that are
+# gone are dropped; a driver that survives SIGKILL stays listed, so the job's
+# last step still sees it, and makes the status 1.
+e2e_reap_registered_drivers() {
+    local list="${1:-${RUNNER_TEMP:-}/e2e-driver-pids}" pid started name p ancestors
+    local keep="" survivors="" entries="" members=" "
+    local -a drivers=() children=() all=()
+    [ -s "$list" ] || return 0
+    ancestors="$(_ancestor_pids)"
+    while IFS=$'\t' read -r pid started name; do
+        [ -n "$pid" ] || continue
+        case "$ancestors" in
+            *" $pid "*) keep="$keep$pid"$'\t'"$started"$'\t'"$name"$'\n'; continue ;;
+        esac
+        [ "$(ps -o lstart= -p "$pid" 2>/dev/null)" = "$started" ] || continue
+        echo "::warning title=leftover e2e driver::$name (pid $pid) was still running from an earlier step; ending it and its children. A step timeout leaves one behind; look in that step's log for a call blocked behind a TCC prompt."
+        drivers+=("$pid")
+        members="$members$pid "
+        entries="$entries$pid"$'\t'"$started"$'\t'"$name"$'\n'
+    done <"$list"
+    if [ "${#drivers[@]}" -gt 0 ]; then
+        local unblock="${E2E_REAP_UNBLOCK_S:-10}" grace="${E2E_REAP_GRACE_S:-90}" before="" owner
+        # The descendants as they are before the TERM, with start times and
+        # the driver they hang under. Only these are ever SIGKILLed below, and
+        # only while their start time still matches, so neither what a trap
+        # starts after the TERM nor a pid reused meanwhile is touched.
+        for pid in "${drivers[@]}"; do
+            while IFS= read -r p; do
+                [ -n "$p" ] || continue
+                case "$members" in *" $p "*) continue ;; esac
+                before="$before$p"$'\t'"$(ps -o lstart= -p "$p" 2>/dev/null)"$'\t'"$pid"$'\n'
+            done < <(_descendant_pids "$pid")
+        done
+        kill -TERM "${drivers[@]}" 2>/dev/null || true
+        # Phase 1: a driver whose trap can run does so now, with its children
+        # (the app it started, its simulator) still there for the cleanup to
+        # quit or sweep after.
+        poll_until "$unblock" 0.2 _no_pid_alive "${drivers[@]}" || true
+        # Phase 2: a driver still here is most likely held by a foreground
+        # child blocked behind a prompt, which keeps bash from running its
+        # pending TERM trap. SIGKILL the descendants it had before the TERM,
+        # so the trap runs, and give it the rest of the grace.
+        while IFS=$'\t' read -r p started owner; do
+            [ -n "$p" ] && [ -n "$started" ] || continue
+            _pid_is_alive "$owner" || continue
+            if [ "$(ps -o lstart= -p "$p" 2>/dev/null)" = "$started" ]; then children+=("$p"); fi
+        done <<<"$before"
+        [ "${#children[@]}" -eq 0 ] || kill -KILL "${children[@]}" 2>/dev/null || true
+        poll_until $(( grace > unblock ? grace - unblock : 1 )) 0.2 _no_pid_alive "${drivers[@]}" || true
+        # Then SIGKILL what is left: the drivers, what their traps started,
+        # and what they had before (orphaned if their driver died on TERM).
+        all=("${drivers[@]}")
+        for pid in "${drivers[@]}"; do
+            if _pid_is_alive "$pid"; then _read_pids all < <(_descendant_pids "$pid"); fi
+        done
+        while IFS=$'\t' read -r p started owner; do
+            [ -n "$p" ] && [ -n "$started" ] || continue
+            if [ "$(ps -o lstart= -p "$p" 2>/dev/null)" = "$started" ]; then all+=("$p"); fi
+        done <<<"$before"
+        kill -KILL "${all[@]}" 2>/dev/null || true
+        poll_until 3 0.2 _no_pid_alive "${all[@]}" || true
+        for p in "${all[@]}"; do
+            if _pid_is_alive "$p"; then survivors="$survivors $p"; fi
+        done
+        while IFS=$'\t' read -r pid started name; do
+            [ -n "$pid" ] || continue
+            case " $survivors " in *" $pid "*) keep="$keep$pid"$'\t'"$started"$'\t'"$name"$'\n' ;; esac
+        done <<<"$entries"
+    fi
+    printf '%s' "$keep" >"$list"
+    [ -s "$list" ] || rm -f "$list"
+    if [ -n "$survivors" ]; then
+        echo "::error title=e2e driver could not be ended::pid(s)${survivors} survived SIGKILL, most likely stuck in a call a TCC prompt holds; answer the prompt on the runner's screen (see the e2e-architecture skill, runner setup step 6)"
+        return 1
+    fi
+    return 0
+}

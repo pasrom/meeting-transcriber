@@ -126,6 +126,9 @@ fail() { printf '[e2e-browser] FAIL: %s\n' "$*" >&2; exit 1; }
 
 # shellcheck source=lib/e2e-helpers.sh
 source "$SCRIPT_DIR/lib/e2e-helpers.sh"
+# Ends what a timed-out earlier step left running, then records this
+# driver for the next (see e2e_register_driver).
+e2e_register_driver
 # For bundle_has_time_sensitive: the entitlement assertion below shares the
 # library's definition of the check and of the key itself.
 # shellcheck source=lib/signing.sh

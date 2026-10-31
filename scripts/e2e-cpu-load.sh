@@ -105,6 +105,9 @@ fail() { printf '[e2e-cpu-load] FAIL: %s\n' "$*" >&2; exit 1; }
 
 # shellcheck source=scripts/lib/e2e-helpers.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/e2e-helpers.sh"
+# Ends what a timed-out earlier step left running, then records this
+# driver for the next (see e2e_register_driver).
+e2e_register_driver
 
 require_command() {
     command -v "$1" >/dev/null || fail "missing command: $1"
@@ -284,7 +287,12 @@ on_exit() {
     fi
     rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
 }
-trap on_exit EXIT INT TERM
+# INT/TERM exit (and so run on_exit once, from EXIT): a trap that only ran
+# on_exit would return into the interrupted command and let the lane carry on
+# after its cleanup, which a reaper SIGTERM relies on not happening.
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # All RPC predicates carry the non-empty guard: jq 1.6 exits 0 on EMPTY
 # input even with -e, so a timed-out `rpc /state` would otherwise count

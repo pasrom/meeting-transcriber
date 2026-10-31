@@ -100,6 +100,12 @@ jobs:
           path: /tmp/e2e-app-sim.log
           if-no-files-found: ignore
 
+      # See the same step in e2e-app.yml.
+      - name: End e2e drivers a step timeout left behind
+        if: always()
+        timeout-minutes: 3
+        run: source scripts/lib/e2e-helpers.sh && e2e_reap_registered_drivers
+
       - name: Cleanup signing keychain
         if: always() && env.E2E_SIGNING_KEYCHAIN != ''
         run: security delete-keychain "$E2E_SIGNING_KEYCHAIN" 2>/dev/null || true

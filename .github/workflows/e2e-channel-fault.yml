@@ -78,3 +78,9 @@ jobs:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         timeout-minutes: 12
         run: bash scripts/e2e-channel-fault.sh
+
+      # See the same step in e2e-app.yml.
+      - name: End e2e drivers a step timeout left behind
+        if: always()
+        timeout-minutes: 3
+        run: source scripts/lib/e2e-helpers.sh && e2e_reap_registered_drivers

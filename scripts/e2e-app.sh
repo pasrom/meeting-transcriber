@@ -592,6 +592,9 @@ fail() { printf '[e2e-app] FAIL: %s\n' "$*" >&2; exit 1; }
 
 # shellcheck source=lib/e2e-helpers.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/e2e-helpers.sh"
+# Ends what a timed-out earlier step left running, then records this
+# driver for the next (see e2e_register_driver).
+e2e_register_driver
 # For LOCALVQE_RESOURCE_GLOB, so the echo-cancellation lane's bundle check and
 # the install it checks for agree on what a model file looks like.
 # shellcheck source=lib/localvqe-resources.sh
@@ -926,13 +929,8 @@ fi
 # its command line). Other e2e-*.sh drivers are not matched: they never run
 # concurrently with this one in the workflow.
 _e2e_other_drivers() {
-    local ancestors=" $$ " pid="$$" ppid p related
-    while [ "$pid" -gt 1 ]; do
-        ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
-        [ -n "$ppid" ] || break
-        ancestors="$ancestors$ppid "
-        pid="$ppid"
-    done
+    local ancestors p
+    ancestors="$(_ancestor_pids)"
     # The name must stand as a path component or a word (`bash scripts/e2e-app.sh`,
     # `./scripts/e2e-app.sh`): a quoted mention inside some other command line,
     # such as a monitoring `pgrep -f "e2e-app.sh"`, is not a driver and must not
@@ -949,12 +947,8 @@ _e2e_other_drivers() {
         # running this very check is one (measured: it reported itself as a
         # second driver). Walk up from the candidate and skip it if the chain
         # reaches this process.
-        pid="$p"; related=""
-        while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
-            if [ "$pid" = "$$" ]; then related=yes; break; fi
-            pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
-        done
-        [ -n "$related" ] || printf '%s ' "$p"
+        case "$(_ancestor_pids "$p")" in *" $$ "*) continue ;; esac
+        printf '%s ' "$p"
     done
 }
 _other_drivers="$(_e2e_other_drivers)"

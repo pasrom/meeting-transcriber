@@ -65,6 +65,12 @@ jobs:
           set -o pipefail
           bash scripts/e2e-cpu-load.sh | tee /tmp/e2e-cpu-load-run.log
 
+      # See the same step in e2e-app.yml.
+      - name: End e2e drivers a step timeout left behind
+        if: always()
+        timeout-minutes: 3
+        run: source scripts/lib/e2e-helpers.sh && e2e_reap_registered_drivers
+
       # The RESULT line is the machine-readable summary (idle + active
       # window averages + contamination flag). Collected as an artifact so
       # trend analysis across runs needs no log scraping.
