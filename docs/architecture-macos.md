@@ -147,6 +147,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `ConsentPromptCoordinator.swift` | Coordinates an async yes/no recording-consent prompt: register pending decision by id, resolve once via answer or timeout |
 | `WatchLoop+Consent.swift` | Browser-meeting consent gate, split out of `WatchLoop`; only patterns with `requiresRecordingConsent` reach it |
 | `DualSourceRecorder.swift` | Orchestrates AudioTapLib capture + mic, mixes tracks |
+| `RecorderError.swift` | Why a recording could not start or produced nothing to process — its own file (split out of `DualSourceRecorder.swift`, which is at the line cap); `WatchLoop` and `WatchingController` also throw and match it |
 | `RecordingProvider.swift` | Protocol abstraction over `DualSourceRecorder` for mock injection in `WatchLoop` tests |
 | `WatchLoop+RecordOnly.swift` | Record-only output branch (moves WAVs + writes `RecordingSidecar`), split out of `WatchLoop` |
 | `ProtocolResumePolicy.swift` | Decides what the snapshot restore does with a job interrupted mid-run: resume from the saved transcript, just finish, or run in full. Keys on the interrupted stage, never on "a transcript exists", because stage 1 writes a draft without speaker labels |
@@ -217,6 +218,8 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `FluidDiarizer+Nemotron.swift` | Nemotron 3 mode: the streaming loop that feeds a recording through `Nemotron3Diarizer` in 60 s pieces, one run at a time per instance; the model load sits behind an injectable seam and a process-wide load gate |
 | `FluidDiarizer+NemotronModelLoad.swift` | The real Nemotron 3 model load (HuggingFace download, CoreML load on CPU + Neural Engine), the default of that seam |
 | `SpeakerMatcher.swift` | Speaker embedding DB + cosine similarity matching |
+| `SpeakerMatcher+UnreadableDB.swift` | Tells a missing `speakers.json` apart from one that exists but cannot be used (read failure, undecodable), and reports whether a change actually reached disk — a missing file starts empty, a present one must never be silently overwritten |
+| `SpeakerMatcher+Editing.swift` | Rename, delete and merge for Known Voices and the debug RPC, each going through `mutateDB` so a failed or no-op edit is distinguishable from a successful one |
 | `SpeakerMatcher+Logging.swift` | Forensic match-decision logging (pseudonymized speaker names via `String.pseudonymized`) |
 | `LiveSpeakerMatcher.swift` | Actor for real-time speaker matching per finalized live-caption utterance; same WeSpeaker CoreML model as batch path; caches mask frame count in `UserDefaults` for fast cold start |
 | `StoredSpeaker.swift` | Codable speaker DB entry model (centroid + FIFO embeddings + metadata) |
@@ -310,6 +313,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Permissions.swift` | Mic/accessibility permissions, project root detection |
 | `PermissionRow.swift` | Permission status row UI component (icon, detail, help popover) |
 | `PermissionHealthCheck.swift` | TCC verdict + live probe → `PermissionStatus`; drives exclamation badge overlay |
+| `PermissionHealthCheck+MicProbeDeadline.swift` | Bounds the microphone permission probe (issue #778) — brings up an `AVAudioEngine` on a dedicated lane with a deadline, since the bring-up call can wedge inside AVFAudio and never return |
 | `NotificationVisibility.swift` | What the notification centre will actually *do* with a posted notification (alert style, Time Sensitive, scheduled delivery) — authorisation alone can read `.authorized` while the prompt never shows |
 | `ParticipantReader.swift` | Teams participant extraction via Accessibility API |
 | `DebugRPCServer.swift` | Embedded HTTP RPC server core (routing, auth) for shell-driven inspection. `#if !APPSTORE`, opt-in via `MEETINGTRANSCRIBER_DEBUG_RPC=1`. Bearer-token + Origin reject; binds 127.0.0.1 only. Endpoint handlers split into companion files below (line-cap) |
@@ -555,6 +559,8 @@ Flow: `FluidDiarizer.run(audioPath, numSpeakers)` → selected diarizer → `Dia
 
 `SpeakerMatcher` matches diarization speaker embeddings against a persistent speaker database (`speakers.json`) using cosine similarity (threshold: 0.40, confidence margin: 0.10). Stores a running-mean centroid (primary match anchor) plus a recent-samples FIFO (max 3, fallback when centroid match is borderline). Quality filter: embeddings from segments shorter than 3 s are excluded from the centroid but kept as fallback samples. Speakers are ranked by recency and use count in the naming UI. Enables recognition of returning speakers across meetings.
 
+Writes go through `mutateDB`, which tells a missing DB (start empty) apart from an undecodable one (quarantined to `speakers.json.corrupt-<timestamp>` and replaced with a fresh one) and an unreadable one (left untouched, nothing written), so a sync tool caught mid-write or a transient I/O error can no longer wipe every enrolled voice. A label whose embedding is NaN/Inf is skipped rather than stored, and callers (voice enrollment, pipeline naming) are told which confirmed names actually made it to disk. See `CLAUDE.md`'s Diarization notes for the full mechanism.
+
 ### Speaker Assignment
 
 For each transcript segment, find the diarization segment with the longest temporal overlap:
@@ -613,6 +619,8 @@ appended, and nothing is overwritten. If any move fails, the ones already done
 are undone and the job keeps its old stem and paths.
 
 `AppSettings.protocolLanguage` (default `"German"`) is substituted into the prompt as `{LANGUAGE}`. Custom prompts can also use `{MEETING_DATE}` (`YYYY-MM-DD`) and `{MEETING_TIME}` (`HH:mm`), derived from the captured recording start time. Imports and recovery jobs resolve those time placeholders to `Unknown` rather than their enqueue or processing time. Only recordings with a captured start receive the authoritative meeting-metadata block, so existing custom prompts receive reliable temporal context without needing to add the placeholders.
+
+For the OpenAI-compatible provider, `AppSettings.openAIAPIKeyPlacement` sends the key as a Bearer token (default) or in a custom header such as `api-key` (the Azure-gateway convention), with a cross-origin redirect refused while a custom header is in use so the key can't leak to another host. Optional `AppSettings.openAITemperature` / `openAITopP` sampling overrides are omitted from the request body when unset, rather than sent as a default, so a local server's own per-model defaults aren't silently overridden. See `CLAUDE.md`'s Protocol generation notes for the full mechanism.
 
 ### Claude CLI Invocation
 
