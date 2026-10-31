@@ -478,6 +478,36 @@ jobs:
         timeout-minutes: 10
         run: bash scripts/e2e-app.sh --no-build --echo-cancel
 
+      # Upgrade lane: every lane above starts the app on a clean or empty home,
+      # so none runs this build on the data an older release left behind. This
+      # one seeds, in a throwaway home, what v0.8.1 writes (a WhisperKit model
+      # in Documents/huggingface, an unreadable speakers.json, an interrupted
+      # job in the queue snapshot, a finished-job record), launches the app
+      # with the network closed but for localhost, and asserts the model
+      # migration, the speaker-DB quarantine and the job restore. What each
+      # check means is written at `run_upgrade` in scripts/e2e-app.sh.
+      # The model it seeds is cloned from this runner's test home, which the
+      # step below pre-warms; that is a file check once warm. It records
+      # nothing, so it needs no TCC grant.
+      # PLACEMENT: file-driven and not level-sensitive, so with the other
+      # file-driven lanes and ahead of crash-recovery's SIGKILL teardown.
+      - id: upgrade-home
+        name: Prepare the model the upgrade lane seeds
+        uses: ./.github/actions/runner-home
+        timeout-minutes: 20
+        with:
+          prewarm: "true"
+
+      - name: "Run upgrade-from-v0.8.1 E2E"
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+          E2E_UPGRADE_MODEL_SOURCE: "${{ steps.upgrade-home.outputs.home }}/Library/Application Support/MeetingTranscriber/huggingface"
+        # Two model loads and three transcriptions of the 50 s fixture with the
+        # small model; each model wait is capped at 300 s and each job at
+        # 240 s, so 15 min covers a slow run and still ends a hang.
+        timeout-minutes: 15
+        run: bash scripts/e2e-app.sh --no-build --upgrade
+
       # Crash-recovery lane (issue #379 part 3, PR #385/#386): start a meeting,
       # SIGKILL the app mid-recording (no stop() → orphaned _app16k_raw.tmp +
       # unfinalized _mic.wav, no _mix.wav survive), relaunch, and assert the

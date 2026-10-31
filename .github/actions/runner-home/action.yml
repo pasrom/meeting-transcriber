@@ -26,7 +26,9 @@ description: >
 
   Not covered, on purpose: the e2e-app family of lanes launches the deployed
   app, which needs the real home's TCC grants, so it still shares models and
-  data with the dev app on the `audio` runner.
+  data with the dev app on the `audio` runner. The one exception reads from
+  this home without running in it: the upgrade lane clones its WhisperKit
+  model from here into a throwaway home of its own.
 
   Where: `<runner.tool_cache>/meetingtranscriber-home/<runner.name>`. The tool
   cache persists between jobs and is not cleaned by actions/checkout; the
