@@ -1,8 +1,10 @@
 name: App Store Smoke
 
 # Builds the App Store variant of the .app (sandbox + restricted entitlements,
-# `#if APPSTORE` source branches active) and verifies the resulting bundle
-# launches without crashing within the first 5 s.
+# `#if APPSTORE` source branches active) and verifies that the signed bundle
+# carries exactly the committed entitlements, that it launches without
+# crashing within the first 5 s, and that it keeps its data in its sandbox
+# container (scripts/appstore-bundle-check.sh).
 #
 # Why this exists: the `--appstore` build path has zero automated coverage
 # beyond compilation. Sandbox-rejected operations, `#if APPSTORE` regressions
@@ -20,6 +22,15 @@ on:
     paths:
       - '.github/workflows/appstore.yml'
       - 'scripts/build_release.sh'
+      - 'scripts/appstore-bundle-check.sh'
+      # The entitlement check compares against this file, so an edit to it
+      # has to prove the signed bundle still matches.
+      - 'app/MeetingTranscriber/Entitlements/AppStore.entitlements'
+      # The launch check finds the app's data through the liveness marker,
+      # so a PR that renames or moves it must prove the check still holds.
+      - 'app/MeetingTranscriber/Sources/AppPaths.swift'
+      - 'app/MeetingTranscriber/Sources/LivenessMarker.swift'
+      - 'app/MeetingTranscriber/Sources/AppLauncher.swift'
       # A model-pin bump edits only these and changes what the bundle
       # contains, so filtering on build_release.sh alone would let a
       # broken revision or checksum reach a release untested.
@@ -35,6 +46,7 @@ on:
       - 'app/MeetingTranscriber/Sources/Info.plist'
       - 'tools/audiotap/**'
       - 'scripts/build_release.sh'
+      - 'scripts/appstore-bundle-check.sh'
       # A model-pin bump edits only these and changes what the bundle
       # contains, so filtering on build_release.sh alone would let a
       # broken revision or checksum reach a release untested.
@@ -72,34 +84,17 @@ jobs:
       - name: Build App Store variant
         run: ./scripts/build_release.sh --appstore --no-notarize
 
-      # Launch the bundle non-modally and verify it survives 5 s. A regression
-      # that breaks `#if APPSTORE`, sandbox entitlements, or dynamic linking
-      # crashes within the first second; the 5 s window gives enough margin
-      # without being so long that a stuck-on-startup launch loops forever.
-      - name: Smoke-launch the .app
+      # Why both checks exist and what they assert: scripts/appstore-bundle-check.sh.
+      - name: Check signed entitlements
         run: |
-          set -euo pipefail
-          # `open` requires an absolute path (or a bundle ID / registered
-          # name); a relative path resolves to "Unable to find application".
-          APP="$GITHUB_WORKSPACE/.build/release/MeetingTranscriber.app"
-          if [ ! -d "$APP" ]; then
-            echo "Build artifact missing at $APP. Contents of .build/release/:"
-            ls -la "$GITHUB_WORKSPACE/.build/release/" || true
-            exit 1
-          fi
-          # `open -na` launches a fresh instance even if a stale one happens
-          # to be running. The runner is fresh per job, but cheap insurance.
-          open -na "$APP"
-          sleep 5
-          if ! pgrep -x MeetingTranscriber >/dev/null; then
-            echo "MeetingTranscriber died within 5 s of launch."
-            echo "--- Recent crash report (if any): ---"
-            ls -t ~/Library/Logs/DiagnosticReports/MeetingTranscriber-*.ips 2>/dev/null \
-              | head -1 | xargs cat 2>/dev/null || echo "no crash report found"
-            exit 1
-          fi
-          pkill -x MeetingTranscriber || true
-          echo "App Store smoke: bundle launched and survived 5 s"
+          ./scripts/appstore-bundle-check.sh entitlements \
+            "$GITHUB_WORKSPACE/.build/release/MeetingTranscriber.app" \
+            app/MeetingTranscriber/Entitlements/AppStore.entitlements
+
+      - name: Smoke-launch the .app and check its data location
+        run: |
+          ./scripts/appstore-bundle-check.sh launch \
+            "$GITHUB_WORKSPACE/.build/release/MeetingTranscriber.app"
 
       - name: Upload crash reports on failure
         if: failure()
