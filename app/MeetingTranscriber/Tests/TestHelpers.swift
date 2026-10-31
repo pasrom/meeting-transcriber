@@ -361,6 +361,9 @@ final class MockDiarization: DiarizationProvider, @unchecked Sendable {
     /// The `numSpeakers` value passed to each `run` call, in order — lets tests
     /// assert how the speaker count is threaded (e.g. a naming-dialog re-run).
     var receivedNumSpeakers: [Int?] = []
+    /// The audio each `run` call was handed, in order — lets a test say which
+    /// folder a re-run read from.
+    var receivedAudioPaths: [URL] = []
     var throwOnPathSuffix: String?
     var resultToReturn: DiarizationResult?
     /// Runs inside each call with that call's 1-based number.
@@ -370,6 +373,7 @@ final class MockDiarization: DiarizationProvider, @unchecked Sendable {
         runCount += 1
         onRun?(runCount)
         receivedNumSpeakers.append(numSpeakers)
+        receivedAudioPaths.append(audioPath)
         if let suffix = throwOnPathSuffix, audioPath.lastPathComponent.hasSuffix(suffix) {
             throw NSError(
                 domain: "MockDiarization", code: 1,
