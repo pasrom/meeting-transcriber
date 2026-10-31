@@ -81,12 +81,19 @@ echo "Step 1: Building Swift menu bar app..."
 
 SPM_DIR="$PROJECT_ROOT/app/MeetingTranscriber"
 SWIFT_BUILD_FLAGS=(-c release --disable-sandbox)
+SPM_SCRATCH=".build"
 if [ "$APPSTORE" = true ]; then
-    SWIFT_BUILD_FLAGS+=(-Xswiftc -DAPPSTORE)
+    # The App Store variant compiles with a different flag set, so it gets its
+    # own scratch directory. Sharing `.build` with the Homebrew variant makes
+    # SwiftPM discard and rebuild everything every time the flags flip, which
+    # costs a full build in each direction for anyone building both. (The
+    # bundle output at the repo-root .build/release is a different directory.)
+    SPM_SCRATCH=".build-appstore"
+    SWIFT_BUILD_FLAGS+=(-Xswiftc -DAPPSTORE --scratch-path "$SPM_SCRATCH")
 fi
 (cd "$SPM_DIR" && swift build "${SWIFT_BUILD_FLAGS[@]}")
 
-cp "$SPM_DIR/.build/release/MeetingTranscriber" "$MACOS_DIR/MeetingTranscriber"
+cp "$SPM_DIR/$SPM_SCRATCH/release/MeetingTranscriber" "$MACOS_DIR/MeetingTranscriber"
 
 # ── Step 2: Assemble app bundle ──────────────────────────────────────────────
 
