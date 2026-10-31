@@ -82,6 +82,9 @@ runs:
     # sanitizer leg; that costs one unsanitized build, on cold runs only. A run
     # cut short keeps the models it finished (each loads local-first next time)
     # and the build, so a retry only does the rest.
+    # The script retries a transient download failure once, with a warning;
+    # why that fits the 20 min step budget and cannot record a partial cache
+    # as warm is in its header.
     - name: Pre-warm the model caches (when cold)
       if: inputs.prewarm == 'true'
       shell: bash
@@ -91,22 +94,8 @@ runs:
         KEY: ${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Tests/ModelPreloadTests.swift') }}
       run: |
         set -euo pipefail
-        preload="$GITHUB_WORKSPACE/app/MeetingTranscriber/Tests/ModelPreloadTests.swift"
-        if [ ! -f "$preload" ]; then
-          echo "::error::Pre-warm expects $preload — moved or renamed?"
-          exit 1
-        fi
-        marker="$HOME_DIR/.prewarmed-v$PREWARM_VERSION-$KEY"
-        if [ -f "$marker" ]; then
-          echo "Models already pre-warmed for this key"
-          exit 0
-        fi
         cd "$GITHUB_WORKSPACE/app/MeetingTranscriber"
-        LOG="$RUNNER_TEMP/model-prewarm.log"
-        CFFIXED_USER_HOME="$HOME_DIR" swift test --filter ModelPreloadTests \
-          --skip 'ModelPreloadTests/testPreloadWhisperKitDefault' 2>&1 | tee "$LOG"
-        if ! grep -q "Test Suite 'ModelPreloadTests' passed" "$LOG"; then
-          echo "::error::Pre-warm did not run ModelPreloadTests — renamed, removed, or a download failed?"
-          exit 1
-        fi
-        touch "$marker"
+        CFFIXED_USER_HOME="$HOME_DIR" \
+          PREWARM_MARKER="$HOME_DIR/.prewarmed-v$PREWARM_VERSION-$KEY" \
+          "$GITHUB_WORKSPACE/scripts/ci/prewarm-models.sh" \
+          --skip 'ModelPreloadTests/testPreloadWhisperKitDefault'
