@@ -4,17 +4,18 @@
 
     /// A CLI run has to end however the CLI misbehaves: at its time limit
     /// when it goes quiet, when the job is cancelled, and soon after the CLI
-    /// exits even when a process it started holds its pipes open. Fake CLIs
-    /// and their children stop by themselves after three seconds, past
-    /// `bound`, so a broken bound fails these tests instead of hanging them.
+    /// exits even when a process it started holds its pipes open.
+    ///
+    /// No verdict rests on how fast the run was: a fake CLI that must be
+    /// stopped, and a process it starts that the run must not wait for, are
+    /// `HeldFake`s, and limits not under test are `HeldFake.noLimit`. The time
+    /// checks left are coarse ceilings on a stop: `HeldFake.stopBound`, and for
+    /// the `--help` probe one under its own limit.
     final class ClaudeCLIProtocolGeneratorSubprocessTests: XCTestCase {
-        /// The limit for runs expected to time out.
+        /// The limit for runs expected to time out, on a clock the test
+        /// moves.
         private static let shortTimeout: TimeInterval = 0.2
-        /// The limit for runs expected to end by themselves, far above how
-        /// long they take.
-        private static let longTimeout: TimeInterval = 2
         private static let grace: TimeInterval = 0.15
-        private static let bound: TimeInterval = 2
 
         private var scratch: URL?
 
@@ -27,8 +28,9 @@
         }
 
         override func tearDownWithError() throws {
-            // No kill of leftover fakes here: they stop by themselves, and a
-            // pid read back from a file may already belong to another process.
+            // Removing the folder releases every held fake. No kill of
+            // leftovers by pid: one read back from a file may already belong
+            // to another process.
             if let scratch { try? FileManager.default.removeItem(at: scratch) }
             try super.tearDownWithError()
         }
@@ -42,15 +44,17 @@
             let folder = try XCTUnwrap(scratch)
             let pidFile = folder.appendingPathComponent("cli.pid")
             let childFile = folder.appendingPathComponent("child.pid")
+            let cli = try makeHeldFake(in: folder, name: "cli")
+            let child = try makeHeldFake(in: folder, name: "child")
             let script = try makeFakeCLI(run: """
             trap '' TERM
-            sleep 3 &
+            \(child.inBackground)
             echo $! > '\(childFile.path)'
             echo $$ > '\(pidFile.path)'
-            exec sleep 3
+            exec '\(cli.path)'
             """)
 
-            try await assertTimesOut(script: script, pidFile: pidFile)
+            try await assertTimesOut(script: script, pidFile: pidFile, cli: cli)
 
             try assertProcessGone(pidFile: pidFile)
             try await assertReaped(childFile)
@@ -62,14 +66,16 @@
             let folder = try XCTUnwrap(scratch)
             let pidFile = folder.appendingPathComponent("cli.pid")
             let childFile = folder.appendingPathComponent("child.pid")
+            let cli = try makeHeldFake(in: folder, name: "cli")
+            let child = try makeHeldFake(in: folder, name: "child")
             let script = try makeFakeCLI(run: """
-            sleep 3 &
+            \(child.inBackground)
             echo $! > '\(childFile.path)'
             echo $$ > '\(pidFile.path)'
-            exec sleep 3
+            exec '\(cli.path)'
             """)
 
-            try await assertTimesOut(script: script, pidFile: pidFile)
+            try await assertTimesOut(script: script, pidFile: pidFile, cli: cli)
 
             try assertProcessGone(pidFile: pidFile)
             try await assertReaped(childFile)
@@ -79,14 +85,16 @@
         /// running is still held to the limit while the run waits for it to
         /// exit.
         func testGenerateTimesOutOnACLIThatClosesItsOutputButKeepsRunning() async throws {
-            let pidFile = try XCTUnwrap(scratch).appendingPathComponent("cli.pid")
+            let folder = try XCTUnwrap(scratch)
+            let pidFile = folder.appendingPathComponent("cli.pid")
+            let cli = try makeHeldFake(in: folder, name: "cli")
             let script = try makeFakeCLI(run: """
             exec 1>&-
             echo $$ > '\(pidFile.path)'
-            exec sleep 3
+            exec '\(cli.path)'
             """)
 
-            try await assertTimesOut(script: script, pidFile: pidFile)
+            try await assertTimesOut(script: script, pidFile: pidFile, cli: cli)
 
             try assertProcessGone(pidFile: pidFile)
         }
@@ -96,33 +104,43 @@
         /// the run past its limit. The child leaves the CLI's process group,
         /// so stopping the CLI does not take it along, and gets stdin through
         /// fd 3 because the shell gives a background job /dev/null for stdin.
+        /// The CLI writes its pid only once the child has started, and so
+        /// left the group: stopped before that, the child went with it, the
+        /// prompt's pipe closed, and the test passed without testing anything.
         func testGenerateTimesOutWhileThePromptCanNeverBeWritten() async throws {
-            let pidFile = try XCTUnwrap(scratch).appendingPathComponent("cli.pid")
+            let folder = try XCTUnwrap(scratch)
+            let pidFile = folder.appendingPathComponent("cli.pid")
+            let cli = try makeHeldFake(in: folder, name: "cli")
+            let child = try makeHeldFake(in: folder, name: "child")
             let script = try makeFakeCLI(run: """
             exec 3<&0
-            /usr/bin/perl -e 'setpgrp(0, 0); sleep 3' <&3 &
+            /usr/bin/perl -e 'setpgrp(0, 0); exec @ARGV' '\(child.path)' <&3 &
             exec 3<&-
             exec 1>&-
+            \(child.waitForStart)
             echo $$ > '\(pidFile.path)'
-            exec sleep 3
+            exec '\(cli.path)'
             """)
 
-            try await assertTimesOut(script: script, pidFile: pidFile, transcript: Self.largeTranscript)
+            try await assertTimesOut(script: script, pidFile: pidFile, cli: cli, transcript: Self.largeTranscript)
 
             try assertProcessGone(pidFile: pidFile)
+            child.assertNotRunOut("the run waited for the prompt to be written")
         }
 
         /// Stopping a CLI that has not read its whole prompt breaks the pipe
         /// under the write. That must fail the write, not raise SIGPIPE and
         /// end the app (here: the test runner).
         func testGenerateSurvivesStoppingACLIThatLeftThePromptUnread() async throws {
-            let pidFile = try XCTUnwrap(scratch).appendingPathComponent("cli.pid")
+            let folder = try XCTUnwrap(scratch)
+            let pidFile = folder.appendingPathComponent("cli.pid")
+            let cli = try makeHeldFake(in: folder, name: "cli")
             let script = try makeFakeCLI(run: """
             echo $$ > '\(pidFile.path)'
-            exec sleep 3
+            exec '\(cli.path)'
             """)
 
-            try await assertTimesOut(script: script, pidFile: pidFile, transcript: Self.largeTranscript)
+            try await assertTimesOut(script: script, pidFile: pidFile, cli: cli, transcript: Self.largeTranscript)
 
             try assertProcessGone(pidFile: pidFile)
         }
@@ -131,18 +149,21 @@
 
         /// A CLI that exits while a process it started still holds its output
         /// open never delivers end of file. Its protocol is whole all the
-        /// same, and comes back shortly after the exit.
+        /// same, and comes back a drain grace after the exit. The app's own
+        /// grace, not `grace`: a short one would race the reading of the
+        /// reply on a slow runner.
         func testGenerateReturnsAProtocolWhileAChildOfTheCLIKeepsItsOutputOpen() async throws {
+            let child = try makeHeldFake(in: XCTUnwrap(scratch), name: "child")
             let script = try makeFakeCLI(run: """
             \(Self.replyLine)
-            sleep 3 &
+            \(child.inBackground)
             exit 0
             """)
 
-            let (result, elapsed) = await Self.outcome(script: script, timeout: Self.longTimeout)
+            let result = await Self.outcome(script: script, drainGrace: ProcessOutput.defaultDrainGrace)
 
             XCTAssertEqual(try result.get(), "Protocol body")
-            XCTAssertLessThan(elapsed, Self.bound, "the read waited for the child, not for the CLI")
+            child.assertNotRunOut("the read waited for the child, not for the CLI")
         }
 
         /// More than a pipe buffer of stderr before any stdout must not
@@ -154,21 +175,23 @@
             \(Self.replyLine)
             """)
 
-            let (result, _) = await Self.outcome(script: script, timeout: Self.longTimeout)
+            let result = await Self.outcome(script: script)
 
             XCTAssertEqual(try result.get(), "Protocol body")
         }
 
         /// A failed CLI is reported with its stderr even when a process it
-        /// started keeps stderr open.
+        /// started keeps stderr open: the drain grace ends the wait, not end
+        /// of file.
         func testGenerateReportsAFailureWhileAChildOfTheCLIKeepsStderrOpen() async throws {
+            let child = try makeHeldFake(in: XCTUnwrap(scratch), name: "child")
             let script = try makeFakeCLI(run: """
-            sleep 3 &
+            \(child.inBackground)
             echo boom >&2
             exit 3
             """)
 
-            let (result, elapsed) = await Self.outcome(script: script, timeout: Self.longTimeout)
+            let result = await Self.outcome(script: script, drainGrace: ProcessOutput.defaultDrainGrace)
 
             switch result {
             case let .failure(ProtocolError.cliFailed(code, message)):
@@ -178,22 +201,26 @@
             default:
                 XCTFail("expected cliFailed, got \(result)")
             }
-            XCTAssertLessThan(elapsed, Self.bound, "the failure waited for the child's stderr")
+            child.assertNotRunOut("the failure waited for the child's stderr")
         }
 
         // MARK: - Cancellation
 
         /// A job cancelled while the `--help` probe runs stops the probe and
-        /// ends there: the CLI is never started for the protocol.
+        /// ends there: the CLI is never started for the protocol. The probe
+        /// has a limit of its own, which would stop it too, after
+        /// `helpProbeTimeoutSeconds`, before the fake gives up; so the check
+        /// that the cancel stopped it is a coarse ceiling under that limit.
         func testCancellingGenerateDuringTheHelpProbeEndsTheJob() async throws {
             let folder = try XCTUnwrap(scratch)
             let probeFile = folder.appendingPathComponent("probe.pid")
             let ranFile = folder.appendingPathComponent("ran")
+            let probe = try makeHeldFake(in: folder, name: "probe")
             let script = try makeFakeCLI(
                 run: "touch '\(ranFile.path)'",
-                help: "echo $$ > '\(probeFile.path)'; exec sleep 3",
+                help: "echo $$ > '\(probeFile.path)'; exec '\(probe.path)'",
             )
-            let generator = Self.makeGenerator(script: script, timeout: 30)
+            let generator = Self.makeGenerator(script: script)
             let run = Task { try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false) }
             try await waitForPID(pidFile: probeFile)
             let start = Date()
@@ -202,7 +229,10 @@
             let result = await run.result
 
             XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "got \($0)") }
-            XCTAssertLessThan(Date().timeIntervalSince(start), Self.bound)
+            XCTAssertLessThan(
+                Date().timeIntervalSince(start), ClaudeCLIProtocolGenerator.helpProbeTimeoutSeconds / 2,
+                "the probe ran into its own limit instead of being stopped by the cancel",
+            )
             try assertProcessGone(pidFile: probeFile)
             XCTAssertFalse(FileManager.default.fileExists(atPath: ranFile.path), "the CLI was started after the cancel")
         }
@@ -212,13 +242,15 @@
         /// that returned without waiting would leave it running. The pid is
         /// written after the trap is set, so the cancel cannot come before it.
         func testCancellingGenerateStopsTheCLI() async throws {
-            let pidFile = try XCTUnwrap(scratch).appendingPathComponent("cli.pid")
+            let folder = try XCTUnwrap(scratch)
+            let pidFile = folder.appendingPathComponent("cli.pid")
+            let cli = try makeHeldFake(in: folder, name: "cli")
             let script = try makeFakeCLI(run: """
             trap '' TERM
             echo $$ > '\(pidFile.path)'
-            exec sleep 3
+            exec '\(cli.path)'
             """)
-            let generator = Self.makeGenerator(script: script, timeout: 30)
+            let generator = Self.makeGenerator(script: script)
             let run = Task { try await generator.generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false) }
             try await waitForPID(pidFile: pidFile)
             let start = Date()
@@ -227,21 +259,21 @@
             let result = await run.result
 
             XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "got \($0)") }
-            XCTAssertLessThan(Date().timeIntervalSince(start), Self.bound)
+            cli.assertStopped(since: start, "the CLI was not stopped")
             try assertProcessGone(pidFile: pidFile)
         }
 
         // MARK: - Helpers
 
         /// Runs `generate` against `script` and asserts that it fails with
-        /// the timeout, well before the fake CLI would have stopped by itself.
-        /// The limit runs on a clock moved once the fake has written its pid
-        /// to `pidFile`, the last thing each fake does before it sleeps: in
-        /// real time the limit could pass first on a loaded machine, and the
-        /// SIGTERM would then end a fake before it had set its trap or
-        /// written the pid the assertions read.
+        /// the timeout, and that the fake CLI `cli` was stopped rather than
+        /// left to give up. The limit runs on a clock moved once the fake has
+        /// written its pid to `pidFile`, the last thing each fake does before
+        /// it holds: in real time the limit could pass first on a loaded
+        /// machine, and the SIGTERM would then end a fake before it had set
+        /// its trap or written the pid the assertions read.
         private func assertTimesOut(
-            script: String, pidFile: URL, transcript: String = "Speaker 1: hello",
+            script: String, pidFile: URL, cli: HeldFake, transcript: String = "Speaker 1: hello",
             file: StaticString = #filePath, line: UInt = #line,
         ) async throws {
             let clock = ManualClock()
@@ -249,8 +281,7 @@
             try await waitForPID(pidFile: pidFile)
             let start = Date()
             await clock.advance(by: .seconds(Self.shortTimeout))
-            let (result, _) = await run
-            let elapsed = Date().timeIntervalSince(start)
+            let result = await run
             switch result {
             case .failure(ProtocolError.timeout):
                 break
@@ -258,41 +289,39 @@
             default:
                 XCTFail("expected a timeout, got \(result)", file: file, line: line)
             }
-            XCTAssertLessThan(elapsed, Self.bound, "the run outlasted its limit", file: file, line: line)
+            cli.assertStopped(since: start, "the CLI was not stopped", file: file, line: line)
         }
 
-        /// Runs `generate` against `script` and reports how it ended and how
-        /// long it took.
+        /// Runs `generate` against `script` and reports how it ended.
         private static func outcome(
-            script: String, timeout: TimeInterval, transcript: String = "Speaker 1: hello",
-            clock: any Clock<Duration> = SuspendingClock(),
-        ) async -> (result: Result<String, any Error>, elapsed: TimeInterval) {
-            let generator = makeGenerator(script: script, timeout: timeout, clock: clock)
-            let start = Date()
-            let result: Result<String, any Error>
+            script: String, timeout: TimeInterval = HeldFake.noLimit, drainGrace: TimeInterval = HeldFake.noLimit,
+            transcript: String = "Speaker 1: hello", clock: any Clock<Duration> = SuspendingClock(),
+        ) async -> Result<String, any Error> {
+            let generator = makeGenerator(script: script, timeout: timeout, drainGrace: drainGrace, clock: clock)
             do {
-                result = try await .success(generator.generate(transcript: transcript, title: "Sync", diarized: false))
+                return try await .success(generator.generate(transcript: transcript, title: "Sync", diarized: false))
             } catch {
-                result = .failure(error)
+                return .failure(error)
             }
-            return (result, Date().timeIntervalSince(start))
         }
 
         private static func makeGenerator(
-            script: String, timeout: TimeInterval, clock: any Clock<Duration> = SuspendingClock(),
+            script: String, timeout: TimeInterval = HeldFake.noLimit, drainGrace: TimeInterval = HeldFake.noLimit,
+            clock: any Clock<Duration> = SuspendingClock(),
         ) -> ClaudeCLIProtocolGenerator {
             ClaudeCLIProtocolGenerator(
                 claudeBin: script, language: "German", timeout: timeout,
-                terminationGrace: grace, outputDrainGrace: grace, clock: clock,
+                terminationGrace: grace, outputDrainGrace: drainGrace, clock: clock,
             )
         }
 
         /// Like `assertProcessGone`, for a process the CLI started: no longer
         /// this process's child once the CLI is gone, it is reaped elsewhere,
-        /// a moment later.
+        /// a moment later. Waits up to `HeldFake.stopBound` for that; the child holds
+        /// until the test is over, so only a stop ends it before then.
         private func assertReaped(_ pidFile: URL, file: StaticString = #filePath, line: UInt = #line) async throws {
             let pid = try XCTUnwrap(readPID(pidFile), "the child never started", file: file, line: line)
-            let reapedBy = Date().addingTimeInterval(1)
+            let reapedBy = Date().addingTimeInterval(HeldFake.stopBound)
             while kill(pid, 0) == 0, Date() < reapedBy {
                 try await Task.sleep(for: .milliseconds(20))
             }
