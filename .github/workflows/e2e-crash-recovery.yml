@@ -66,6 +66,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # See the same step in e2e-app.yml: the lane works in ~/Downloads.
+      - name: Preflight TCC grants
+        timeout-minutes: 2
+        run: bash scripts/ci/tcc-preflight.sh --downloads
+
       - uses: ./.github/actions/verify-xcode
 
       - name: Install Developer ID certificate

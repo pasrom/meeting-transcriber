@@ -87,6 +87,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # A pending TCC prompt blocks the call that raised it, so a missing
+      # grant fails here, named, instead of hanging a lane into its timeout.
+      # Which probes fail and which warn: scripts/ci/tcc-preflight.sh.
+      - name: Preflight TCC grants
+        timeout-minutes: 2
+        run: bash scripts/ci/tcc-preflight.sh --downloads --accessibility
+
       - uses: ./.github/actions/verify-xcode
 
       # Import the Developer ID Application cert into a temporary keychain

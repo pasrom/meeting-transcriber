@@ -64,6 +64,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # See the same step in e2e-app.yml: the driver reads ~/Downloads.
+      - name: Preflight TCC grants
+        timeout-minutes: 2
+        run: bash scripts/ci/tcc-preflight.sh --downloads
+
       - uses: ./.github/actions/verify-xcode
 
       # Same Developer ID signing path as e2e-app.yml — e2e-browser.sh shells
