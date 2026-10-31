@@ -125,16 +125,21 @@ host_skip() {
     echo "[$lane]: SKIP — $summary"
     [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
     echo "::warning title=$lane lane skipped::$summary"
-    # Guarded: GITHUB_ACTIONS alone (exported by hand, or under act) does not
-    # promise these, and `set -u` would turn the skip into a failure.
-    # A write that fails must not turn the skip into a failure either; a lost
-    # entry in the skip list is reported, since the gate reads nothing else.
-    [ -z "${GITHUB_STEP_SUMMARY:-}" ] \
-        || printf '### %s lane skipped\n\n%s\n' "$lane" "$summary" 2>/dev/null >>"$GITHUB_STEP_SUMMARY" || true
+    # A lost entry in the skip list is reported, since the gate reads nothing
+    # else; a lost summary line is not.
+    step_summary "$(printf '### %s lane skipped\n\n%s' "$lane" "$summary")"
     if [ -n "${RUNNER_TEMP:-}" ] && ! echo "$lane" 2>/dev/null >>"$RUNNER_TEMP/e2e-host-skips"; then
         echo "::error title=$lane skip not recorded::could not write $RUNNER_TEMP/e2e-host-skips, so the scheduled-run gate will not see this skip"
     fi
     return 0
+}
+
+# step_summary <markdown> — append a paragraph to the job's step summary.
+# Guarded: GITHUB_ACTIONS alone (exported by hand, or under act) does not
+# promise $GITHUB_STEP_SUMMARY, and `set -u` would turn a report into a
+# failure; a write that fails must not change any outcome either.
+step_summary() {
+    [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s\n\n' "$1" 2>/dev/null >>"$GITHUB_STEP_SUMMARY" || true
 }
 
 # fail_on_host_skips — the body of e2e-app.yml's last step on scheduled and
@@ -1058,4 +1063,175 @@ remove_state_backup() {
         rm -f "$backup/$name"
     done
     rmdir "$backup" 2>/dev/null || { echo "backup $backup holds files it did not write; left in place"; return 1; }
+}
+
+# --- calls that a TCC consent prompt can block --------------------------------
+#
+# While macOS shows a consent prompt for a protected resource (Files & Folders,
+# Automation, ...), the call that raised it does not fail: it BLOCKS until
+# someone answers, and on the unattended runner nobody does. The grants key on
+# the binary path of the job's responsible process, the runner service's node,
+# and a runner update can move that node (externals/node20 -> node24), which
+# drops every grant at once. Full story: the e2e-architecture skill, runner
+# setup step 6.
+
+# run_bounded <seconds> <cmd> [args...] — run a command with a hard wall-clock
+# bound. Its stdout and stderr are replayed to ours once it ends. Status: the
+# command's own, or 124 when it was still running at the bound; it is then
+# SIGKILLed with its descendants and abandoned, never waited for. <seconds>
+# may carry one decimal (0.5).
+#
+# Nothing simpler survives the case it exists for: macOS ships no `timeout`, a
+# `perl -e alarm` wrapper leaves the caller waiting on a process the signal
+# does not stop, and a `$(...)` around a background child waits for EOF on a
+# pipe the abandoned child keeps open. So the command writes to files and the
+# caller polls a status file its subshell writes last.
+run_bounded() {
+    local limit="$1" dir pid status whole frac limit_cs waited=0 step=5 started="$SECONDS"
+    shift
+    whole="${limit%%.*}"
+    frac="${limit#"$whole"}"
+    frac="${frac#.}"
+    limit_cs=$(( 10#${whole:-0} * 100 + 10#${frac:0:1}0 ))
+    [ "$limit_cs" -gt 0 ] || limit_cs=5
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/run-bounded.XXXXXX")" || return 125
+    # `set +e`: the subshell inherits errexit, and a failing command must
+    # still reach the line that records its status.
+    ( set +e; "$@"; echo "$?" >"$dir/status" ) >"$dir/out" 2>"$dir/err" </dev/null &
+    pid=$!
+    # Probe before sleeping: 0.05 s steps for the first second, so a quick
+    # command costs almost nothing, then 0.5 s, so a long bound is not
+    # hundreds of forks. Slept time is counted, and the wall clock caps it
+    # too (rounded up, plus one: SECONDS counts whole seconds and can tick
+    # over at once), so a loaded host cannot stretch the bound by much.
+    while [ ! -s "$dir/status" ] && [ "$waited" -lt "$limit_cs" ] \
+        && [ $(( SECONDS - started )) -le $(( (limit_cs + 99) / 100 + 1 )) ]; do
+        [ "$waited" -lt 100 ] || step=50
+        [ "$step" -le $(( limit_cs - waited )) ] || step=$(( limit_cs - waited ))
+        sleep "$(printf '%d.%02d' $(( step / 100 )) $(( step % 100 )))"
+        waited=$(( waited + step ))
+    done
+    if [ -s "$dir/status" ]; then
+        wait "$pid" 2>/dev/null || true
+        status="$(cat "$dir/status")"
+    else
+        local -a victims=()
+        _read_pids victims < <(_descendant_pids "$pid")
+        kill -KILL ${victims[@]+"${victims[@]}"} "$pid" 2>/dev/null || true
+        # Out of the job table, so the shell neither waits for it nor writes a
+        # "Killed: 9" notice into the log when it goes.
+        disown "$pid" 2>/dev/null || true
+        status=124
+    fi
+    cat "$dir/out"
+    cat "$dir/err" >&2
+    rm -rf "$dir"
+    return "$status"
+}
+
+# _read_pids <array-name> — append the pids on stdin, one per line, to the
+# named array. An array rather than a space-joined string, so no caller's IFS
+# can turn the kill into a no-op (see _no_pid_alive).
+_read_pids() {
+    local _pid
+    while IFS= read -r _pid; do
+        [ -n "$_pid" ] && eval "$1+=(\"\$_pid\")"
+    done
+    return 0
+}
+
+# _descendant_pids <pid> — every descendant of pid, one per line, deepest
+# first, found by parent pid only. Nothing here is matched by name.
+_descendant_pids() {
+    local child children
+    children="$(pgrep -P "$1" 2>/dev/null || true)"
+    # Read line by line rather than split, so a caller's IFS cannot matter.
+    while IFS= read -r child; do
+        [ -n "$child" ] || continue
+        _descendant_pids "$child"
+        echo "$child"
+    done <<<"$children"
+}
+
+# e2e_tcc_prompt_timeout — E2E_TCC_PROMPT_TIMEOUT (default 10) as a positive
+# whole number of seconds, base 10 so a leading zero is not octal. Status 1,
+# with the reason on stderr, for anything else. The bound for every TCC probe:
+# short in CI so a missing grant is reported in seconds, long (300) for a
+# one-time grant session at the runner's screen.
+e2e_tcc_prompt_timeout() {
+    local raw="${E2E_TCC_PROMPT_TIMEOUT:-10}"
+    case "$raw" in
+        ''|*[!0-9]*) ;;
+        *) if [ $(( 10#$raw )) -gt 0 ]; then echo $(( 10#$raw )); return 0; fi ;;
+    esac
+    echo "E2E_TCC_PROMPT_TIMEOUT must be a positive whole number of seconds, got '$raw'" >&2
+    return 1
+}
+
+# tcc_probe_verdict <status> <output> — what a probe of a TCC-guarded resource
+# answered: `granted` (status 0); `blocked` (status 124 from run_bounded, or
+# AppleScript's own timeout -1712: no answer, which on the runner means a
+# consent prompt is waiting on the screen); `denied` (the system's refusal:
+# Files & Folders' "Operation not permitted", Automation's -1743,
+# Accessibility's -1719 / "assistive access"); or `error` for anything else,
+# which is not a grant answer and must not be read as one.
+tcc_probe_verdict() {
+    local status="$1" output="$2"
+    case "$status" in
+        0) echo granted; return 0 ;;
+        124) echo blocked; return 0 ;;
+    esac
+    case "$output" in
+        *"-1712"*|*"timed out"*) echo blocked ;;
+        *"Operation not permitted"*|*"-1743"*|*"not authori"*|*"-1719"*|*"assistive access"*|*"not allowed"*)
+            echo denied ;;
+        *) echo error ;;
+    esac
+}
+
+# _tcc_grantee_from_ps <pid> — read a `ps -axo pid=,ppid=,comm=` table on stdin
+# and print "<pid> <comm>" of the process TCC most likely attributes <pid>'s
+# accesses to: the topmost GitHub runner node (`.../externals/node*/bin/node`)
+# among its ancestors, else the topmost ancestor below launchd (Terminal, sshd,
+# ...). `comm` may be relative (runsvc.sh starts node as ./externals/...), so
+# the caller resolves the path. Status 1 when <pid> is not in the table.
+_tcc_grantee_from_ps() {
+    awk -v start="$1" '
+        { pid = $1; ppid = $2; sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+/, ""); parent[pid] = ppid; comm[pid] = $0 }
+        END {
+            if (!(start in parent)) exit 1
+            p = start; top = ""; node = ""
+            for (n = 0; (p in parent) && p > 1 && n < 200; n++) {
+                top = p
+                if (comm[p] ~ /(^|\/)externals\/node[^\/]*\/bin\/node$/) node = p
+                p = parent[p]
+            }
+            pick = (node != "" ? node : top)
+            print pick, comm[pick]
+        }'
+}
+
+# tcc_grantee [pid] — the absolute path of the binary to allow in System
+# Settings for this job (see _tcc_grantee_from_ps), resolved from the running
+# process, never assumed: a runner update moves it. Falls back to a
+# description when nothing can be resolved.
+tcc_grantee() {
+    local line pid comm path
+    if line="$(ps -axo pid=,ppid=,comm= | _tcc_grantee_from_ps "${1:-$$}")" && [ -n "$line" ]; then
+        pid="${line%% *}"
+        comm="${line#* }"
+        # lsof's first `txt` entry is the executable itself, absolute even when
+        # the process was started through a relative path.
+        path="$(lsof -a -p "$pid" -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+        echo "${path:-$comm}"
+        return 0
+    fi
+    echo "the binary that started this job (for the CI runner: <runner dir>/externals/node<N>/bin/node, whichever node runsvc.sh starts)"
+}
+
+# tcc_fix_hint <pane> [grantee] — the one-sentence fix every TCC message ends
+# with: where to allow which binary, and where the background is.
+tcc_fix_hint() {
+    printf 'System Settings → Privacy & Security → %s: allow %s (answer the prompt on the runner'"'"'s screen if one is open), then re-run; see the e2e-architecture skill, runner setup step 6.' \
+        "$1" "${2:-$(tcc_grantee)}"
 }
