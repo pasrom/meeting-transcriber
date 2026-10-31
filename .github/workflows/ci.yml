@@ -275,6 +275,8 @@ jobs:
         with:
           cache-key-suffix: ${{ matrix.variant }}
           swift-flags: ${{ matrix.swift-flags }}
+      # The ffmpeg-tier tests fail on a runner without ffmpeg (see the action).
+      - uses: ./.github/actions/setup-ffmpeg
       # Without this the echo-cancellation tests skip, which is how this
       # feature reached a review with single-digit patch coverage on the two
       # files that do the work. The gap is worse than the number: the library

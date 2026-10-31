@@ -1,0 +1,82 @@
+name: "Provide ffmpeg"
+description: >
+  Installs a pinned, checksum-verified static ffmpeg (arm64) into the runner's
+  tool cache and exports it as FFMPEG_BINARY, the first place FFmpegHelper
+  looks. Every job that runs the ffmpeg-tier tests runs this first; on a
+  GitHub runner those tests fail without ffmpeg rather than skip
+  (`ffmpegAvailableForTests` in the test helpers).
+
+runs:
+  using: "composite"
+  steps:
+    # The pins live here, not in inputs: no caller may swap the binary. The
+    # binary's hash also names its folder and cache key, so a new pin can
+    # never reuse an old copy. The build is arm64 macOS only, so any other
+    # runner fails here with a clear message rather than "Bad CPU type".
+    - name: Check the runner and resolve the ffmpeg folder
+      id: pin
+      shell: bash
+      env:
+        TOOL_CACHE: ${{ runner.tool_cache }}
+        BINARY_SHA256: 6d175a4743ca50256e89a8cdd731100f9cee33bd79aeea46894d209410dc6617
+      run: |
+        if [ "$RUNNER_OS" != macOS ] || [ "$RUNNER_ARCH" != ARM64 ]; then
+          echo "::error::setup-ffmpeg installs an arm64 macOS build; this runner is $RUNNER_OS $RUNNER_ARCH"
+          exit 1
+        fi
+        echo "sha256=$BINARY_SHA256" >> "$GITHUB_OUTPUT"
+        echo "dir=$TOOL_CACHE/meetingtranscriber-ffmpeg/$BINARY_SHA256" >> "$GITHUB_OUTPUT"
+
+    # Hosted only: a self-hosted runner keeps its tool cache on disk, where a
+    # restore would only download what is already there.
+    - name: Cache ffmpeg
+      if: runner.environment == 'github-hosted'
+      uses: actions/cache@v5
+      with:
+        path: ${{ steps.pin.outputs.dir }}
+        key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.sha256 }}
+
+    # Why this source: PyPI files are immutable once uploaded, and this build
+    # links only system frameworks yet carries every demuxer and decoder the
+    # fixtures need (Matroska/WebM, Ogg, AAC, Opus, Vorbis). Not `brew install
+    # ffmpeg`: dozens of dependencies on every hosted run, and a moving version
+    # under the tests. The cached copy is re-hashed on every run because the
+    # self-hosted tool cache is a shared, persistent disk; the hash after
+    # extraction checks the binary pin itself, which would otherwise force a
+    # silent re-download on every run if it were wrong.
+    - name: Install and export ffmpeg
+      shell: bash
+      env:
+        DIR: ${{ steps.pin.outputs.dir }}
+        BINARY_SHA256: ${{ steps.pin.outputs.sha256 }}
+        WHEEL_URL: https://files.pythonhosted.org/packages/40/5c/f3d8a657d362cc93b81aab8feda487317da5b5d31c0e1fdfd5e986e55d17/imageio_ffmpeg-0.6.0-py3-none-macosx_11_0_arm64.whl
+        WHEEL_SHA256: b1ae3173414b5fc5f538a726c4e48ea97edc0d2cdc11f103afee655c463fa742
+        WHEEL_MEMBER: imageio_ffmpeg/binaries/ffmpeg-macos-aarch64-v7.1
+      run: |
+        set -euo pipefail
+        bin="$DIR/ffmpeg"
+        sha_of() { shasum -a 256 "$1" | cut -d' ' -f1; }
+        if [ -x "$bin" ] && [ "$(sha_of "$bin")" = "$BINARY_SHA256" ]; then
+          echo "Using the cached ffmpeg"
+        else
+          wheel="$RUNNER_TEMP/ffmpeg.whl"
+          curl -fsSL --retry 3 --max-time 300 -o "$wheel" "$WHEEL_URL"
+          if [ "$(sha_of "$wheel")" != "$WHEEL_SHA256" ]; then
+            echo "::error::The ffmpeg wheel does not match its pinned SHA-256"
+            exit 1
+          fi
+          mkdir -p "$DIR"
+          # Written under a temporary name and renamed, so a concurrent job
+          # on the same tool cache never runs half a file.
+          tmp="$DIR/ffmpeg.tmp.$$"
+          unzip -p "$wheel" "$WHEEL_MEMBER" > "$tmp"
+          if [ "$(sha_of "$tmp")" != "$BINARY_SHA256" ]; then
+            rm -f "$tmp"
+            echo "::error::The ffmpeg binary in the wheel does not match its pinned SHA-256"
+            exit 1
+          fi
+          chmod 755 "$tmp"
+          mv -f "$tmp" "$bin"
+        fi
+        "$bin" -hide_banner -version | sed -n 1p
+        echo "FFMPEG_BINARY=$bin" >> "$GITHUB_ENV"
