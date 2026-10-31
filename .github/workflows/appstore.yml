@@ -78,6 +78,15 @@ jobs:
         with:
           developer-dir: ${{ env.DEVELOPER_DIR }}
 
+      # The same App Store build as release.yml's `build (appstore)` leg, so
+      # it shares that leg's cache (see the comment there).
+      - uses: ./.github/actions/setup-swift-test
+        with:
+          cache-key-suffix: release-appstore
+          cache-path: app/MeetingTranscriber/.build-appstore
+          cache-restore-fallback: "false"
+          cache-models: "false"
+
       # `--no-notarize` keeps the signing path on the ad-hoc fallback so we
       # don't need a Developer ID secret for a smoke run. `build_release.sh`
       # detects an empty DEVELOPER_ID and falls back automatically.

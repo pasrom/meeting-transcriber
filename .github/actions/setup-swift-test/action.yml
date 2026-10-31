@@ -10,9 +10,28 @@ inputs:
   cache-key-suffix:
     description: >
       Distinguishes parallel SPM caches by compile-flag set. Pick a stable
-      string like `homebrew`, `appstore`, `tsan`, `asan`, or `quality`.
-      Different suffixes get independent caches; same suffix can share.
+      string like `homebrew`, `appstore`, `tsan`, `asan`, `quality`, or
+      `release-homebrew`. Different suffixes get independent caches; same
+      suffix can share. A release build and a test build must not share one:
+      they fill `.build` with different products, and whichever job saved
+      first would decide what the other restores.
     required: true
+  cache-restore-fallback:
+    description: >
+      Fall back to the newest cache of the same suffix when the exact key
+      (suffix + `Package.resolved` hash) misses. Anything but `true` restores
+      the exact dependency set or nothing, never objects built against older
+      ones.
+    required: false
+    default: "true"
+  cache-path:
+    description: >
+      The SwiftPM scratch directory to cache. build_release.sh builds the App
+      Store variant in `app/MeetingTranscriber/.build-appstore`, so that leg
+      passes that directory. The path is part of the cache version, so
+      changing it for one caller leaves the other callers' caches alone.
+    required: false
+    default: app/MeetingTranscriber/.build
   swift-flags:
     description: >
       Extra arguments forwarded to the pre-warm `swift test` invocation
@@ -35,12 +54,24 @@ runs:
     # Caller is responsible for `actions/checkout` before invoking this
     # action — GitHub loads `./.github/actions/...` from the workspace, so
     # the repo must already be present.
+    #
+    # The key carries the Xcode path the build runs under. A tree built by
+    # another compiler is discarded by SwiftPM, and an exact hit is never saved
+    # again, so without it a toolchain bump would leave every run restoring a
+    # tree it cannot use until `Package.resolved` changes. The path is read in
+    # a shell step, which inherits the caller's DEVELOPER_DIR for certain; the
+    # docs do not say whether the `env` context of a composite action does.
+    - name: Resolve the toolchain for the cache key
+      id: toolchain
+      shell: bash
+      run: echo "dir=${DEVELOPER_DIR:-$(xcode-select -p)}" >> "$GITHUB_OUTPUT"
+
     - name: Cache SPM dependencies
       uses: actions/cache@v5
       with:
-        path: app/MeetingTranscriber/.build
-        key: spm-${{ runner.os }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
-        restore-keys: spm-${{ runner.os }}-${{ inputs.cache-key-suffix }}-
+        path: ${{ inputs.cache-path }}
+        key: spm-${{ runner.os }}-${{ steps.toolchain.outputs.dir }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
+        restore-keys: ${{ inputs.cache-restore-fallback == 'true' && format('spm-{0}-{1}-{2}-', runner.os, steps.toolchain.outputs.dir, inputs.cache-key-suffix) || '' }}
 
     # Cache the WhisperKit (HuggingFace) + FluidAudio model files. The
     # HuggingFace download client races on cold-cache concurrent loads of
