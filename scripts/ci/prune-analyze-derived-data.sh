@@ -5,11 +5,11 @@
 #
 #   prune-analyze-derived-data.sh <derived-data-dir>
 #
-# With its own outputs gone, xcodebuild has to compile AudioTapLib, the app and
-# the tests from scratch, so the log `swiftlint analyze` reads is complete (the
-# reason is in scripts/ci/check-compiler-log-coverage.sh, which verifies the
-# result on every run rather than trusting this list). The job runs this before
-# the build whatever was restored, and again before saving the cache.
+# With its own outputs gone from the saved entry, xcodebuild has to compile
+# AudioTapLib, the app and the tests from scratch, so the log `swiftlint analyze`
+# reads is complete (the reason is in scripts/ci/check-compiler-log-coverage.sh,
+# which verifies the result on every run rather than trusting this list). The
+# job runs this once, before the cache is saved.
 #
 # rm -rf ignores a path that does not exist or a glob that matches nothing, so a
 # cold cache needs no special case.
