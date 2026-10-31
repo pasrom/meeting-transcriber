@@ -74,15 +74,19 @@ final class ManualClock: Clock, Sendable {
     }
 
     /// Moves the clock forward and ends every sleep whose deadline it
-    /// reaches. Waits first, for up to five seconds, for something to be
+    /// reaches. Waits first, up to `regressionCeiling`, for something to be
     /// sleeping on the clock: the limit a test means to let pass is set
     /// only once its process has been started, so it can still be on its
-    /// way when the test has seen the process run.
-    func advance(by duration: Duration) async {
-        let sleptBy = ContinuousClock.now + .seconds(5)
+    /// way when the test has seen the process run. Moved before then, the
+    /// code would set its deadline from the moved clock and never reach it.
+    /// Returns whether something was asleep; it moves the clock either way.
+    @discardableResult
+    func advance(by duration: Duration) async -> Bool {
+        let sleptBy = ContinuousClock.now + regressionCeiling
         while state.withLock({ $0.sleepers.isEmpty }), ContinuousClock.now < sleptBy {
             try? await Task.sleep(for: .milliseconds(10))
         }
+        let slept = state.withLock { !$0.sleepers.isEmpty }
         let due = state.withLock { current in
             current.now = current.now.advanced(by: duration)
             let pending = current.sleepers.partition { $0.deadline <= current.now }
@@ -92,5 +96,6 @@ final class ManualClock: Clock, Sendable {
         for sleeper in due {
             sleeper.continuation.resume()
         }
+        return slept
     }
 }
