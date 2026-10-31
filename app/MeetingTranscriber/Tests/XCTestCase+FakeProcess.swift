@@ -1,4 +1,5 @@
 import Foundation
+import os
 import XCTest
 
 // Helpers for tests that run fake `/bin/sh` executables in place of a real
@@ -40,8 +41,11 @@ func assertProcessGone(pidFile: URL, file: StaticString = #filePath, line: UInt 
 /// `kill(pid, 0)`: that also answers for a process just exited and not yet
 /// reaped, at exactly that moment.
 ///
-/// As it starts it writes its pid to `pidFile` and then `started`, so
-/// either one there means everything a fake set up before it is done.
+/// As it starts it writes its pid to `pidFile` and then `started`. Only
+/// `started` means everything a fake set up before it is done and that it
+/// has marked itself started, so a stop from then on cannot end it
+/// unmarked: tests wait for it (`waitForStart(of:)`, or
+/// `shellWaitForStart` in a fake), never for the pid alone.
 struct HeldFake {
     /// How long it runs before it gives up, on the wall clock: far past any
     /// correct run, so only broken code under test ever waits that long.
@@ -70,7 +74,7 @@ struct HeldFake {
     /// anything; it would then pass the test without testing it. A fake that
     /// waited in vain leaves `startFailed` and goes on, for
     /// `assertNotRunOut` to report.
-    var waitForStart: String {
+    var shellWaitForStart: String {
         let polls = Int(Self.stopBound / Self.startPoll)
         return """
         n=0
@@ -82,7 +86,7 @@ struct HeldFake {
     /// Shell lines that start it in the background, holding the pipes the
     /// fake has, and wait until it has started.
     var inBackground: String {
-        "'\(path)' &\n\(waitForStart)"
+        "'\(path)' &\n\(shellWaitForStart)"
     }
 
     /// It started in time and had not given up when this is called.
@@ -108,12 +112,21 @@ struct HeldFake {
     }
 }
 
-/// `waitForPID` ran out.
-struct PIDNotWritten: Error, CustomStringConvertible {
-    let pidFile: URL
+/// A held fake did not start: `waitForStart` ran out, or what was to start
+/// it ended first.
+struct HeldFakeNotStarted: Error, CustomStringConvertible {
+    let started: URL
+    /// The run that was to start it ended by itself first.
+    var runEndedFirst = false
+    /// How that run ended, when it is known.
+    var run: String?
 
     var description: String {
-        "no pid in \(pidFile.lastPathComponent) after \(Int(HeldFake.noLimit)) s: the fake never got that far"
+        let what = runEndedFirst
+            ? "the run ended before \(started.lastPathComponent) existed, so it failed first or its limit "
+            + "was not measured on the given clock"
+            : "no \(started.lastPathComponent) after \(Int(HeldFake.noLimit)) s: the fake never got that far"
+        return run.map { "\(what); the run ended with \($0)" } ?? what
     }
 }
 
@@ -150,19 +163,69 @@ extension XCTestCase {
         return path
     }
 
-    /// Waits for a fake to have written its pid to `pidFile`, which it does
-    /// once it has got as far as the test needs it to be before acting on
-    /// it. The pid itself, not the file: the shell creates the file before
-    /// it writes, and a fake stopped in between leaves one that is empty.
-    /// The bound is generous, `HeldFake.noLimit`, because a fake may have
-    /// work to do first on a loaded runner; running out throws, so a test
-    /// never acts on a fake that is not there yet. For suites off the main
-    /// actor, where `waitFor` is not callable.
-    func waitForPID(pidFile: URL) async throws {
-        let writtenBy = Date().addingTimeInterval(HeldFake.noLimit)
-        while readPID(pidFile) == nil {
-            guard Date() < writtenBy else { throw PIDNotWritten(pidFile: pidFile) }
+    /// Waits for `held` to have started, so a test acts on it only once it
+    /// has got as far as the test needs: everything a fake set up before it
+    /// is done. Its `started` file, not its pid, which it writes just before:
+    /// stopped in between, it would die without `started`, and
+    /// `assertStopped` would fail a correct run. The bound is generous,
+    /// `HeldFake.noLimit`, because a fake may have work to do first on a
+    /// loaded runner; running out throws, so a test never acts on a fake
+    /// that is not there yet. For suites off the main actor, where `waitFor`
+    /// is not callable. Also throws, marked `runEndedFirst`, once
+    /// `runEnded` is true while it has not started: what was to start it
+    /// has ended.
+    func waitForStart(of held: HeldFake, orUntil runEnded: () -> Bool = { false }) async throws {
+        let startedBy = Date().addingTimeInterval(HeldFake.noLimit)
+        while !FileManager.default.fileExists(atPath: held.started.path) {
+            if runEnded() { throw HeldFakeNotStarted(started: held.started, runEndedFirst: true) }
+            guard Date() < startedBy else { throw HeldFakeNotStarted(started: held.started) }
             try await Task.sleep(for: .milliseconds(20))
         }
+    }
+
+    /// How `run` ended when the limit it measures on the clock it is handed
+    /// passes once `held` has started, after everything the fake set up
+    /// first: in real time the limit could pass first on a loaded machine,
+    /// and the stop would then end a fake before it had set its trap or done
+    /// what the test is about. `run` gets the clock and the limit to measure
+    /// on it; the size of the limit does not matter. Checks that the limit
+    /// was measured on that clock and that `held` was stopped
+    /// (`HeldFake.assertStopped`, with `message`, from when the limit
+    /// passed). Throws `HeldFakeNotStarted`, saying how `run` ended, when
+    /// `run` ends before the limit could pass (it failed, or its limit did
+    /// not wait for the clock), or when `held` never starts, once `run` has
+    /// then been cancelled and has ended.
+    func passLimit<T: Sendable>(
+        of held: HeldFake, _ message: String, file: StaticString = #filePath, line: UInt = #line,
+        _ run: @escaping @Sendable (_ clock: ManualClock, _ timeout: TimeInterval) async throws -> T,
+    ) async throws -> Result<T, any Error> {
+        let timeout: TimeInterval = 1
+        let clock = ManualClock()
+        let ended = OSAllocatedUnfairLock(initialState: false)
+        let task = Task {
+            defer { ended.withLock { $0 = true } }
+            return try await run(clock, timeout)
+        }
+        do {
+            try await waitForStart(of: held) { ended.withLock { $0 } }
+        } catch var error as HeldFakeNotStarted {
+            task.cancel()
+            let result = await task.result
+            error.run = "\(result)"
+            throw error
+        }
+        // Checked again here, not only while waiting: a run that ended just
+        // as the fake marked itself started would leave nothing to sleep on
+        // the clock, and `advance` would report that instead of the cause.
+        if ended.withLock({ $0 }) {
+            let result = await task.result
+            throw HeldFakeNotStarted(started: held.started, runEndedFirst: true, run: "\(result)")
+        }
+        let slept = await clock.advance(by: .seconds(timeout))
+        let start = Date()
+        let result = await task.result
+        XCTAssertTrue(slept, "the limit was not measured on the given clock", file: file, line: line)
+        held.assertStopped(since: start, message, file: file, line: line)
+        return result
     }
 }
