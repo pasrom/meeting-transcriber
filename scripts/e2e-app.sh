@@ -3330,11 +3330,7 @@ _echo_fixture_setup() {
 _echo_enqueue() {
     local label="$1" dir="$2" stem="$3"
     local enq ids
-    enq="$(curl --silent --show-error --max-time 15 -X POST \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        --header "Content-Type: application/json" \
-        --data "$(jq -nc --arg a "$dir/${stem}_app.wav" --arg m "$dir/${stem}_mic.wav" '{paths: [$a, $m]}')" \
-        "$RPC_BASE/v1/jobs" 2>/dev/null || echo '{}')"
+    enq="$(rpc_post /v1/jobs "$(jq -nc --arg a "$dir/${stem}_app.wav" --arg m "$dir/${stem}_mic.wav" '{paths: [$a, $m]}')")"
     ids="$(jq -r '.jobIDs | length' <<<"$enq" 2>/dev/null || echo 0)"
     [ "$ids" = "1" ] \
         || fail "$label: POST /v1/jobs returned $ids job(s) for one _app/_mic pair, expected 1 (response: $enq)"
