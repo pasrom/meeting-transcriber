@@ -113,6 +113,64 @@ _tcc_grantee_from_ps 999 <<<"$terminal_table" >/dev/null \
 
 [ -n "$(tcc_grantee)" ] && ok grantee_resolves_for_this_process || bad grantee_resolves_for_this_process "empty"
 
+# --- quit_running_app: an AppleScript quit the grant blocks is not a quit ------
+
+# A stand-in "app" whose command line carries a unique marker, and a fake
+# osascript first on PATH (its mode in $TMP/osa-mode). Only a refusal (-1743)
+# is the missing Automation grant: an error naming it, status 2, and the
+# stand-in is still ended. No answer (-1712) while the app stays is no verdict
+# on the grant (a pending prompt, a modal run loop, a long teardown): a warning
+# naming the causes, the app ended by signal, status 0, so a lane that calls
+# this bare under `set -e` is not turned red. No answer but the app quits in
+# the wait after it: its own quit, status 0, nothing reported. Another error
+# (-600) is not a grant question either: the short wait, nothing reported
+# (here the app goes within it). Answered:
+# status 0, nothing reported. The app's hold is cut to 1 s for the test.
+mkdir -p "$TMP/bin"
+marker="e2e-quit-probe-$$"
+cat >"$TMP/bin/osascript" <<EOF
+#!/bin/sh
+case "\$(cat "$TMP/osa-mode")" in
+    refuse) echo "execution error: Not authorized to send Apple events to MeetingTranscriber-Dev. (-1743)" >&2; exit 1 ;;
+    timeout) echo "execution error: MeetingTranscriber-Dev got an error: AppleEvent timed out. (-1712)" >&2; exit 1 ;;
+    other) ( sleep 0.5; kill \$(cat "$TMP/quit-app.pid") ) >/dev/null 2>&1 &
+           echo "execution error: MeetingTranscriber-Dev got an error: Application isn't running. (-600)" >&2; exit 1 ;;
+    late) ( sleep 0.5; kill \$(cat "$TMP/quit-app.pid") ) >/dev/null 2>&1 &
+          echo "execution error: MeetingTranscriber-Dev got an error: AppleEvent timed out. (-1712)" >&2; exit 1 ;;
+    *) kill \$(cat "$TMP/quit-app.pid") 2>/dev/null ;;
+esac
+EOF
+chmod +x "$TMP/bin/osascript"
+start_quit_app() {
+    ( exec -a "$marker" sleep 300 ) &
+    echo $! >"$TMP/quit-app.pid"
+    disown "$(cat "$TMP/quit-app.pid")"
+    PIDS="$PIDS $(cat "$TMP/quit-app.pid")"
+}
+
+expect_quit() {
+    local name="$1" mode="$2" want="$3" annotation="$4" status=0 out
+    echo "$mode" >"$TMP/osa-mode"
+    start_quit_app
+    out="$(PATH="$TMP/bin:$PATH" E2E_APP_QUIT_HOLD_S=1 quit_running_app some.bundle "$marker" 2>&1)" || status=$?
+    if [ "$status" -eq "$want" ] && _no_pid_alive "$(cat "$TMP/quit-app.pid")" \
+        && case "$annotation" in
+               error) grep -q '^::error title=TCC Automation → MeetingTranscriber-Dev not usable::' <<<"$out" ;;
+               warning) grep -q '^::warning title=dev app did not quit::.*Possible causes: a pending Automation → MeetingTranscriber-Dev prompt' <<<"$out" \
+                   && ! grep -q '^::error' <<<"$out" ;;
+               *) [ -z "$out" ] ;;
+           esac; then
+        ok "$name"
+    else
+        bad "$name" "status $status: $out"
+    fi
+}
+expect_quit quit_reports_a_refused_apple_event_as_the_grant refuse 2 error
+expect_quit quit_warns_on_an_unanswered_quit_that_never_lands timeout 0 warning
+expect_quit quit_accepts_an_unanswered_quit_that_lands_late late 0 none
+expect_quit quit_treats_another_error_as_no_grant_question other 0 none
+expect_quit quit_answered_is_a_clean_quit answer 0 none
+
 # --- e2e_tcc_prompt_timeout ---------------------------------------------------------
 
 [ "$(E2E_TCC_PROMPT_TIMEOUT=010 e2e_tcc_prompt_timeout)" = 10 ] && [ "$(E2E_TCC_PROMPT_TIMEOUT='' e2e_tcc_prompt_timeout)" = 10 ] \

@@ -503,7 +503,13 @@ _UG_HOME_STEM=e2e-upgrade-home
 _ug_cleanup() {
     [ -n "${_UG_HOME_PARENT:-}" ] && declare -F e2e_is_lane_home >/dev/null || return 0
     e2e_is_lane_home "$APP_HOME" "$_UG_HOME_STEM" "$_UG_HOME_PARENT" || return 0
-    if [ -n "${_UG_APP_PID:-}" ] && kill -0 "$_UG_APP_PID" 2>/dev/null && ! quit_running_app; then
+    # Status 2 is "gone, ended by signal" (see quit_running_app): the home can
+    # go then, nothing writes there any more.
+    local quit_status=0
+    if [ -n "${_UG_APP_PID:-}" ] && kill -0 "$_UG_APP_PID" 2>/dev/null; then
+        quit_running_app || quit_status=$?
+    fi
+    if [ "$quit_status" -eq 1 ]; then
         printf '[e2e-app] [upgrade] the app could not be stopped; leaving its home %s\n' "$APP_HOME" >&2
         return 0
     fi
@@ -992,7 +998,12 @@ _qf_restore_shared_state() {
     [ "$QUIT_FLUSH" = true ] && [ -n "$_QF_BACKUP_DIR" ] && [ -z "${_QF_RESTORED:-}" ] || return 0
     _QF_RESTORED=1
     [ -n "${_QF_AFPLAY_PID:-}" ] && kill "$_QF_AFPLAY_PID" 2>/dev/null || true
-    quit_running_app || log "[quit-flush] WARNING: the dev app did not stop; restoring anyway"
+    local quit_status=0
+    quit_running_app || quit_status=$?
+    case "$quit_status" in
+        1) log "[quit-flush] WARNING: the dev app did not stop; restoring anyway" ;;
+        2) log "[quit-flush] WARNING: the dev app was ended by signal, without its quit hold (see the Automation error above); restoring anyway" ;;
+    esac
     # A cycle that failed after its recording started may have a job in the
     # shared state that nothing registered yet; the quit above may have just
     # written it. Defined with the lane further down.
@@ -1961,6 +1972,31 @@ _poll_for_new_lastjob_terminal() {
     POLL_LJ_STATE="$lj_state"
 }
 
+# _read_transcript_size <label> <path> — the transcript's size into
+# TRANSCRIPT_SIZE, read under a bound, failing the lane below 101 bytes. The job's preflight step catches a
+# missing Downloads grant up front; this is the backstop for a lane run by
+# hand or a grant lost mid-job, where a bare `wc -c` once blocked behind a
+# consent prompt until the step timeout and outlived it. Called before the
+# first read of the transcript's contents in the transcript, re-import and
+# naming-confirm lanes; other reads of the output folder stay unbounded and
+# rely on the preflight.
+_read_transcript_size() {
+    local label="$1" path="$2" bound="${E2E_READ_BOUND_S:-30}" out status=0
+    out="$(run_bounded "$bound" wc -c "$path" 2>&1)" || status=$?
+    local verdict
+    verdict="$(tcc_probe_verdict "$status" "$out")"
+    # Only the real ~/Downloads is TCC-guarded; the isolated-home lanes keep
+    # their output under $TMPDIR, where a hang has some other cause.
+    case "$path" in "$HOME/Downloads/"*) ;; *) [ "$verdict" = granted ] || verdict=error ;; esac
+    case "$verdict" in
+        granted) TRANSCRIPT_SIZE="$(awk '{ print $1; exit }' <<<"$out")" ;;
+        blocked) fail "$label: reading the transcript $path did not return within ${bound}s: blocked, most likely behind a TCC consent prompt. Fix: $(tcc_fix_hint 'Files & Folders → Downloads')" ;;
+        denied) fail "$label: reading the transcript $path was refused ($out). Fix: $(tcc_fix_hint 'Files & Folders → Downloads')" ;;
+        *) fail "$label: could not read the transcript $path (exit $status, 124 = no answer within ${bound}s): $out" ;;
+    esac
+    [ "$TRANSCRIPT_SIZE" -gt 100 ] || fail "$label: transcript suspiciously short: $TRANSCRIPT_SIZE bytes (expected > 100)"
+}
+
 # Fail the lane unless the transcript reads as German. Guards the
 # live-recording lanes against a transcript that clears the >100-byte size
 # check but is actually garbage — wrong-language hallucination, silent-capture
@@ -1998,11 +2034,9 @@ run_one_meeting() {
     [ -n "$transcript_path" ] || fail "$label: lastJob.transcriptPath is empty"
     [ -f "$transcript_path" ] || fail "$label: transcript file does not exist: $transcript_path"
 
-    local transcript_size
-    transcript_size="$(wc -c <"$transcript_path" | tr -d ' ')"
-    [ "$transcript_size" -gt 100 ] || fail "$label: transcript suspiciously short: $transcript_size bytes (expected > 100)"
+    _read_transcript_size "$label" "$transcript_path"
 
-    log "$label: transcript $transcript_path ($transcript_size bytes)"
+    log "$label: transcript $transcript_path ($TRANSCRIPT_SIZE bytes)"
     log "$label: preview:"
     head -c 500 "$transcript_path" | sed 's/^/    /'
 
@@ -2364,9 +2398,7 @@ run_one_reimport() {
     [ -n "$transcript_path" ] || fail "$label: lastJob.transcriptPath is empty"
     [ -f "$transcript_path" ] || fail "$label: transcript file does not exist: $transcript_path"
 
-    local transcript_size
-    transcript_size="$(wc -c <"$transcript_path" | tr -d ' ')"
-    [ "$transcript_size" -gt 100 ] || fail "$label: transcript suspiciously short: $transcript_size bytes (expected > 100)"
+    _read_transcript_size "$label" "$transcript_path"
 
     # Content assertion: re-imported WAV came from the live recording stack,
     # so a successful round-trip means the engine actually recognised the
@@ -2376,7 +2408,7 @@ run_one_reimport() {
     grep -qi "$expected_phrase" "$transcript_path" \
         || fail "$label: transcript does not contain '$expected_phrase' (case-insensitive). Preview:$(printf '\n')$(head -c 500 "$transcript_path")"
 
-    log "$label: transcript $transcript_path ($transcript_size bytes, contains '$expected_phrase')"
+    log "$label: transcript $transcript_path ($TRANSCRIPT_SIZE bytes, contains '$expected_phrase')"
     log "$label: preview:"
     head -c 500 "$transcript_path" | sed 's/^/    /'
     echo
@@ -2551,19 +2583,16 @@ run_naming_escape() {
     # default 120 s timeout, which reads as a hung lane rather than a missing
     # permission. So the probe wraps the *same* operation the lane performs in a
     # short explicit timeout and treats the timeout as the diagnosis.
-    local probe tcc_timeout="${E2E_TCC_PROMPT_TIMEOUT:-10}"
-    case "$tcc_timeout" in
-        ''|*[!0-9]*) fail "$label: E2E_TCC_PROMPT_TIMEOUT must be a positive whole number of seconds, got '$tcc_timeout'" ;;
-    esac
-    # Base 10 explicitly: a leading zero would otherwise read as octal below.
-    tcc_timeout=$((10#$tcc_timeout))
-    [ "$tcc_timeout" -gt 0 ] \
-        || fail "$label: E2E_TCC_PROMPT_TIMEOUT must be a positive whole number of seconds, got '${E2E_TCC_PROMPT_TIMEOUT}'"
+    local probe tcc_timeout
+    tcc_timeout="$(e2e_tcc_prompt_timeout)" || fail "$label: see the line above"
     # The first Apple Event to System Events, so the one that raises the
     # prompt: it honours the same setup knob as the probe below.
-    probe="$(osascript -e "with timeout of ${tcc_timeout} seconds" \
+    # Under a hard bound as well: a pending prompt can hold osascript before
+    # its Apple Event is sent, where `with timeout` never fires. A cut-off
+    # probe reads as the timeout it stands for.
+    probe="$(run_bounded $((tcc_timeout + 5)) osascript -e "with timeout of ${tcc_timeout} seconds" \
         -e 'tell application "System Events" to key code 53' \
-        -e 'end timeout' 2>&1)" || true
+        -e 'end timeout' 2>&1)" || { [ $? -ne 124 ] || probe="timed out (no answer within $((tcc_timeout + 5))s)"; }
     case "$probe" in
         *"not allowed"*|*"assistive"*|*"1002"*)
             # SKIP for the same reason the Automation arm skips: this is a host
@@ -2573,7 +2602,7 @@ run_naming_escape() {
             # granted, Accessibility not — so both arms need the same treatment
             # or the lane just moves its red one step later.
             log "$label: cause: $probe"
-            host_skip naming-escape "This host may drive System Events but is missing the Accessibility grant, so the real-Escape assertion did not run. Fix: System Settings → Privacy & Security → Accessibility, enable the entry for the process that runs this lane (for CI, the runner's node binary; see the e2e-architecture skill)."
+            host_skip naming-escape "This host may drive System Events but is missing the Accessibility grant, so the real-Escape assertion did not run. Fix: System Settings → Privacy & Security → Accessibility, enable the entry for the process that runs this lane (for this run: $(tcc_grantee); see the e2e-architecture skill, runner setup step 6)."
             return 0 ;;
     esac
     # The probe's window is short by default so a missing grant is reported in
@@ -2590,9 +2619,10 @@ run_naming_escape() {
     local timeout_retried="" transient_retried=""
     for attempt in 1 2 3; do
         probe_status=0
-        probe="$(osascript -e "with timeout of ${tcc_timeout} seconds" \
+        probe="$(run_bounded $((tcc_timeout + 5)) osascript -e "with timeout of ${tcc_timeout} seconds" \
             -e 'tell application "System Events" to get name of first process whose frontmost is true' \
             -e 'end timeout' 2>&1)" || probe_status=$?
+        [ "$probe_status" -ne 124 ] || probe="timed out (no answer within $((tcc_timeout + 5))s)"
         case "$probe" in
             *"timed out"*|*"-1712"*)
                 [ -z "$timeout_retried" ] || break
@@ -2619,7 +2649,7 @@ run_naming_escape() {
             # still fails: only the missing prerequisite is tolerated, and it is
             # reported loudly enough that nobody mistakes it for coverage.
             log "$label: cause: $probe"
-            host_skip naming-escape "This host cannot drive System Events within ${tcc_timeout}s: the Automation grant is missing, so the real-Escape assertion did not run. Fix: System Settings → Privacy & Security → Automation, allow the process that runs this lane to control System Events, and grant it Accessibility for keystrokes (for CI, the runner's node binary; see the e2e-architecture skill, runner setup step 6). Both prompt on first use, so run this lane once by hand in the GUI session and click Allow."
+            host_skip naming-escape "This host cannot drive System Events within ${tcc_timeout}s: the Automation grant is missing, so the real-Escape assertion did not run. Fix: System Settings → Privacy & Security → Automation, allow the process that runs this lane to control System Events, and grant it Accessibility for keystrokes (for this run: $(tcc_grantee); see the e2e-architecture skill, runner setup step 6). Both prompt on first use, so run this lane once by hand in the GUI session and click Allow."
             return 0 ;;
     esac
     [ "$probe_status" -eq 0 ] \
@@ -2657,14 +2687,19 @@ run_naming_escape() {
     # Front the app so the keystroke lands on it, then Escape. No click into the
     # dialog: the point is that dismiss works without a focused field.
     local front_err
-    front_err="$(osascript -e 'with timeout of 15 seconds' \
+    # Both bounded like the probes above: the grants were just proved, but one
+    # lost mid-lane would otherwise hold osascript behind a prompt.
+    local front_s=$(( tcc_timeout > 15 ? tcc_timeout : 15 ))
+    front_err="$(run_bounded $((front_s + 5)) osascript -e "with timeout of ${front_s} seconds" \
         -e 'tell application "System Events" to tell process "MeetingTranscriber" to set frontmost to true' \
         -e 'end timeout' 2>&1)" \
-        || fail "$label: could not front the app: $front_err"
+        || fail "$label: could not front the app (124 = no answer within $((front_s + 5)) s): ${front_err:-<no output>}. If it was refused or timed out: $(tcc_fix_hint 'Automation → System Events')"
     sleep 1
     local key_err
-    key_err="$(osascript -e 'tell application "System Events" to key code 53' 2>&1)" \
-        || fail "$label: could not post Escape: $key_err"
+    key_err="$(run_bounded $((tcc_timeout + 5)) osascript -e "with timeout of ${tcc_timeout} seconds" \
+        -e 'tell application "System Events" to key code 53' \
+        -e 'end timeout' 2>&1)" \
+        || fail "$label: could not post Escape (124 = no answer within $((tcc_timeout + 5)) s): ${key_err:-<no output>}. If it was refused or timed out: $(tcc_fix_hint 'Device Control and Data Access, and Automation → System Events')"
 
     _naming_window_gone() {
         ! _naming_window_visible
@@ -2798,7 +2833,7 @@ run_naming_confirm() {
     # false only AFTER deactivation, which phase 1 (app still active) cannot see.
     # RPC + the naming confirm are localhost HTTP, so leaving our menu-bar app
     # in the background does not block the rest of the lane.
-    osascript -e 'tell application "Finder" to activate' >/dev/null 2>&1 || true
+    run_bounded 5 osascript -e 'tell application "Finder" to activate' >/dev/null 2>&1 || true
     sleep 2
     # Poll rather than single-shot: a transient localhost RPC hiccup at this one
     # instant would otherwise fail the lane with a misleading "regression"
@@ -2859,6 +2894,7 @@ run_naming_confirm() {
     transcript_path="$(jq -r '.transcriptPath // empty' <<<"$final")"
     [ -n "$transcript_path" ] || fail "$label: job has no transcriptPath"
     [ -f "$transcript_path" ] || fail "$label: transcript file missing: $transcript_path"
+    _read_transcript_size "$label" "$transcript_path"
     log "$label: transcript $transcript_path"
     head -c 600 "$transcript_path" | sed 's/^/    /'
     echo
@@ -3012,7 +3048,7 @@ run_naming_switch() {
         *) fail "$label: the Accessibility preflight did not answer (exit $trust_status): $trust" ;;
     esac
     if [ "$trust_status" -eq 3 ]; then
-        host_skip naming-switch "This process may not use Accessibility, so no keystroke can reach the dialog and the typing-after-switch assertion did not run. Fix: System Settings → Privacy & Security → Accessibility; it is the same grant the --naming-escape lane needs (see the e2e-architecture skill for which entry works for CI)."
+        host_skip naming-switch "This process may not use Accessibility, so no keystroke can reach the dialog and the typing-after-switch assertion did not run. Fix: System Settings → Privacy & Security → Accessibility; it is the same grant the --naming-escape lane needs, for this run to $(tcc_grantee) (see the e2e-architecture skill, runner setup step 6)."
         return 0
     fi
 
@@ -3737,7 +3773,12 @@ _ug_assert_restored_job() {
 _ug_relaunch_and_assert() {
     local label="[upgrade:relaunch]" new_repo="$_UG_APP_HF/$UPGRADE_WHISPERKIT_REPO" trigger
     upgrade_tree_fingerprint "$new_repo/$_UG_VARIANT" >"$_UG_LANE_DIR/variant.before-relaunch"
-    quit_running_app || _ug_fail "$label: could not quit the app"
+    local quit_status=0
+    quit_running_app || quit_status=$?
+    case "$quit_status" in
+        1) _ug_fail "$label: could not quit the app" ;;
+        2) _ug_fail "$label: the app had to be ended by signal, without its own quit (see the Automation error above), so the relaunch would not test what a quit leaves" ;;
+    esac
     _ug_launch
     poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || _ug_fail "$label: RPC did not come back after the relaunch"
     _record_launched_app
@@ -4351,7 +4392,11 @@ _qf_app_pid() {
 _qf_app_gone() { [ -z "$(_qf_app_pid)" ]; }
 _qf_streamers_of() { ps -axo pid=,ppid=,command= | streamer_pids "$1"; }
 _qf_has_streamer() { [ -n "$(_qf_streamers_of "$1")" ]; }
-_qf_quit() { osascript -e "tell application id \"$DEV_BUNDLE_ID\" to quit"; }
+# The quits below are timed by the lane (see the double-quit cycle), so they
+# keep their shape and only get a generous cap: a pending Automation prompt
+# would otherwise hold osascript, and the step, open. A capped one reports 124.
+_QF_OSA_BOUND_S=60
+_qf_quit() { run_bounded "$_QF_OSA_BOUND_S" osascript -e "tell application id \"$DEV_BUNDLE_ID\" to quit"; }
 
 # Exactly one persistent-log streamer under the running app; leaves its pid in
 # _QF_STREAMER_PID. Waits for the first, then looks again a moment later: a
@@ -4425,7 +4470,7 @@ _qf_cycle() {
         # 0.3 s apart found the app already gone), so only back-to-back events
         # reach it while it is held. The second reply is the answer AppKit gave
         # that request.
-        osascript -e 'ignoring application responses' \
+        run_bounded "$_QF_OSA_BOUND_S" osascript -e 'ignoring application responses' \
             -e "tell application id \"$DEV_BUNDLE_ID\" to quit" \
             -e 'end ignoring' \
             -e "tell application id \"$DEV_BUNDLE_ID\" to quit" >"$out1" 2>&1 &
@@ -4439,7 +4484,7 @@ _qf_cycle() {
 
     _qf_exited() { ! _pid_is_alive "$app_pid"; }
     poll_until "$_QF_EXIT_DEADLINE_S" 0.2 _qf_exited \
-        || fail "$label: the app (pid $app_pid) did not exit within ${_QF_EXIT_DEADLINE_S}s of the quit. The quit is being held open past every budget, or a second quit cancelled it."
+        || fail "$label: the app (pid $app_pid) did not exit within ${_QF_EXIT_DEADLINE_S}s of the quit. The quit is being held open past every budget, a second quit cancelled it, or the quit never arrived. osascript output so far: '$(tr '\n' ' ' <"$out1")' (empty while it is still waiting: the bound holds the output until it returns). Only -1743 there, or a quit that never shows in the app's log, points at the Automation grant: $(tcc_fix_hint 'Automation → MeetingTranscriber-Dev')"
     t_exit="$(date +%s)"
     log "$label: app exited about $(( t_exit - t0 ))s after the quit"
     # Before any assertion: a failure below must still clean up and restore
