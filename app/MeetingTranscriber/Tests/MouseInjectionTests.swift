@@ -62,17 +62,13 @@
 
         /// Fail closed: with no running application there is nothing to post to, so
         /// the caller is told the click did not happen instead of assuming it did.
+        /// The application is handed in because the global `NSApp`, once another
+        /// test has created it, never goes away again.
         @MainActor
-        func testClickReportsFailureWithoutAnApplication() throws {
-            // Skip rather than fail: `NSApplication.shared` is process-global and
-            // irreversible, so a sibling test that touched it invalidates this
-            // premise for every later test in the same process. CI runs
-            // `swift test --parallel`, which gives each class its own process, so
-            // the assertion below still runs there.
-            try XCTSkipUnless(NSApp == nil, "another test already created the shared NSApplication")
+        func testClickReportsFailureWithoutAnApplication() {
             let window = makeWindow(x: 0, y: 0, width: 100, height: 100)
 
-            XCTAssertFalse(MouseInjection.click(atAXPoint: CGPoint(x: 10, y: 10), in: window))
+            XCTAssertFalse(MouseInjection.click(atAXPoint: CGPoint(x: 10, y: 10), in: window, app: nil))
         }
 
         /// The flip is its own inverse, so a round trip lands back on the original

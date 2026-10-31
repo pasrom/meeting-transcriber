@@ -83,10 +83,14 @@
         }
 
         /// The app's on-screen `NSWindow` carrying the given identifier, or nil when
-        /// no visible one matches (and always in the xctest process, where `NSApp`
-        /// itself is nil). See `visibleWindow` for why visibility decides.
-        static func nsWindow(forIdentifier identifier: String) -> NSWindow? {
-            visibleWindow(identifier: identifier, among: NSApp?.windows ?? [])
+        /// no visible one matches. `windows` defaults to the application's, and is
+        /// empty when there is no application; a test hands in the empty list to
+        /// check that branch in any process, since the global `NSApp` is created
+        /// once and never goes away. See `visibleWindow` for why visibility decides.
+        static func nsWindow(
+            forIdentifier identifier: String, windows: [NSWindow] = NSApp?.windows ?? [],
+        ) -> NSWindow? {
+            visibleWindow(identifier: identifier, among: windows)
         }
 
         /// The on-screen window carrying `identifier`, or nil when every match is

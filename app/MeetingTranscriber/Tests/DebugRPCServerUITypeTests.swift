@@ -314,17 +314,13 @@
 
         /// Fail closed: with no running application there is no window to focus or
         /// post into, so resolution yields nothing rather than a half-usable target.
+        /// The empty window list is what the absence of an application amounts to
+        /// on the window side; it is handed in because the global `NSApp`, once
+        /// another test has created it, never goes away again.
         @MainActor
-        func testTargetResolutionYieldsNothingWithoutAnApplication() throws {
-            // Skip rather than fail: `NSApplication.shared` is process-global and
-            // irreversible, so a sibling test that touched it invalidates this
-            // premise for every later test in the same process. CI runs
-            // `swift test --parallel`, which gives each class its own process, so
-            // the assertions below still run there.
-            try XCTSkipUnless(NSApp == nil, "another test already created the shared NSApplication")
-
-            XCTAssertNil(DebugRPCServer.uiTypeTarget(forWindowIdentifier: "settings"))
-            XCTAssertNil(DebugRPCServer.nsWindow(forIdentifier: "settings"))
+        func testTargetResolutionYieldsNothingWithoutAnApplication() {
+            XCTAssertNil(DebugRPCServer.uiTypeTarget(forWindowIdentifier: "settings", windows: []))
+            XCTAssertNil(DebugRPCServer.nsWindow(forIdentifier: "settings", windows: []))
         }
 
         // MARK: - Payload validation
