@@ -36,7 +36,7 @@ extension SpeakerNamingSession {
     /// private) because `acceptAutoNames` in SpeakerNamingSession.swift starts
     /// it.
     func generateProtocolForExistingJob(
-        jobID: UUID, delegate: any SpeakerNamingSessionDelegate,
+        jobID: UUID, delegate: any SpeakerNamingSessionDelegate, speakerNames: [String],
     ) async {
         // A job that is gone needs no transition. Anything else must reach a
         // terminal state on every exit: `acceptAutoNames` has already deleted
@@ -64,6 +64,7 @@ extension SpeakerNamingSession {
                 // Beside the transcript it is made from, which is the rule the
                 // protocol-only resume uses too.
                 protocolsDir: transcriptPath.deletingLastPathComponent(),
+                speakerNames: speakerNames,
             )
         } catch {
             // Cancelled with its job, which is then gone and needs no
@@ -173,6 +174,7 @@ extension SpeakerNamingSession {
                     // folder is wherever the setting points now, which after a
                     // repoint is not where this `.txt` is.
                     protocolsDir: transcriptPath.deletingLastPathComponent(),
+                    speakerNames: Array(fullMapping.values),
                 )
             } catch is CancellationError {
                 // Cancelled with its job: nothing failed, and there is no job

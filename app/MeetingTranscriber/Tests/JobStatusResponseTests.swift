@@ -36,5 +36,53 @@
             // And a plain JobStatusDTO decode still sees the flattened status fields.
             XCTAssertEqual(try JSONDecoder().decode(JobStatusDTO.self, from: data), dto)
         }
+
+        func testNotionOnlyProtocolIsDiscoverableInJobResponse() throws {
+            var job = PipelineJob(
+                meetingTitle: "Daily Standup", appName: "Test", mixPath: nil,
+                appPath: nil, micPath: nil, micDelay: 0, participants: [],
+            )
+            job.recordNotionPage(
+                NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
+                databaseID: "database-1",
+            )
+            job.finishNotionExport(succeeded: true)
+            let response = JobStatusResponse(JobStatusDTO(job: job), transcript: nil)
+            let data = try JSONEncoder().encode(response)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+            XCTAssertNil(json["protocolPath"])
+            let export = try XCTUnwrap(json["export"] as? [String: Any])
+            XCTAssertEqual(export["destination"] as? String, "notion")
+            XCTAssertEqual(export["status"] as? String, "completed")
+            XCTAssertEqual(export["id"] as? String, "page-1")
+            XCTAssertEqual(export["url"] as? String, "https://www.notion.so/page-1")
+            XCTAssertNil(json["notionPageID"])
+            XCTAssertEqual(try JSONDecoder().decode(JobStatusResponse.self, from: data).status, response.status)
+        }
+
+        func testPartialNotionPageIsHiddenUntilExportCompletes() {
+            var job = PipelineJob(
+                meetingTitle: "Daily Standup", appName: "Test", mixPath: nil,
+                appPath: nil, micPath: nil, micDelay: 0,
+            )
+            job.beginNotionExport(speakerNames: [])
+            job.recordNotionPage(
+                NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
+                databaseID: "database-1",
+            )
+
+            let inProgress = JobStatusDTO(job: job)
+            XCTAssertEqual(inProgress.export?.status, "in_progress")
+            XCTAssertNil(inProgress.export?.url)
+            job.finishNotionExport(succeeded: false)
+            let failed = JobStatusDTO(job: job)
+            XCTAssertEqual(failed.export?.status, "failed")
+            XCTAssertNil(failed.export?.url)
+            job.finishNotionExport(succeeded: true)
+            let completed = JobStatusDTO(job: job)
+            XCTAssertEqual(completed.export?.status, "completed")
+            XCTAssertEqual(completed.export?.url, "https://www.notion.so/page-1")
+        }
     }
 #endif

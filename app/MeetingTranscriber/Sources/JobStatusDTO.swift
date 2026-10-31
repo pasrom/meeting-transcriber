@@ -10,6 +10,9 @@ struct JobStatusDTO: Codable, Equatable {
     let meetingTitle: String
     let transcriptPath: String?
     let protocolPath: String?
+    /// Absent when no export was attempted, including export switched on but
+    /// not configured, which the job's warnings explain.
+    let export: JobExportDTO?
     let error: String?
     let warnings: [String]
     /// Absent when the job was not dual-source, or when no honest verdict was
@@ -28,6 +31,7 @@ struct JobStatusDTO: Codable, Equatable {
         error: String?,
         warnings: [String],
         echo: EchoDetectionDTO? = nil,
+        export: JobExportDTO? = nil,
     ) {
         self.jobID = jobID
         self.state = state
@@ -37,6 +41,38 @@ struct JobStatusDTO: Codable, Equatable {
         self.error = error
         self.warnings = warnings
         self.echo = echo
+        self.export = export
+    }
+}
+
+/// Where a job's protocol was exported. Destination-neutral on the wire so a
+/// second destination is not a breaking change to `/v1`.
+struct JobExportDTO: Codable, Equatable {
+    let destination: String
+    let status: String
+    /// Present as soon as the page exists, so a partial export can be retried.
+    let id: String?
+    /// Present only once the export completed, so nobody opens a partial page.
+    let url: String?
+
+    init(status: String, id: String?, url: String?, destination: String = "notion") {
+        self.destination = destination
+        self.status = status
+        self.id = id
+        self.url = url
+    }
+
+    init?(job: PipelineJob) {
+        guard let status = job.notionExportStatus else { return nil }
+        self.init(
+            status: status.rawValue,
+            id: job.notionPageID,
+            url: job.hasCompletedNotionExport ? job.notionPageURL?.absoluteString : nil,
+        )
+    }
+
+    var isInProgress: Bool {
+        status == NotionExportStatus.inProgress.rawValue
     }
 }
 
@@ -157,6 +193,7 @@ extension JobStatusDTO {
             error: job.error,
             warnings: job.warnings,
             echo: job.echo,
+            export: JobExportDTO(job: job),
         )
     }
 }

@@ -20,13 +20,14 @@ import SwiftUI
 /// For a toggle row, use ``HelpfulToggle``, which wires the badge in safely.
 struct HelpBadge: View {
     let text: String
+    var systemImage: String = "info.circle"
     @State private var showing = false
 
     var body: some View {
         Button {
             showing.toggle()
         } label: {
-            Image(systemName: "info.circle")
+            Image(systemName: systemImage)
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.borderless)

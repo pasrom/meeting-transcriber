@@ -44,6 +44,10 @@ enum A11yID {
         "jobRetryButton.\(index)"
     }
 
+    static func jobNotionRetryButton(_ index: Int) -> String {
+        "jobNotionRetryButton.\(index)"
+    }
+
     /// Menu bar items that answer an open browser consent prompt.
     static let menuRecordPendingConsent = "menuRecordPendingConsent"
     static let menuDeclinePendingConsent = "menuDeclinePendingConsent"
@@ -61,6 +65,21 @@ enum A11yID {
     static let openAITemperatureValue = "openAITemperatureValue"
     static let openAITopPToggle = "openAITopPToggle"
     static let openAITopPValue = "openAITopPValue"
+    static let notionSection = "notionSection"
+    static let notionExportToggle = "notionExportToggle"
+    static let notionConfigurationNotice = "notionConfigurationNotice"
+    static let notionSkipLocalMarkdownToggle = "notionSkipLocalMarkdownToggle"
+    static let notionSpeakerTagsToggle = "notionSpeakerTagsToggle"
+    static let notionConfirmDatabaseButton = "notionConfirmDatabaseButton"
+    static let notionAPIKeyField = "notionAPIKeyField"
+    static let notionDatabasePicker = "notionDatabasePicker"
+    static let notionDatabaseIDField = "notionDatabaseIDField"
+    static let notionTestConnectionButton = "notionTestConnectionButton"
+    static let notionParentPagePicker = "notionParentPagePicker"
+    static let notionParentPageField = "notionParentPageField"
+    static let notionInitDatabaseButton = "notionInitDatabaseButton"
+    static let notionUpgradeSchemaButton = "notionUpgradeSchemaButton"
+    static let notionRefreshButton = "notionRefreshButton"
     static let outputFolderSection = "outputFolderSection"
     static let vadSection = "vadSection"
     static let echoCancellationToggle = "echoCancellationToggle"

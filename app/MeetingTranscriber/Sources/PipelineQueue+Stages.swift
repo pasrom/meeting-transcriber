@@ -270,7 +270,7 @@ extension PipelineQueue {
 
             saveTranscriptDraft(transcription.transcript, ctx: ctx, outputDir: outputDir)
 
-            let finalTranscript = try await stage(ctx.jobID) {
+            let diarization = try await stage(ctx.jobID) {
                 try await diarize(
                     transcription, ctx: ctx, engine: engine,
                     workDir: workDir, outputDir: outputDir,
@@ -279,7 +279,7 @@ extension PipelineQueue {
 
             try await stage(ctx.jobID) {
                 try await generateAndSaveProtocol(
-                    finalTranscript: finalTranscript, transcription: transcription,
+                    diarization: diarization, transcription: transcription,
                     ctx: ctx, workDir: workDir, outputDir: outputDir,
                 )
             }
@@ -572,9 +572,9 @@ extension PipelineQueue {
         }
     }
 
-    /// Stage 2 — optional speaker diarization. Returns the transcript with
-    /// speaker labels applied, or the original transcript unchanged when
-    /// diarization is disabled, unavailable, or fails. Drives the speaker-naming
+    /// Stage 2 — optional speaker diarization. Returns the labeled transcript
+    /// with its structured speaker names, or the original transcript and no names
+    /// when diarization is disabled, unavailable, or fails. Drives the speaker-naming
     /// dialog loop and persists naming data + recognition forensics as side
     /// effects.
     /// Throws only `CancellationError`, and that is the point: every failure
@@ -588,10 +588,10 @@ extension PipelineQueue {
     private func diarize(
         _ transcription: TranscriptionOutput, ctx: JobContext,
         engine: any TranscribingEngine, workDir: URL, outputDir: URL,
-    ) async throws(CancellationError) -> String {
-        var finalTranscript = transcription.transcript
+    ) async throws(CancellationError) -> (transcript: String, speakerNames: [String]) {
+        var output = (transcript: transcription.transcript, speakerNames: [String]())
 
-        guard diarizeEnabled, let diarizationFactory else { return finalTranscript }
+        guard diarizeEnabled, let diarizationFactory else { return output }
         // An engine without per-utterance timestamps (one that emits a single
         // whole-recording segment) can't be diarized — assignSpeakers would
         // collapse the entire meeting onto one speaker. Skip it and tell the
@@ -603,12 +603,12 @@ extension PipelineQueue {
                 id: ctx.jobID,
                 "Speaker diarization needs per-utterance timestamps, which the selected transcription engine doesn't produce — speakers not labeled",
             )
-            return finalTranscript
+            return output
         }
         let diarizeProcess = diarizationFactory()
         guard diarizeProcess.isAvailable else {
             logger.info("[\(ctx.shortID, privacy: .public)] diarization_skipped")
-            return finalTranscript
+            return output
         }
 
         updateJobState(id: ctx.jobID, to: .diarizing)
@@ -644,7 +644,7 @@ extension PipelineQueue {
                 from: run, autoNames: autoNames, transcription: transcription,
                 engine: engine, mix16k: mix16k,
             ) {
-                finalTranscript = labeled
+                output = (transcript: labeled, speakerNames: Array(autoNames.values))
             }
             let segCount = run.combined?.segments.count ?? 0
             logger.info("[\(ctx.shortID, privacy: .public)] diarization_complete segments=\(segCount, privacy: .public)")
@@ -659,7 +659,7 @@ extension PipelineQueue {
             // Continue with original transcript
         }
 
-        return finalTranscript
+        return output
     }
 
     /// Ensure a 16 kHz mix exists for diarization, returning its path. Single
@@ -890,7 +890,7 @@ extension PipelineQueue {
     /// (unless speaker naming is still pending), and transition the job to its
     /// terminal state.
     private func generateAndSaveProtocol(
-        finalTranscript: String, transcription: TranscriptionOutput,
+        diarization: (transcript: String, speakerNames: [String]), transcription: TranscriptionOutput,
         ctx: JobContext, workDir: URL, outputDir: URL,
     ) async throws {
         // --- Save Transcript & Audio ---
@@ -898,7 +898,7 @@ extension PipelineQueue {
         // opted out of a separate raw file: late speaker naming still needs to
         // rewrite it before generating the final protocol.
         let protocolsDir = outputDir.appendingPathComponent("protocols")
-        let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, basename: ctx.slug, dir: protocolsDir)
+        let txtPath = try ProtocolGenerator.saveTranscript(diarization.transcript, basename: ctx.slug, dir: protocolsDir)
         logger.info("[\(ctx.shortID, privacy: .public)] transcript_saved file=\(txtPath.lastPathComponent, privacy: .private)")
 
         if let idx = jobs.firstIndex(where: { $0.id == ctx.jobID }) {
@@ -950,8 +950,8 @@ extension PipelineQueue {
         // have to redo.
         if naming.speakerNamingDataByJob[ctx.jobID] == nil {
             try await generateProtocol(
-                jobID: ctx.jobID, transcript: finalTranscript, title: ctx.title,
-                protocolsDir: protocolsDir,
+                jobID: ctx.jobID, transcript: diarization.transcript, title: ctx.title,
+                protocolsDir: protocolsDir, speakerNames: diarization.speakerNames,
             )
         }
 
@@ -988,6 +988,7 @@ extension PipelineQueue {
     /// generated or saved for it then, and nothing is reported as a failure.
     func generateProtocol(
         jobID: UUID, transcript: String, title: String, protocolsDir: URL,
+        speakerNames: [String] = [],
     ) async throws(CancellationError) {
         // No generator and no LLM call for a job that is already gone.
         try ensureStillQueued(jobID)
@@ -1051,17 +1052,45 @@ extension PipelineQueue {
         let markdown = outputOptions.includeFullTranscriptInProtocol
             ? protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
             : protocolMD
+
+        let resolution = notionExportConfigurationProvider?() ?? .disabled
+        if case .unconfigured = resolution {
+            addWarning(id: jobID, Self.notionExportUnconfiguredWarning)
+        }
+        let configuration = resolution.configuration
+        // Saved first, even for a Notion-only export: the job reaches `.done` and
+        // the queue moves on while the export runs, so this is what a quit or a
+        // failed export falls back on. A successful Notion-only export removes it.
+        let savedLocally = saveProtocolLocally(markdown, basename: basename, jobID: jobID, protocolsDir: protocolsDir)
+        if let configuration {
+            queueNotionExport(
+                PendingNotionExport(
+                    protocolMD: protocolMD,
+                    transcript: outputOptions.includeFullTranscriptInProtocol ? transcript : nil,
+                    speakerNames: speakerNames,
+                    configuration: configuration,
+                    savedLocally: savedLocally,
+                ),
+                jobID: jobID,
+            )
+        }
+    }
+
+    private func saveProtocolLocally(_ markdown: String, basename: String, jobID: UUID, protocolsDir: URL) -> Bool {
+        let shortID = PipelineJob.shortID(for: jobID)
         do {
             let mdPath = try ProtocolGenerator.saveProtocol(markdown, basename: basename, dir: protocolsDir)
             logger.info("[\(shortID, privacy: .public)] protocol_saved file=\(mdPath.lastPathComponent, privacy: .private)")
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
                 jobs[idx].protocolPath = mdPath
             }
+            return true
         } catch {
             // Private, unlike the generation failure above: a file-write
             // CocoaError names the file, and the file name is the meeting title.
             logger.warning("[\(shortID, privacy: .public)] protocol_save_failed error=\(error.localizedDescription, privacy: .private)")
             addWarning(id: jobID, "Protocol was generated but could not be saved; the transcript was saved")
+            return false
         }
     }
 

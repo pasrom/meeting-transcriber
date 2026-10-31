@@ -174,8 +174,7 @@ struct MeetingTranscriberApp: App {
             onStopManualRecording: appState.isManualRecording ? {
                 appState.watching.stopManualRecording()
             } : nil,
-            onOpenLastProtocol: openLastProtocol,
-            onOpenProtocol: { url in NSWorkspace.shared.open(url) },
+            onOpenProtocol: openProtocol,
             onOpenProtocolsFolder: openProtocolsFolder,
             onOpenSettings: {
                 bringWindowToFront(id: "settings")
@@ -188,6 +187,7 @@ struct MeetingTranscriberApp: App {
             onQuit: quit,
             pendingConsentApp: appState.pendingConsentApp,
             onAnswerPendingConsent: appState.answerPendingConsent,
+            notionExportEnabled: appState.settings.notionExportEnabled,
         )
     }
 
@@ -432,13 +432,6 @@ struct MeetingTranscriberApp: App {
         appState.pipeline.enqueueFiles(panel.urls)
     }
 
-    private func openLastProtocol() {
-        if let job = appState.pipeline.queue.completedJobs.last,
-           let path = job.protocolPath ?? job.transcriptPath {
-            NSWorkspace.shared.open(path)
-        }
-    }
-
     private func bringWindowToFront(id: String) {
         openWindow(id: id)
         NSApp.activate(ignoringOtherApps: true)
@@ -468,7 +461,16 @@ struct MeetingTranscriberApp: App {
     /// happen in `AppDelegate`, which every quit path goes through, and this
     /// one alone used to do them.
     private func quit() {
+        logger.info("Menu Quit requested")
         NSApplication.shared.terminate(nil)
+    }
+
+    private func openProtocol(_ target: JobOpenTarget) {
+        logger.info("Menu protocol open requested")
+        Task {
+            let opened = await ProtocolOpener().open(target)
+            logger.info("Menu protocol open accepted: \(opened)")
+        }
     }
 
     // MARK: - Pure Helpers (testable without @main)

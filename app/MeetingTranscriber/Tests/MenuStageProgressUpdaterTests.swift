@@ -106,6 +106,59 @@ final class MenuStageProgressUpdaterTests: XCTestCase {
         XCTAssertFalse(queue.jobs.contains { $0.id == job.id })
     }
 
+    func testOnlyMatchingMenuEndFlushesExpiredCompletedJob() async throws {
+        let dir = try makeTempDirectory(prefix: "menu_progress_expiry_test")
+        let queue = PipelineQueue(logDir: dir, completedJobLifetime: 0.2)
+        var job = PipelineJob(
+            meetingTitle: "Sprint", appName: "Zoom",
+            mixPath: dir.appendingPathComponent("mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.beginNotionExport(speakerNames: [])
+        job.finishNotionExport(succeeded: true)
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        let trackedMenu = NSMenu()
+        let unrelatedMenu = NSMenu()
+        let updater = MenuStageProgressUpdater()
+        updater.observe { queue }
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: trackedMenu)
+
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(queue.completedJobs.map(\.id), [job.id])
+
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: unrelatedMenu)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(queue.completedJobs.map(\.id), [job.id])
+
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: trackedMenu)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(queue.completedJobs.isEmpty)
+    }
+
+    func testExpiredJobWithoutAnExportIsRemovedWhileAMenuIsOpen() async throws {
+        let dir = try makeTempDirectory(prefix: "menu_progress_plain_expiry_test")
+        let queue = PipelineQueue(logDir: dir, completedJobLifetime: 0.2)
+        let job = PipelineJob(
+            meetingTitle: "Sprint", appName: "Zoom",
+            mixPath: dir.appendingPathComponent("mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        let trackedMenu = NSMenu()
+        let updater = MenuStageProgressUpdater()
+        updater.observe { queue }
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: trackedMenu)
+
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertTrue(queue.completedJobs.isEmpty)
+
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: trackedMenu)
+    }
+
     /// `elapsedSeconds` must not register a dependency on the stage-start
     /// bookkeeping: that dictionary is rewritten on every stage transition, and
     /// a SwiftUI body that read it would be rebuilt while the menu is open.

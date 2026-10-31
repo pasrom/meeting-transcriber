@@ -73,7 +73,8 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
         │ 8. Save transcript (.txt)                                      │
         │ 9. Protocol generation                                         │
         │      └─ ProtocolProvider: .claudeCLI | .openAICompatible | .none│
-        │ 10. Save protocol (.md, transcript appended)                   │
+        │ 10. Export generated protocol to Notion (optional)              │
+        │ 11. Save protocol (.md, transcript appended)                    │
         └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -88,11 +89,12 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | File | Role |
 |------|------|
 | `AppLauncher.swift` | The actual `@main` — a process entry point that makes the one pre-launch diversion decision (e.g. `--localvqe-selftest`) before `MeetingTranscriberApp`/`AppState` construct, since a conforming `App` type cannot intercept its own launch |
-| `MeetingTranscriberApp.swift` | UI shell — SwiftUI scenes, windows, NSOpenPanel, NSWorkspace. Observes `.showSettings` / `.closeSettings` / `.showSpeakerNaming` notifications for RPC- and pipeline-driven scene control |
+| `MeetingTranscriberApp.swift` | UI shell — SwiftUI scenes, windows, NSOpenPanel, NSWorkspace. Observes `.showSettings` / `.closeSettings` / `.showSpeakerNaming` notifications for RPC- and pipeline-driven scene control; logs menu-triggered protocol-open and quit requests |
 | `AppState.swift` | `@Observable @MainActor` composition root — wires the concern controllers (`engines`, `watching`, `pipeline`, `permissions`, `channelHealth`, `liveTranscription`, `rpcController`) and exposes the derived UI state (badge, status label) rather than owning it |
 | `LivenessMarker.swift` | Process-lifetime marker (issue #703): written at launch, touched once a minute, removed by a clean AppKit quit; the next launch reads it as `PreviousExit` to tell a crash, kill or power loss from a quit, which the per-recording marker cannot do for an idle app |
 | `PreviousExitNotice.swift` | Wording of the launch-time notification for a run that ended without a quit: the window in which nothing was watching for meetings |
 | `MenuBarView.swift` | Menu bar dropdown (state, actions, meeting info) |
+| `ProtocolOpener.swift` | Opens local protocols with the default handler and prefers an already-running Notion desktop app for Notion pages, falling back to the default handler |
 | `MenuBarIcon.swift` | Renders the animated waveform icon + badge overlays (permission, record-only, channel-silent) |
 | `AppPickerView.swift` | App picker sheet for manual recording of any running app |
 | `AudioImportTypes.swift` | File types offered by the batch-import and voice-enrollment `NSOpenPanel`s — single source of truth so the ffmpeg-gated vs. natively-decoded format lists stay pinned and testable |
@@ -163,6 +165,13 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `StreamingTranscriber.swift` | Per-channel live transcription actor (FluidVAD streaming → `engine.transcribeSamples` → partial/final captions) |
 | `PipelineQueue.swift` | Decouples recording from post-processing, sequential job pipeline |
 | `PipelineQueue+Stages.swift` | Per-stage job processing (transcribe → diarize → naming → protocol), split out of `PipelineQueue` (line-cap) |
+| `PipelineQueue+Notion.swift` | Optional Notion export step and page tracking for protocol retries and re-exports |
+| `NotionClient.swift` | Notion API client: page create and re-export, schema checks, request batching within Notion's limits, 429 backoff |
+| `NotionModels.swift` | Request and response types for the Notion API |
+| `MarkdownToNotionBlocks.swift` | Converts protocol Markdown and the transcript into Notion blocks |
+| `JobOpenTarget.swift` | Decides what a finished job's Open action opens: the Notion page or a local file |
+| `ProtocolOpener.swift` | Opens a job's target, preferring a running Notion desktop app |
+| `Settings/NotionExportSettingsView.swift`, `Settings/NotionExportSettingsModel.swift` | Notion settings UI and its connection and schema state |
 | `PipelineQueue+Recovery.swift` | Snapshot restore and orphaned-recording recovery for `PipelineQueue` |
 | `PipelineQueue+EchoBleed.swift` | Warns when a dual-source recording carries the same speech on both tracks (loudspeaker bleeding into the microphone) — measurement half of the echo mitigation (issue #581) |
 | `PipelineQueue+EchoCancellation.swift` | Removes the far end from the microphone track before anything reads it — cancellation half of the echo mitigation, the other branch of `EchoRemedy` |
@@ -325,7 +334,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `HTTPRequest.swift` | Minimal HTTP/1.1 request parsing for `DebugRPCServer` (pure value type, line-cap split) |
 | `HTTPResponse.swift` | Minimal HTTP/1.1 response serialization for `DebugRPCServer` (pure value type, line-cap split) |
 | `RPCResourceMetrics.swift` | JSON-serializable resource-usage snapshot of the running process, backs `GET /metrics` |
-| `JobStatusDTO.swift` | Wire + persisted shape for `GET /v1/jobs/<id>` (live or terminal job status + result paths) |
+| `JobStatusDTO.swift` | Wire + persisted shape for `GET /v1/jobs/<id>` (live or terminal job status, result paths, and optional Notion page details) |
 | `NamingStatusDTO.swift` | Wire shape for `GET /v1/jobs/<id>/naming` — per-speaker auto-name suggestion + speaking time + participants |
 | `IdempotencyStore.swift` | Bounded FIFO map of `Idempotency-Key` → created job IDs for the `/v1` enqueue routes |
 | `TerminalJobStore.swift` | File-backed store of recent finished-job statuses (survives queue reaping + app restart) |
@@ -354,7 +363,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 
 ```
 WatchLoop:     idle → watching → recording → watching (enqueues PipelineJob)
-PipelineQueue: waiting → transcribing → [diarizing] → generatingProtocol → done (60s auto-remove)
+PipelineQueue: waiting → transcribing → [diarizing] → generatingProtocol → done (Notion export runs in the background; 60s auto-remove after any pending export, deferred while a native menu is open)
                                                                             ↳ error
 ```
 
@@ -613,6 +622,44 @@ appended, and nothing is overwritten. If any move fails, the ones already done
 are undone and the job keeps its old stem and paths.
 
 `AppSettings.protocolLanguage` (default `"German"`) is substituted into the prompt as `{LANGUAGE}`. Custom prompts can also use `{MEETING_DATE}` (`YYYY-MM-DD`) and `{MEETING_TIME}` (`HH:mm`), derived from the captured recording start time. Imports and recovery jobs resolve those time placeholders to `Unknown` rather than their enqueue or processing time. Only recordings with a captured start receive the authoritative meeting-metadata block, so existing custom prompts receive reliable temporal context without needing to add the placeholders.
+
+### Notion Export
+
+When `AppSettings.notionExportEnabled` is on, `PipelineQueue` exports generated
+Markdown to the selected Notion database before saving the local protocol. A local
+copy is kept by default; `notionSkipLocalMarkdownOnSuccess` opts out only after a
+successful export. Export failures add a job warning and preserve the local save.
+`notionSpeakerTagsEnabled` separately opts in to sending confirmed speaker names as
+tags and defaults off. Date and Tags are written only when the selected database
+has recognized columns.
+
+The job records its Notion page and database IDs as soon as the page is created,
+so retries and protocol re-exports can use the same destination. Re-export after
+speaker renaming replaces the page's root content with the current protocol. New
+content is appended before prior root blocks are archived: a failed append keeps
+the previous content, and a retry reconciles any partial new content. A successful
+re-export replaces manual edits to the app-owned page. The client pins Notion API
+version `2022-06-28`; databases with multiple data sources are rejected rather
+than guessing which source should receive the meeting.
+
+A failed export retains the completed job and its local Markdown backup across
+queue cleanup and app restarts, even if the original audio is no longer present.
+The menu's **Retry Notion Export** action is available when export is enabled and
+the backup file exists; it reads the saved protocol and reuses the recorded page
+ID for the same database, plus saved speaker names when tags are enabled. It does
+not transcribe audio or generate a new protocol. Success clears the export-failure
+warning and starts the normal 60-second completed-job lifetime. If a completed
+job's in-progress export is interrupted, recovery marks it failed for this same
+retry path. If the app stops during protocol generation for a pending export,
+recovery regenerates from the saved corrected transcript when the saved
+transcript and naming state permit protocol-only recovery, even if an older
+Markdown file exists.
+
+When a Notion target is routed and the Notion desktop app is running, the app
+receives the page handoff. Otherwise, the original Notion URL is opened with
+the system's default handler. If the desktop app rejects the handoff, the
+original URL is also opened with the default handler. Local protocol files
+always use the default handler.
 
 ### Claude CLI Invocation
 

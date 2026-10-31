@@ -11,6 +11,19 @@ final class PipelineQueueTests: XCTestCase {
     private var queue: PipelineQueue!
     // swiftlint:enable implicitly_unwrapped_optional
 
+    private actor TagCapturingNotionExporter: NotionExporting {
+        private(set) var receivedTags: [String] = []
+
+        func exportMeeting( // swiftlint:disable:this function_parameter_count
+            title _: String, date _: Date?, tags: [String], markdown _: String,
+            transcript _: String?, existingPageID _: String?,
+            onPageCreated _: @Sendable (NotionPageResult) async -> Void,
+        ) -> NotionPageResult {
+            receivedTags = tags
+            return NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1")
+        }
+    }
+
     override func setUp() async throws {
         try await super.setUp()
         tmpDir = try makeTempDirectory(prefix: "pipeline_queue_test")
@@ -1035,6 +1048,22 @@ final class PipelineQueueTests: XCTestCase {
 
     // MARK: - Auto-Removal Tests
 
+    func testDismissCannotRemoveAJobDuringNotionExport() {
+        var job = makeJob()
+        job.state = .done
+        job.beginNotionExport(speakerNames: [])
+        queue.insertJobForTesting(job)
+
+        queue.removeJob(id: job.id)
+        XCTAssertEqual(queue.jobs.first?.id, job.id)
+
+        if let index = queue.jobs.firstIndex(where: { $0.id == job.id }) {
+            queue.jobs[index].finishNotionExport(succeeded: false)
+        }
+        queue.removeJob(id: job.id)
+        XCTAssertTrue(queue.jobs.isEmpty)
+    }
+
     func testCompletedJobAutoRemovedAfterDelay() async throws {
         let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
         let job = makeJob()
@@ -1044,6 +1073,105 @@ final class PipelineQueueTests: XCTestCase {
 
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(queue.jobs.count, 0, "Done job should be auto-removed")
+    }
+
+    func testFailedNotionExportJobIsRetainedPastCompletedLifetime() async throws {
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        var job = makeJob()
+        job.beginNotionExport(speakerNames: [])
+        job.finishNotionExport(succeeded: false)
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        try await Task.sleep(for: .milliseconds(400))
+
+        XCTAssertEqual(queue.jobs.first?.id, job.id)
+        XCTAssertEqual(queue.jobs.first?.notionExportStatus, .failed)
+    }
+
+    func testJobWithoutAnExportExpiresWhileAMenuIsOpen() async throws {
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let job = makeJob()
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+        queue.beginMenuTracking()
+
+        try await Task.sleep(for: .milliseconds(400))
+
+        XCTAssertTrue(queue.completedJobs.isEmpty)
+        queue.endMenuTracking()
+    }
+
+    func testCompletedJobExpiryWaitsForMenuTrackingToEnd() async throws {
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let job = makeJob()
+        var exported = job
+        exported.beginNotionExport(speakerNames: [])
+        exported.finishNotionExport(succeeded: true)
+        queue.enqueue(exported)
+        queue.updateJobState(id: job.id, to: .done)
+        queue.beginMenuTracking()
+
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(queue.completedJobs.map(\.id), [job.id])
+
+        queue.endMenuTracking()
+        XCTAssertTrue(queue.completedJobs.isEmpty)
+    }
+
+    func testMenuEndRetainsJobThatNeedsNotionRetryAfterItsTimerExpired() async throws {
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let job = makeJob()
+        var exported = job
+        exported.beginNotionExport(speakerNames: [])
+        exported.finishNotionExport(succeeded: true)
+        queue.enqueue(exported)
+        queue.updateJobState(id: job.id, to: .done)
+        queue.beginMenuTracking()
+        try await Task.sleep(for: .milliseconds(400))
+
+        queue.jobs[0].beginNotionExport(speakerNames: [])
+        queue.jobs[0].finishNotionExport(succeeded: false)
+        queue.endMenuTracking()
+
+        XCTAssertEqual(queue.jobs.first?.id, job.id)
+        XCTAssertEqual(queue.jobs.first?.notionExportStatus, .failed)
+    }
+
+    func testCompletedJobExpiryWaitsForFinalNestedMenuTrackingEnd() async throws {
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let job = makeJob()
+        var exported = job
+        exported.beginNotionExport(speakerNames: [])
+        exported.finishNotionExport(succeeded: true)
+        queue.enqueue(exported)
+        queue.updateJobState(id: job.id, to: .done)
+        queue.beginMenuTracking()
+        queue.beginMenuTracking()
+
+        try await Task.sleep(for: .milliseconds(400))
+        queue.endMenuTracking()
+        XCTAssertEqual(queue.completedJobs.map(\.id), [job.id])
+
+        queue.endMenuTracking()
+        XCTAssertTrue(queue.completedJobs.isEmpty)
+    }
+
+    func testManuallyRemovedJobIsNotReRemovedAfterMenuTracking() async throws {
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let job = makeJob()
+        var exported = job
+        exported.beginNotionExport(speakerNames: [])
+        exported.finishNotionExport(succeeded: true)
+        queue.enqueue(exported)
+        queue.updateJobState(id: job.id, to: .done)
+        queue.beginMenuTracking()
+
+        try await Task.sleep(for: .milliseconds(400))
+        queue.removeJob(id: job.id)
+        queue.endMenuTracking()
+
+        XCTAssertTrue(queue.jobs.isEmpty)
     }
 
     func testErrorJobNotAutoRemoved() async throws {
@@ -2067,6 +2195,7 @@ final class PipelineQueueTests: XCTestCase {
 
     private func makeResumeQueue(
         engine: MockEngine, protocolGen: MockProtocolGen,
+        notionExportConfiguration: NotionExportConfiguration? = nil,
     ) -> PipelineQueue {
         PipelineQueue(
             engine: engine,
@@ -2076,6 +2205,7 @@ final class PipelineQueueTests: XCTestCase {
             logDir: tmpDir,
             stagingDir: tmpDir,
             diarizeEnabled: true,
+            notionExportConfigurationProvider: { notionExportConfiguration.map(NotionExportResolution.ready) ?? .disabled },
             inFlightRuns: InFlightRunRegistry(),
         )
     }
@@ -2100,6 +2230,69 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(protocolGen.generateCalled)
         XCTAssertEqual(restored.jobs.first?.state, .done)
         XCTAssertNotNil(restored.jobs.first?.protocolPath)
+    }
+
+    func testExportInterruptedAfterLocalSaveOffersRetryWithoutRegenerating() async throws {
+        let (queue, _) = makeStraightThroughQueue(stagingDir: tmpDir)
+        let job = try makeDualSourceJob(title: "Interrupted After Local Save")
+        queue.enqueue(job)
+        await queue.processNext()
+        await queue.awaitSnapshotFlush()
+
+        var interrupted = try XCTUnwrap(queue.jobs.first)
+        XCTAssertNotNil(interrupted.protocolPath)
+        interrupted.state = .generatingProtocol
+        interrupted.beginNotionExport(speakerNames: [], localBackupSaved: true)
+        try JSONEncoder().encode([interrupted])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let protocolGen = MockProtocolGen()
+        let restored = makeResumeQueue(engine: MockEngine(), protocolGen: protocolGen)
+        restored.loadSnapshot()
+        await restored.awaitProcessing()
+
+        XCTAssertFalse(protocolGen.generateCalled, "the Markdown on disk is this run's output")
+        let finished = try XCTUnwrap(restored.jobs.first)
+        XCTAssertEqual(finished.state, .done)
+        XCTAssertEqual(finished.notionExportStatus, .failed)
+        XCTAssertTrue(finished.warnings.contains { $0.hasPrefix("Notion export failed (interrupted") })
+    }
+
+    func testInterruptedNotionExportRegeneratesOldProtocolFromSavedTranscript() async throws {
+        let (queue, _) = makeStraightThroughQueue(stagingDir: tmpDir)
+        let job = try makeDualSourceJob(title: "Interrupted Notion Export")
+        queue.enqueue(job)
+        await queue.processNext()
+        await queue.awaitSnapshotFlush()
+
+        var interrupted = try XCTUnwrap(queue.jobs.first)
+        let oldProtocolPath = try XCTUnwrap(interrupted.protocolPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldProtocolPath.path))
+        let transcriptPath = try XCTUnwrap(interrupted.transcriptPath)
+        let correctedTranscript = "[00:00] Alice: Corrected meeting text"
+        try correctedTranscript.write(to: transcriptPath, atomically: true, encoding: .utf8)
+        interrupted.state = .generatingProtocol
+        interrupted.beginNotionExport(speakerNames: ["Alice"])
+        try JSONEncoder().encode([interrupted])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let engine = MockEngine()
+        let protocolGen = MockProtocolGen()
+        let exporter = TagCapturingNotionExporter()
+        let restored = makeResumeQueue(
+            engine: engine, protocolGen: protocolGen,
+            notionExportConfiguration: NotionExportConfiguration(
+                exporter: exporter, databaseID: "database-1", speakerTagsEnabled: true,
+            ),
+        )
+        restored.loadSnapshot()
+        await restored.awaitProcessing()
+
+        XCTAssertEqual(engine.transcribeCallCount, 0)
+        XCTAssertTrue(protocolGen.generateCalled, "The old local protocol must not finish the interrupted export")
+        XCTAssertEqual(protocolGen.capturedTranscript, correctedTranscript)
+        let receivedTags = await exporter.receivedTags
+        XCTAssertEqual(receivedTags, ["Alice"])
     }
 
     /// The case that makes the resume worth building rather than merely cheap.

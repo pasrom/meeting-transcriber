@@ -65,6 +65,35 @@ enum SettingsHelp {
         a report about a silent app track needs.
         """
 
+    static let notionExport =
+        """
+        Sends each finished meeting protocol (and the full transcript when it is \
+        included) to a Notion database.
+
+        Setup:
+        1. In Notion, create an internal integration at notion.so/profile/\
+        integrations and copy its token.
+        2. Share the target page or database with that integration: open it in \
+        Notion → "..." → "Connect to" → your integration. The integration only \
+        sees content explicitly shared with it.
+        3. Paste the token here and press "Test Connection".
+        4. Choose an existing database, or create a "Meeting Transcriber" \
+        database under one of your shared pages.
+        5. Local Markdown backups are kept by default. Leave "Skip local markdown \
+        file on success" off to keep every protocol locally.
+
+        Only Title is required. Tags and Date are used when the database has a \
+        recognized column; use "Add Optional Columns" to create them. If Notion \
+        export fails, the local Markdown file is kept. The job finishes first and \
+        the export runs in the background. If a request times \
+        out while a page is being created, a retry can leave a second page in \
+        the database.
+
+        Speaker names are only added to Tags when "Include speaker names \
+        as tags" is enabled. Re-exporting after speaker naming replaces \
+        the exported page content, including edits made in Notion.
+        """
+
     static let asymmetricSilenceWarning =
         "How long the condition must last before the indicator turns red and, for a channel " +
         "that has stopped delivering, before you are notified. Lower reacts faster to a dead " +

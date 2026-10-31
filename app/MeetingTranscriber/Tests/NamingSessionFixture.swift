@@ -55,7 +55,7 @@ final class NamingSessionMockDelegate: SpeakerNamingSessionDelegate {
         updateSpeakerDBEmbeddings.append(embeddings)
     }
 
-    func generateProtocol(jobID: UUID, transcript _: String, title: String, protocolsDir: URL) {
+    func generateProtocol(jobID: UUID, transcript _: String, title: String, protocolsDir: URL, speakerNames _: [String]) {
         generateProtocolCalls.append((jobID, title, protocolsDir))
     }
 
@@ -88,11 +88,13 @@ enum NamingSessionFixture {
         )
     }
 
-    static func namingData(jobID: UUID) -> PipelineQueue.SpeakerNamingData {
+    static func namingData(
+        jobID: UUID, mapping: [String: String] = ["SPEAKER_0": "SPEAKER_0"],
+    ) -> PipelineQueue.SpeakerNamingData {
         PipelineQueue.SpeakerNamingData(
             jobID: jobID,
             meetingTitle: "Standup",
-            mapping: ["SPEAKER_0": "SPEAKER_0"],
+            mapping: mapping,
             speakingTimes: ["SPEAKER_0": 12],
             embeddings: ["SPEAKER_0": [0.1, 0.2, 0.3]],
             audioPath: nil,

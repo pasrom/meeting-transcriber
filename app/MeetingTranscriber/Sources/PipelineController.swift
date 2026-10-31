@@ -205,7 +205,7 @@ final class PipelineController {
     /// Whether the queue holds no unfinished work: nothing processing, and
     /// every job done or failed (a job parked for naming is neither).
     private var canReplaceQueue: Bool {
-        !queue.isProcessing && queue.jobs.allSatisfy(\.state.isTerminal)
+        !queue.isProcessing && queue.jobs.allSatisfy { $0.state.isTerminal && $0.notionExportStatus != .inProgress }
     }
 
     /// Rebuild the queue when the output folder has changed since it was built,
@@ -320,6 +320,7 @@ final class PipelineController {
                 TerminologyNormalizer(rulesText: settings?.terminologyRulesText ?? "")
             },
             stageTimingLog: StageTimingLog(path: queueEnvironment.stageTimingLog),
+            notionExportConfigurationProvider: { [settings] in NotionExportConfiguration.resolve(settings: settings) },
             terminalJobStore: terminalJobStore,
             securityScope: queueEnvironment.securityScope,
         )
@@ -378,11 +379,11 @@ final class PipelineController {
     }
 
     func configureCallbacks() {
+        queue.onNotionExportFinished = { [notifier] in notifier.notifyNotionExport(job: $0, failureReason: $1) }
         queue.onJobStateChange = { [notifier] job, _, newState in
             switch newState {
             case .done:
-                let title = job.protocolPath != nil ? "Protocol Ready" : "Transcript Saved"
-                notifier.notify(title: title, body: job.meetingTitle)
+                notifier.notify(title: job.hasSavedProtocol ? "Protocol Ready" : "Transcript Saved", body: job.meetingTitle)
 
             case .error:
                 if let err = job.error {
@@ -565,7 +566,7 @@ final class PipelineController {
         let deadline = ContinuousClock.now.advanced(by: .seconds(maxWaitSeconds))
         while ContinuousClock.now < deadline {
             if let job = queue.jobs.first(where: { $0.id == jobID }) {
-                if job.state.isTerminal { return .completed(JobStatusDTO(job: job)) }
+                if job.state.isTerminal, job.notionExportStatus != .inProgress { return .completed(JobStatusDTO(job: job)) }
             } else if let record = terminalJobStore.lookup(jobID: jobID) {
                 return .completed(record) // already reaped from the live queue
             }
@@ -575,7 +576,7 @@ final class PipelineController {
         // (or while we were enqueuing with maxWaitSeconds==0) is completed, not
         // timed out.
         let final = jobStatus(forID: jobID)
-        if let final, final.state.isTerminal { return .completed(final) }
+        if let final, final.state.isTerminal, final.export?.isInProgress != true { return .completed(final) }
         return .timedOut(final)
     }
 }
