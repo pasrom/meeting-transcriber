@@ -6,6 +6,7 @@ speakers.json
 
 # Swift build artifacts
 app/MeetingTranscriber/.build/
+app/MeetingTranscriber/.build-appstore/
 tools/audiotap/.build/
 
 # Release build artifacts

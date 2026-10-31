@@ -44,7 +44,9 @@ swift build -c release
 
 if [[ "$WITH_APPSTORE" == 1 ]]; then
     echo "==> swift build -c release -DAPPSTORE (App Store variant)"
-    swift build -c release -Xswiftc -DAPPSTORE
+    # Own scratch path: the flag change would otherwise invalidate the
+    # Homebrew build above and force a full rebuild in each direction.
+    swift build -c release -Xswiftc -DAPPSTORE --scratch-path .build-appstore
 fi
 
 if [[ "$WITH_TESTS" == 1 ]]; then

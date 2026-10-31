@@ -30,4 +30,4 @@
 --disable wrapIfExpressionBodies
 
 # File scope
---exclude FluidAudio,.build,app/MeetingTranscriber/.build,tools/audiotap/.build,tools/meeting-simulator/.build
+--exclude FluidAudio,.build,app/MeetingTranscriber/.build,app/MeetingTranscriber/.build-appstore,tools/audiotap/.build,tools/meeting-simulator/.build
