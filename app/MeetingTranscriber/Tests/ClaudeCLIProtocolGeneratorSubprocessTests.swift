@@ -9,8 +9,7 @@
     /// No verdict rests on how fast the run was: a fake CLI that must be
     /// stopped, and a process it starts that the run must not wait for, are
     /// `HeldFake`s, and limits not under test are `HeldFake.noLimit`. The time
-    /// checks left are coarse ceilings on a stop: `HeldFake.stopBound`, and for
-    /// the `--help` probe one under its own limit.
+    /// checks left are coarse ceilings on a stop, `HeldFake.stopBound`.
     final class ClaudeCLIProtocolGeneratorSubprocessTests: XCTestCase {
         /// The limit for runs expected to time out, on a clock the test
         /// moves.
@@ -182,10 +181,11 @@
         // MARK: - Cancellation
 
         /// A job cancelled while the `--help` probe runs stops the probe and
-        /// ends there: the CLI is never started for the protocol. The probe
-        /// has a limit of its own, which would stop it too, after
-        /// `helpProbeTimeoutSeconds`, before the fake gives up; so the check
-        /// that the cancel stopped it is a coarse ceiling under that limit.
+        /// ends there: the CLI is never started for the protocol. The probe's
+        /// own limit is `HeldFake.noLimit`, past the point where the held probe
+        /// gives up, so only the cancel can have stopped it before then: the
+        /// probe's marker says whether it did, and `HeldFake.stopBound` is the
+        /// coarse ceiling on how long after the cancel.
         func testCancellingGenerateDuringTheHelpProbeEndsTheJob() async throws {
             let folder = try XCTUnwrap(scratch)
             let ranFile = folder.appendingPathComponent("ran")
@@ -201,12 +201,7 @@
             let result = await run.result
 
             XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "got \($0)") }
-            XCTAssertLessThan(
-                Date().timeIntervalSince(start), ClaudeCLIProtocolGenerator.helpProbeTimeoutSeconds / 2,
-                "the probe ran into its own limit instead of being stopped by the cancel",
-            )
-            probe.assertNotRunOut("the probe was not stopped")
-            try assertProcessGone(pidFile: probe.pidFile)
+            probe.assertStopped(since: start, "the probe was not stopped")
             XCTAssertFalse(FileManager.default.fileExists(atPath: ranFile.path), "the CLI was started after the cancel")
         }
 
@@ -283,6 +278,7 @@
             ClaudeCLIProtocolGenerator(
                 claudeBin: script, language: "German", timeout: timeout,
                 terminationGrace: grace, outputDrainGrace: drainGrace, clock: clock,
+                helpProbeTimeout: HeldFake.noLimit,
             )
         }
 
