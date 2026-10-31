@@ -1,3 +1,4 @@
+import enum FluidAudio.ASRError
 @testable import MeetingTranscriber
 import XCTest
 
@@ -10,9 +11,11 @@ import XCTest
 ///
 /// Driven through `enqueue` + `processNext`, not by calling the stage, because
 /// what failed was the job and what has to survive is the job. The mock engine
-/// is told to refuse the empty track exactly as the real one does: that is what
-/// makes these tests falsify the fix rather than the mock. Remove the guard and
-/// the refusal comes back out of the queue.
+/// is told to refuse the empty track exactly as the real one does. Since a
+/// `.both` pair now also survives a track the engine refuses, a surviving job
+/// alone no longer proves the guard ran: the tests that pin it also assert the
+/// empty track never reached the engine, and that the warning names the empty
+/// track rather than a failed transcription.
 @MainActor
 final class EmptyTrackSurvivesTests: XCTestCase {
     // swiftlint:disable:previous balanced_xctest_lifecycle
@@ -112,6 +115,7 @@ final class EmptyTrackSurvivesTests: XCTestCase {
 
         XCTAssertEqual(h.queue.jobs.first?.state, .done, "error: \(h.queue.jobs.first?.error ?? "none")")
         XCTAssertTrue(try transcript(h).contains("far end speaking"), "the intact track has to reach the transcript")
+        XCTAssertEqual(h.engine.transcribeCallCount, 1, "the empty track must not reach the engine")
     }
 
     func testTheDroppedMicTrackIsReportedOnTheJob() async throws {
@@ -125,7 +129,7 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         )
 
         let warnings = (h.queue.jobs.first?.warnings ?? []).joined(separator: " | ")
-        XCTAssertTrue(warnings.lowercased().contains("microphone track"), "got: \(warnings)")
+        XCTAssertTrue(warnings.lowercased().contains("microphone track carried nothing"), "got: \(warnings)")
     }
 
     /// The transcript is the artifact that outlives the job, and the text the
@@ -143,7 +147,7 @@ final class EmptyTrackSurvivesTests: XCTestCase {
 
         let text = try transcript(h)
         XCTAssertTrue(text.hasPrefix("[Recording note:"), "got: \(text.prefix(120))")
-        XCTAssertTrue(text.lowercased().contains("microphone track carried nothing"), "got: \(text.prefix(200))")
+        XCTAssertTrue(text.lowercased().contains("nothing from the microphone track"), "got: \(text.prefix(200))")
     }
 
     /// Diarization replaces the transcript with its speaker-labeled rendering,
@@ -239,7 +243,8 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         XCTAssertEqual(h.queue.jobs.first?.state, .done, "error: \(h.queue.jobs.first?.error ?? "none")")
         let text = try transcript(h)
         XCTAssertTrue(text.contains("local answer"), "got: \(text)")
-        XCTAssertTrue(text.lowercased().contains("app-audio track carried nothing"), "got: \(text.prefix(200))")
+        XCTAssertTrue(text.lowercased().contains("nothing from the app-audio track"), "got: \(text.prefix(200))")
+        XCTAssertEqual(h.engine.transcribeCallCount, 1, "the empty track must not reach the engine")
     }
 
     // MARK: - A track that cannot even be read
@@ -286,6 +291,160 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         )
     }
 
+    // MARK: - A track that fails in the engine
+
+    /// The frame count cannot see a decode failure: both tracks carry audio,
+    /// pass the viability check, and the microphone still fails in the
+    /// engine. The intact far end must survive that just as it survives an
+    /// empty microphone file.
+    func testAMicTrackThatFailsToTranscribeKeepsTheAppTranscript() async throws {
+        let h = makeHarness()
+        h.engine.throwingPathSuffixes = ["mic_16k.wav"]
+
+        try await run(
+            h,
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+        )
+
+        let job = try XCTUnwrap(h.queue.jobs.first)
+        XCTAssertEqual(job.state, .done, "error: \(job.error ?? "none")")
+        XCTAssertTrue(try transcript(h).contains("far end speaking"))
+        let warnings = job.warnings.joined(separator: " | ")
+        XCTAssertTrue(warnings.contains("microphone track could not be transcribed"), "got: \(warnings)")
+        XCTAssertTrue(warnings.contains("Must be at least 300ms"), "the engine's reason is lost: \(warnings)")
+    }
+
+    func testAnAppTrackThatFailsToTranscribeKeepsTheMicTranscript() async throws {
+        let h = makeHarness()
+        h.engine.throwingPathSuffixes = ["app_16k.wav"]
+
+        try await run(
+            h,
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+        )
+
+        let job = try XCTUnwrap(h.queue.jobs.first)
+        XCTAssertEqual(job.state, .done, "error: \(job.error ?? "none")")
+        XCTAssertTrue(try transcript(h).contains("local answer"))
+        XCTAssertTrue(job.warnings.joined().contains("app-audio track could not be transcribed"))
+    }
+
+    func testBothTracksFailingToTranscribeFailsWithTheEnginesMessage() async throws {
+        let h = makeHarness()
+        h.engine.throwingPathSuffixes = ["app_16k.wav", "mic_16k.wav"]
+
+        try await run(
+            h,
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+        )
+
+        let job = try XCTUnwrap(h.queue.jobs.first)
+        XCTAssertEqual(job.state, .error)
+        XCTAssertEqual(job.error, ASRError.invalidAudioData.localizedDescription)
+    }
+
+    /// The dropped track downgrades the stored verdict, so the transcript
+    /// carries the same note an empty track gets: without it the protocol
+    /// model is handed half a meeting that reads as a whole one.
+    func testATrackThatFailsToTranscribeDowngradesTheVerdictAndNotesIt() async throws {
+        let h = makeHarness()
+        h.engine.throwingPathSuffixes = ["mic_16k.wav"]
+
+        try await run(
+            h,
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+        )
+
+        XCTAssertEqual(h.queue.jobs.first?.trackViability, .appOnly)
+        let text = try transcript(h)
+        XCTAssertTrue(text.hasPrefix("[Recording note:"), "got: \(text.prefix(120))")
+        XCTAssertFalse(text.contains("carried nothing"), "a failed track is not an empty one")
+    }
+
+    /// Neither the first diarization nor the late re-run may diarize the
+    /// failed track: its speakers would have no text, and their embeddings
+    /// would be confirmed from audio nobody transcribed.
+    func testATrackThatFailsToTranscribeIsNotDiarizedNowOrLater() async throws {
+        let h = makeHarness(diarizeEnabled: true)
+        h.engine.throwingPathSuffixes = ["mic_16k.wav"]
+        var namingCalls = 0
+
+        try await run(
+            h,
+            naming: { _ in
+                namingCalls += 1
+                return namingCalls == 1 ? .rerun(2) : .skipped
+            },
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+        )
+
+        XCTAssertEqual(namingCalls, 2, "the rerun has to actually run")
+        let diarized = h.diarization.receivedAudioPaths.map(\.lastPathComponent)
+        XCTAssertEqual(diarized.count, 2, "one app run, one late re-run, got: \(diarized)")
+        XCTAssertFalse(diarized.contains { $0.contains("mic") }, "the failed track was diarized: \(diarized)")
+    }
+
+    /// A failure next to a track that transcribed to nothing is the job's
+    /// explanation. Reporting "Empty transcript" would hide it.
+    func testAFailureNextToAnEmptyTrackIsTheJobError() async throws {
+        let h = makeHarness()
+        h.engine.throwingPathSuffixes = ["mic_16k.wav"]
+        h.engine.segmentsByPathSuffix = ["app_16k.wav": []]
+
+        try await run(
+            h,
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+        )
+
+        let job = try XCTUnwrap(h.queue.jobs.first)
+        XCTAssertEqual(job.state, .error)
+        XCTAssertEqual(job.error, ASRError.invalidAudioData.localizedDescription)
+    }
+
+    /// A model that cannot load fails on any file. It ends the job as an
+    /// error the user can retry, and the second track is not sent to load
+    /// the same model again.
+    func testAnEngineWideFailureEndsTheJobWithoutTryingTheSecondTrack() async throws {
+        let h = makeHarness()
+        h.engine.shouldThrow = true
+
+        try await run(
+            h,
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+        )
+
+        let job = try XCTUnwrap(h.queue.jobs.first)
+        XCTAssertEqual(job.state, .error)
+        XCTAssertEqual(job.error, "Mock transcription error")
+        XCTAssertEqual(h.engine.transcribeCallCount, 1, "the microphone track was still sent to the engine")
+        XCTAssertEqual(job.trackViability, .both, "an engine failure is not a dropped track")
+    }
+
+    /// Even with the app track transcribed, an engine-wide failure on the
+    /// microphone ends the job: saving the far end alone as a finished job
+    /// would hide a model fault behind half a transcript.
+    func testAnEngineWideFailureOnTheSecondTrackIsNotADroppedTrack() async throws {
+        let h = makeHarness()
+        h.engine.modelFailurePathSuffixes = ["mic_16k.wav"]
+
+        try await run(
+            h,
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+        )
+
+        let job = try XCTUnwrap(h.queue.jobs.first)
+        XCTAssertEqual(job.state, .error)
+        XCTAssertEqual(job.error, ASRError.modelLoadFailed.localizedDescription)
+    }
+
     // MARK: - What must not change
 
     func testBothTracksEmptyStillFailsTheJob() async throws {
@@ -301,6 +460,10 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         XCTAssertEqual(
             h.queue.jobs.first?.state, .error,
             "with nothing on either side there is no transcript to save",
+        )
+        XCTAssertEqual(
+            h.engine.transcribeCallCount, 1,
+            "the first refusal is the job's error; the second file is not decoded just to repeat it",
         )
     }
 

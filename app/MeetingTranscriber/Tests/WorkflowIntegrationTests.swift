@@ -1017,6 +1017,28 @@ final class WorkflowIntegrationTests: XCTestCase {
         )
     }
 
+    /// With the app track lost to a transcription failure, the far end exists
+    /// only on the microphone. Dedup must not remove it as a copy of a
+    /// transcript that was never written.
+    @MainActor
+    func testBleedIsKeptWhenTheAppTrackFailedToTranscribe() async throws {
+        let (h, _) = try makeHarness()
+        h.engine.segmentsToReturn = [
+            TimestampedSegment(start: 2, end: 28, text: "far end talking"),
+            TimestampedSegment(start: 32, end: 58, text: "local sentence"),
+        ]
+        h.engine.throwingPathSuffixes = ["app_16k.wav"]
+        let pair = try writeDedupPair(tmpDir.appendingPathComponent("dedup-app-failed"), bleed: true)
+
+        await runDualSource(h, app: pair.app, mic: pair.mic)
+
+        let job = try XCTUnwrap(h.queue.jobs.first)
+        XCTAssertEqual(job.state, .done, "error: \(job.error ?? "none")")
+        let transcript = try String(contentsOf: XCTUnwrap(job.transcriptPath), encoding: .utf8)
+        XCTAssertEqual(micLines(transcript).count, 2, "the only copy of the far end was removed, got:\n\(transcript)")
+        XCTAssertEqual(job.echo?.suppressedSegments ?? 0, 0)
+    }
+
     /// What the transcripts of an affected recording look like once the far
     /// end falls silent: the app track has one utterance, the microphone has
     /// its bleed copy plus the local answer right behind it. The two mic
