@@ -336,6 +336,17 @@ jobs:
       # green and the pull request mergeable. Homebrew leg only: mt-cli is a
       # development client with no App Store variant, so the appstore leg would
       # repeat the identical run. About 13 s cold, 31 tests.
+      #
+      # Its build tree is cached under a key that covers everything that goes
+      # into it (compiler, manifest, dependencies, sources, tests), with no
+      # fallback to an older tree: a hit is exactly this build, any change is a
+      # cold build. Uncached, this step took 31 to 58 s.
+      - name: Cache mt-cli build
+        if: matrix.variant == 'homebrew'
+        uses: actions/cache@v6
+        with:
+          path: tools/mt-cli/.build
+          key: mt-cli-spm-${{ runner.os }}-${{ env.DEVELOPER_DIR }}-${{ hashFiles('tools/mt-cli/Package.swift', 'tools/mt-cli/Package.resolved') }}-${{ hashFiles('tools/mt-cli/Sources/**', 'tools/mt-cli/Tests/**') }}
       - name: mt-cli tests
         if: matrix.variant == 'homebrew'
         timeout-minutes: 5
