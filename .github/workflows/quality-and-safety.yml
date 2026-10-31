@@ -658,9 +658,9 @@ jobs:
 
   quality-baseline:
     # The label arm of test-tsan's PR gate, without its diff arms. Same
-    # audience: this job is GH-hosted, but the fork token would be read-only
-    # (403 on cancel-on-failure), and one label driving both jobs must mean
-    # one consistent audience. No diff arm: this job downloads ~1 GB of model
+    # audience: this job is GH-hosted, but it runs the PR's Swift code and
+    # downloads ~1 GB, and one label driving both jobs must mean one
+    # consistent audience, so fork PRs stay out here too. No diff arm: this job downloads ~1 GB of model
     # weights to measure WER/DER against committed fixtures, which a new lock
     # or queue cannot move, so a concurrency change is no reason to pay for
     # it.
@@ -682,7 +682,6 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@v7
       # 20 min covers SPM + ML cache restore plus the cold-cache pre-warm
@@ -720,13 +719,26 @@ jobs:
           RUN_QUALITY_TESTS: "1"
           QUALITY_RESULTS_PATH: ${{ github.workspace }}/quality-results.json
         run: cd app/MeetingTranscriber && swift test --filter QualityBaselineGateTests
+      # No cancel-on-failure in this job: it would cancel the sanitizer legs,
+      # and sanitizer-gate counts a cancelled leg as a sanitizer failure, so a
+      # quality regression or a transport error here read as a red sanitizer
+      # check. A failure here stays this job's. (The reverse still holds: a
+      # failing sanitizer leg cancels the run, this job included.)
+      #
+      # The upload is best-effort for the same reason: a failed upload (e.g.
+      # the artifact service unreachable) is no quality verdict, so it warns
+      # instead of failing the job.
       - name: Upload quality results
+        id: upload-quality
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: quality-results
           path: ${{ github.workspace }}/quality-results.json
           if-no-files-found: warn
-      - name: Cancel run on failure
-        if: failure()
-        uses: ./.github/actions/cancel-on-failure
+      - name: Report a failed upload
+        if: always() && steps.upload-quality.outcome == 'failure'
+        run: |
+          echo "::warning title=quality-results not uploaded::The artifact upload failed; this run has no quality-results.json baseline. bless_quality_baseline.sh needs another run's artifact or a local measurement."
+          echo "### ⚠️ quality-results.json was not uploaded" >> "$GITHUB_STEP_SUMMARY"
