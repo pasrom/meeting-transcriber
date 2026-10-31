@@ -25,6 +25,9 @@ enum TranscriptionFailureScope: Equatable {
 
     static func of(_ error: any Error) -> Self {
         switch error {
+        case let TranscriptionError.transcriptionFailed(underlying):
+            of(underlying)
+
         case let error as WhisperError:
             switch error {
             case .loadAudioFailed:
