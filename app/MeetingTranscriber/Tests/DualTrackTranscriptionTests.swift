@@ -19,6 +19,7 @@ final class DualTrackTranscriptionTests: XCTestCase {
             ASRError.invalidAudioData,
             ASRError.fileAccessFailed(URL(fileURLWithPath: "/x"), CocoaError(.fileReadUnknown)),
             WhisperError.loadAudioFailed("x"),
+            TranscriptionError.transcriptionFailed(underlying: WhisperError.loadAudioFailed("x")),
         ]
         for error in fileScoped {
             XCTAssertEqual(TranscriptionFailureScope.of(error), .file, "\(error)")
@@ -40,6 +41,7 @@ final class DualTrackTranscriptionTests: XCTestCase {
             ASRError.notInitialized,
             WhisperError.modelsUnavailable("x"),
             WhisperError.tokenizerUnavailable("x"),
+            TranscriptionError.transcriptionFailed(underlying: WhisperError.modelsUnavailable("x")),
             NSError(domain: "unknown", code: 1),
         ]
         for error in engineScoped {

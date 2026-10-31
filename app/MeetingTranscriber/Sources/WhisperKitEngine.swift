@@ -405,23 +405,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             return nil // continue transcription
         }
 
-        guard let firstResult = results.first, let transcriptionResults = firstResult else {
-            return []
-        }
-
-        var segments: [TimestampedSegment] = []
-        var lastText = ""
-        for segment in transcriptionResults.flatMap(\.segments) {
-            let text = Self.stripWhisperTokens(segment.text).trimmingCharacters(in: .whitespaces)
-            // Filter hallucinations: skip consecutive identical text
-            if text.isEmpty || text == lastText { continue }
-            lastText = text
-            segments.append(TimestampedSegment(
-                start: TimeInterval(segment.start),
-                end: TimeInterval(segment.end),
-                text: text,
-            ))
-        }
+        let segments = try Self.segments(from: results.first)
         transcriptionProgress = 1.0
         return segments
     }
@@ -557,11 +541,15 @@ enum TranscriptionError: LocalizedError {
     /// The message keeps its prefix either way, which is what consumers match on.
     case modelNotLoaded(reason: String? = nil)
     case streamingNotSupported
+    /// WhisperKit failed on a file. Kept whole rather than as its message, so
+    /// `TranscriptionFailureScope` can still tell a bad file from a bad model.
+    case transcriptionFailed(underlying: any Error)
 
     var errorDescription: String? {
         switch self {
         case let .modelNotLoaded(reason): "WhisperKit model not loaded" + (reason.map { ": \($0)" } ?? "")
         case .streamingNotSupported: "This engine does not support sample-based live transcription"
+        case let .transcriptionFailed(underlying): "WhisperKit transcription failed: \(underlying.localizedDescription)"
         }
     }
 }
