@@ -6,7 +6,8 @@
 # sleeps forever: it has to come back as `blocked` within the bound and be
 # gone afterwards. A fake that refuses at once has to read as `denied`, and a
 # real read as `granted`. Plus the grantee resolution over crafted process
-# tables.
+# tables, and the reaper that ends a driver a step timeout left behind, by
+# recorded pid and start time only.
 # shellcheck disable=SC2015  # `check && ok || bad`: `ok` only prints and counts
 set -euo pipefail
 
@@ -181,6 +182,120 @@ out="$(preflight env TCC_PREFLIGHT_OSASCRIPT="$TMP/osa" 2>&1)" || status=$?
 status=0
 "$ROOT/scripts/ci/tcc-preflight.sh" --bogus >/dev/null 2>&1 || status=$?
 [ "$status" -eq 2 ] && ok preflight_usage_error || bad preflight_usage_error "status $status"
+
+# --- leftover-driver reaper ---------------------------------------------------------
+
+list="$TMP/drivers"
+# A stand-in for a driver stuck in a blocked call, with a child of its own.
+sh -c 'sleep 300 & wait' &
+stuck=$!
+disown "$stuck"
+PIDS="$PIDS $stuck"
+poll_until 2 0.1 sh -c "pgrep -P $stuck >/dev/null" || bad reaper_setup "the stand-in has no child"
+stuck_child="$(pgrep -P "$stuck")"
+PIDS="$PIDS $stuck_child"
+# A live process recorded with a different start time: a reused pid, which
+# must not be touched.
+sleep 300 &
+reused=$!
+disown "$reused"
+PIDS="$PIDS $reused"
+{
+    printf '%s\t%s\t%s\n' "$stuck" "$(ps -o lstart= -p "$stuck")" e2e-app.sh
+    printf '%s\t%s\t%s\n' "$reused" "Thu Jan  1 00:00:00 1970" e2e-app.sh
+    printf '%s\t%s\t%s\n' "$$" "$(ps -o lstart= -p $$)" e2e-browser.sh
+} >"$list"
+out="$(E2E_REAP_UNBLOCK_S=1 e2e_reap_registered_drivers "$list")"
+_no_pid_alive "$stuck" "$stuck_child" \
+    && ok reaper_ends_the_recorded_driver_and_its_children || bad reaper_ends_the_recorded_driver_and_its_children "still alive: $stuck $stuck_child"
+_pid_is_alive "$reused" && ok reaper_spares_a_reused_pid || bad reaper_spares_a_reused_pid "pid $reused was killed"
+grep -q "^::warning title=leftover e2e driver::e2e-app.sh (pid $stuck)" <<<"$out" \
+    && ok reaper_says_what_it_ended || bad reaper_says_what_it_ended "'$out'"
+[ "$(cut -f1 "$list")" = "$$" ] && ok reaper_keeps_its_own_ancestors_listed || bad reaper_keeps_its_own_ancestors_listed "$(cat "$list")"
+kill -KILL "$reused" 2>/dev/null || true
+
+# A driver nested in another, the way the callers run it: e2e-channel-fault.sh
+# runs `e2e-app.sh --redeploy-only || die` in the foreground under an EXIT-only
+# cleanup trap. Both are registered. The inner one's blocked call is what the
+# reaper kills; the inner driver itself must be TERMed, not SIGKILLed with the
+# other children, and the outer one's cleanup must get to run to its end
+# rather than be cut off by a TERM sent after it began.
+cat >"$TMP/nested-inner" <<EOF
+#!/bin/bash
+echo \$\$ >"$TMP/inner.pid"
+trap 'echo inner >"$TMP/inner.trap"' EXIT
+sleep 300
+EOF
+cat >"$TMP/nested-outer" <<EOF
+#!/bin/bash
+echo \$\$ >"$TMP/outer.pid"
+trap 'echo start >"$TMP/outer.cleanup"; sleep 0.3; echo done >>"$TMP/outer.cleanup"' EXIT
+bash "$TMP/nested-inner" || exit 1
+EOF
+( bash "$TMP/nested-outer" >/dev/null 2>&1 & )
+poll_until 2 0.1 test -s "$TMP/inner.pid" || bad reaper_nested_setup "the inner stand-in did not start"
+outer="$(cat "$TMP/outer.pid")"
+inner="$(cat "$TMP/inner.pid")"
+PIDS="$PIDS $outer $inner"
+{
+    printf '%s\t%s\t%s\n' "$outer" "$(ps -o lstart= -p "$outer")" e2e-channel-fault.sh
+    printf '%s\t%s\t%s\n' "$inner" "$(ps -o lstart= -p "$inner")" e2e-app.sh
+} >"$list"
+E2E_REAP_UNBLOCK_S=1 E2E_REAP_GRACE_S=3 e2e_reap_registered_drivers "$list" >/dev/null
+_no_pid_alive "$outer" "$inner" && [ -s "$TMP/inner.trap" ] \
+    && [ "$(tr '\n' ' ' <"$TMP/outer.cleanup" 2>/dev/null)" = "start done " ] \
+    && ok reaper_lets_nested_drivers_finish_their_traps \
+    || bad reaper_lets_nested_drivers_finish_their_traps "inner trap: '$(cat "$TMP/inner.trap" 2>/dev/null)', outer cleanup: '$(tr '\n' ' ' <"$TMP/outer.cleanup" 2>/dev/null)'"
+
+# A driver that traps only EXIT (e2e-silent-recording.sh) runs its cleanup the
+# moment TERM arrives, and that cleanup acts on the app it started as its own
+# child, after other work (restoring settings). The child must still be there
+# when it does: SIGKILLing the children together with the TERM took it away
+# first.
+cat >"$TMP/exit-only" <<EOF
+#!/bin/bash
+sleep 300 &
+app=\$!
+echo \$\$ >"$TMP/exit-only.pid"
+trap 'sleep 0.3; if kill -0 \$app 2>/dev/null; then echo alive; else echo gone; fi >"$TMP/exit-only.cleanup"; kill \$app' EXIT
+wait
+EOF
+( bash "$TMP/exit-only" >/dev/null 2>&1 & )
+poll_until 2 0.1 test -s "$TMP/exit-only.pid" || bad reaper_exit_only_setup "the stand-in did not start"
+eo="$(cat "$TMP/exit-only.pid")"
+PIDS="$PIDS $eo"
+printf '%s\t%s\t%s\n' "$eo" "$(ps -o lstart= -p "$eo")" e2e-silent-recording.sh >"$list"
+E2E_REAP_UNBLOCK_S=2 E2E_REAP_GRACE_S=4 e2e_reap_registered_drivers "$list" >/dev/null
+_no_pid_alive "$eo" && [ "$(cat "$TMP/exit-only.cleanup" 2>/dev/null)" = alive ] \
+    && ok reaper_leaves_the_app_child_to_the_drivers_cleanup \
+    || bad reaper_leaves_the_app_child_to_the_drivers_cleanup "cleanup saw the app: '$(cat "$TMP/exit-only.cleanup" 2>/dev/null)'"
+
+# Sourcing alone has no side effect: run as a driver would be named, in CI,
+# with a writable list directory, and nothing may be recorded.
+mkdir -p "$TMP/rt3"
+printf '#!/bin/bash\nsource "%s/scripts/lib/e2e-helpers.sh"\n' "$ROOT" >"$TMP/e2e-source-only.sh"
+GITHUB_ACTIONS=true RUNNER_TEMP="$TMP/rt3" bash "$TMP/e2e-source-only.sh"
+[ ! -e "$TMP/rt3/e2e-driver-pids" ] && ok sourcing_registers_nothing || bad sourcing_registers_nothing "wrote on source: $(cat "$TMP/rt3/e2e-driver-pids")"
+
+# Each driver calls e2e_register_driver right after sourcing the helpers: in
+# CI it records the driver; outside CI it does nothing.
+printf '#!/bin/bash\nsource "%s/scripts/lib/e2e-helpers.sh"\ne2e_register_driver\necho $$\n' "$ROOT" >"$TMP/e2e-fake.sh"
+mkdir -p "$TMP/rt"
+fake_pid="$(GITHUB_ACTIONS=true RUNNER_TEMP="$TMP/rt" bash "$TMP/e2e-fake.sh")"
+[ "$(cut -f1,3 "$TMP/rt/e2e-driver-pids")" = "$fake_pid"$'\t'"e2e-fake.sh" ] \
+    && ok register_records_the_driver || bad register_records_the_driver "$(cat "$TMP/rt/e2e-driver-pids" 2>/dev/null)"
+# A driver starting in a later step ends what an earlier step left behind
+# before it records itself.
+sleep 300 &
+left=$!
+disown "$left"
+PIDS="$PIDS $left"
+printf '%s\t%s\t%s\n' "$left" "$(ps -o lstart= -p "$left")" e2e-app.sh >"$TMP/rt/e2e-driver-pids"
+fake_pid="$(GITHUB_ACTIONS=true RUNNER_TEMP="$TMP/rt" bash "$TMP/e2e-fake.sh" 2>/dev/null | tail -1)"
+_no_pid_alive "$left" && [ "$(cut -f1 "$TMP/rt/e2e-driver-pids")" = "$fake_pid" ] \
+    && ok register_ends_a_leftover_driver_first || bad register_ends_a_leftover_driver_first "left $left, list $(cat "$TMP/rt/e2e-driver-pids")"
+GITHUB_ACTIONS='' RUNNER_TEMP="$TMP/rt2" bash "$TMP/e2e-fake.sh" >/dev/null
+[ ! -e "$TMP/rt2" ] && ok register_is_a_no_op_outside_ci || bad register_is_a_no_op_outside_ci "wrote outside CI"
 
 COMPLETED=1
 echo "$PASSED passed"
