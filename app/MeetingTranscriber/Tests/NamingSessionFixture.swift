@@ -26,6 +26,13 @@ final class NamingSessionMockDelegate: SpeakerNamingSessionDelegate {
     /// a write that did not land must pass nil, which is what keeps the
     /// recorded order able to say which payload is newest.
     private(set) var recordedSidecarDirs: [URL?] = []
+    /// The app track each dual-track re-run was handed, so a test can say
+    /// which folder the re-run read from.
+    private(set) var dualTrackAppPaths: [URL] = []
+    /// How many cached segments each transcript rebuild was handed, so a test
+    /// can tell the segments were found rather than infer it from a missing
+    /// warning.
+    private(set) var renderedSegmentCounts: [Int] = []
 
     func job(withID id: UUID) -> PipelineJob? {
         jobs[id]
@@ -61,17 +68,19 @@ final class NamingSessionMockDelegate: SpeakerNamingSessionDelegate {
 
     func runDualTrackDiarization(
         diarizeProcess _: any DiarizationProvider,
-        tracks _: (app: URL, mic: URL, micDelay: TimeInterval, viability: DualTrackViability?),
+        tracks: (app: URL, mic: URL, micDelay: TimeInterval, viability: DualTrackViability?),
         speakerCount _: Int?, title _: String, jobID _: UUID,
     ) throws -> DiarizationRun {
+        dualTrackAppPaths.append(tracks.app)
         throw DiarizationError.notAvailable
     }
 
     func renderLabeledTranscript(
-        run _: DiarizationRun, cachedSegments _: [TimestampedSegment],
+        run _: DiarizationRun, cachedSegments: [TimestampedSegment],
         isDualSource _: Bool, autoNames _: [String: String], note _: String?,
     ) -> String? {
-        nil
+        renderedSegmentCounts.append(cachedSegments.count)
+        return nil
     }
 }
 
@@ -80,10 +89,16 @@ final class NamingSessionMockDelegate: SpeakerNamingSessionDelegate {
 /// of those cannot coexist in one namespace.
 @MainActor
 enum NamingSessionFixture {
-    static func session(outputDir: URL?) -> SpeakerNamingSession {
+    static func session(
+        outputDir: URL?,
+        diarizer: (any DiarizationProvider)? = nil,
+        protocolGenerator: (() -> (any ProtocolGenerating)?)? = nil,
+    ) -> SpeakerNamingSession {
         SpeakerNamingSession(
             namingStore: SpeakerNamingStore(outputDir: nil),
             speakerMatcherFactory: PipelineQueue.throwawayMatcherFactory(),
+            diarizationFactory: diarizer.map { diarizer in { diarizer } },
+            protocolGeneratorFactory: protocolGenerator,
             outputDir: outputDir,
         )
     }
