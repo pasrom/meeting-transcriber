@@ -156,9 +156,11 @@
         /// currently-open window, or nil when either is missing. Typing needs both:
         /// the AX element to focus the field, the window to post key events to.
         /// Both are absent in the headless xctest process, so both are guarded.
-        static func uiTypeTarget(forWindowIdentifier identifier: String) -> (any UITypeTarget)? {
+        static func uiTypeTarget(
+            forWindowIdentifier identifier: String, windows: [NSWindow] = NSApp?.windows ?? [],
+        ) -> (any UITypeTarget)? {
             guard let element = axWindowElement(forIdentifier: identifier),
-                  let window = nsWindow(forIdentifier: identifier)
+                  let window = nsWindow(forIdentifier: identifier, windows: windows)
             else { return nil }
             return AXTypeSource(element: element, window: window)
         }

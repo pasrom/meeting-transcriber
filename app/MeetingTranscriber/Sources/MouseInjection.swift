@@ -63,9 +63,11 @@
             return window.convertPoint(fromScreen: screenPoint)
         }
 
-        static func click(atAXPoint axPoint: CGPoint, in window: NSWindow) -> Bool {
-            guard let app = NSApp, let primary = NSScreen.screens.first else { return false }
-            guard let windowPoint = windowPoint(
+        /// `app` is the application the events are posted to; the parameter exists
+        /// so a test can hand in nil and check the no-application branch in any
+        /// process, since the global `NSApp` is created once and never goes away.
+        static func click(atAXPoint axPoint: CGPoint, in window: NSWindow, app: NSApplication? = NSApp) -> Bool {
+            guard let app, let primary = NSScreen.screens.first, let windowPoint = windowPoint(
                 forAXPoint: axPoint, in: window, primaryScreenHeight: primary.frame.height,
             ) else { return false }
             // A synthetic click on an inactive app is delivered but not acted on:
