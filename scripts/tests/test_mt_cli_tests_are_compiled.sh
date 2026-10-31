@@ -60,10 +60,30 @@ while IFS= read -r manifest; do
     # 141 when grep exits on the first match while the producer still has more
     # than a pipe buffer to write, which turned a passing package red once the
     # file grew past about 13 KB below the match.
-    if grep -qE "^[[:space:]]*(- )?run:[[:space:]]*cd $rel && swift test" "$CI"; then
-        ok "ci.yml runs the tests of $rel"
+    # Two properties, checked one by one: a step compiles the tests from this
+    # checkout, and a step runs them. `swift test` is a shape of both.
+    # scripts/ci/test-shards.sh only runs, and refuses to pass unless every
+    # listed test ran, so with it `swift build --build-tests` must be there as
+    # well: without it the runner would find whatever bundle the SPM cache
+    # restored and run stale code against the pull request's tests, with every
+    # gate green.
+    run_line="^[[:space:]]*(- )?run:[[:space:]]*cd $rel && "
+    compiles='(swift test|swift build --build-tests)'
+    runs='(swift test|[^ ]*scripts/ci/test-shards\.sh run)'
+    # First line of each shape; the build has to come before the run, or the
+    # run finds the bundle of the previous job.
+    # `|| true`: under `set -e` a grep without a match would end the script
+    # inside the substitution, with no FAIL line and no summary.
+    compile_at="$( { grep -nE "${run_line}${compiles}" "$CI" || true; } | head -n 1 | cut -d: -f1)"
+    run_at="$( { grep -nE "${run_line}${runs}" "$CI" || true; } | head -n 1 | cut -d: -f1)"
+    if [ -z "$compile_at" ]; then
+        bad "ci.yml builds the tests of $rel" "this package declares a test target that no job in ci.yml builds. \`swift build\` does not build test targets, so those tests cannot fail and cannot be trusted."
+    elif [ -z "$run_at" ]; then
+        bad "ci.yml runs the tests of $rel" "the tests are built but no step runs them."
+    elif [ "$compile_at" -gt "$run_at" ]; then
+        bad "ci.yml builds the tests of $rel before running them" "the step that builds them (line $compile_at) comes after the one that runs them (line $run_at), so the run would find a stale bundle."
     else
-        bad "ci.yml runs the tests of $rel" "this package declares a test target that no job in ci.yml builds. \`swift build\` does not build test targets, so those tests cannot fail and cannot be trusted."
+        ok "ci.yml builds and runs the tests of $rel"
     fi
 done <<EOF
 $(find "$ROOT/app" "$ROOT/tools" -maxdepth 2 -name Package.swift 2>/dev/null | sort)

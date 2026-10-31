@@ -242,10 +242,11 @@ jobs:
       # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     # 25 min job-timeout = 20 min setup (cold cache) + ~5 min margin. The
-    # `Swift tests` step below has its own 18 min step-timeout so a hang
-    # surfaces as `timed_out` (clearly distinguishable from cancellation),
-    # not the opaque `cancelled` a bare job-timeout produces. See
-    # docs/plans/.local/open/2026-05-11-job-timeout-visibility.md.
+    # `Build tests` and `Swift tests` steps below have step-timeouts of
+    # their own so a hang there surfaces as `timed_out` (clearly
+    # distinguishable from cancellation), not the opaque `cancelled` a bare
+    # job-timeout produces; on a cold cache the job budget, not a step's,
+    # is still what runs out first.
     timeout-minutes: 25
     permissions:
       contents: read
@@ -287,14 +288,40 @@ jobs:
       # adds no network dependency that CI did not have.
       - name: Fetch the echo-cancellation model
         run: echo "MEETINGTRANSCRIBER_LOCALVQE_MODEL=$(./scripts/fetch-localvqe-model.sh)" >> "$GITHUB_ENV"
-      # 18 min step-timeout on the actual tests: typical hot-cache run is
-      # 5–7 min, so this is ~3× margin while still failing fast as
-      # `timed_out` (not `cancelled`) when a single test hangs.
-      # `--enable-code-coverage` adds ~10–15 % runtime and writes a
-      # `default.profdata` next to the xctest bundle.
+      # Build and run are separate steps so each has a timeout of its own and
+      # the run summary shows where the time went. Step timeouts fail as
+      # `timed_out`, which a bare job timeout would report as `cancelled`.
+      - name: Build tests
+        timeout-minutes: 15
+        run: cd app/MeetingTranscriber && swift build --build-tests --enable-code-coverage ${{ matrix.swift-flags }}
+      # Three shards for the runner's three vCPUs, not `swift test --parallel`,
+      # which starts one process per test method; the header of
+      # scripts/ci/test-shards.sh has the measurements and what the script
+      # guarantees. `--coverage` leaves the `default.profdata` that export-lcov
+      # reads. ModelPreloadTests is a cache pre-warm, not a test, and runs in
+      # setup-swift-test on a cache miss. 15 min step-timeout: the first hosted
+      # runs took 2 min (homebrew) and 4.5 min (appstore) on a hot cache, and
+      # the two legs' runners differed by 2x on a similar test count, so this
+      # is ~3x margin over the slow leg while still failing as `timed_out`.
+      # `--out` keeps the logs and raw profiles outside `.build`, which the
+      # SPM cache would otherwise save and restore.
       - name: Swift tests
-        timeout-minutes: 18
-        run: cd app/MeetingTranscriber && swift test --parallel --enable-code-coverage --skip ModelPreloadTests ${{ matrix.swift-flags }}
+        timeout-minutes: 15
+        run: cd app/MeetingTranscriber && ../../scripts/ci/test-shards.sh run --shards 3 --skip ModelPreloadTests --coverage --out "$RUNNER_TEMP/test-shards"
+      # The shard logs are what `test-shards.sh weights` regenerates the weights
+      # file from, and a plan is only balanced for the machine the weights were
+      # measured on, so the logs of this runner are kept. On a red run they also
+      # hold more of a dead shard than the 300 lines the step prints.
+      - name: Keep the shard logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-shard-logs-${{ matrix.variant }}
+          path: |
+            ${{ runner.temp }}/test-shards/shard-*.log
+            ${{ runner.temp }}/test-shards/plan.tsv
+          if-no-files-found: ignore
+          retention-days: 14
       # `tools/mt-cli` has its own test target, and until now nothing built it:
       # `swift build` skips test targets, and the only gate that touched the
       # test FILES was scripts/lint.sh, which formats and lints them without
