@@ -57,12 +57,20 @@ Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fa
 # Run menu bar app
 ./scripts/run_app.sh
 
-# Swift tests (parallel — ~1.4× faster than sequential)
+# Swift tests, the way CI runs them: build once, then a few long-lived xctest
+# processes over whole classes (scripts/ci/test-shards.sh, which also checks that
+# every listed test ran). `swift test --parallel` starts one process per test and
+# is slower at this suite size: 1.5x on a 16-core machine, 5x with the three
+# workers of the hosted runner; the script header has the numbers. Tests of one
+# shard share a process, so a test must not assert on state only a fresh process
+# has (`NSApp == nil`, say); inject that state instead, as MouseInjectionTests does.
 # Never pipe a test run into `tail`/`head`/`grep` to shorten it: the shell reports
-# the *last* command's status, so `swift test | tail -60` exits 0 on a red suite and
+# the *last* command's status, so `... | tail -60` exits 0 on a red suite and
 # the truncation hides which test failed. Redirect to a file and read that instead
-# (`swift test --parallel > /tmp/run.log 2>&1`), or enable `set -o pipefail`.
-cd app/MeetingTranscriber && swift test --parallel
+# (`> /tmp/run.log 2>&1`), or enable `set -o pipefail`. Run the suite with
+# CFFIXED_USER_HOME pointed at a scratch folder, or its tests write into the
+# real app data under ~/Library/Application Support/MeetingTranscriber.
+cd app/MeetingTranscriber && swift build --build-tests && ../../scripts/ci/test-shards.sh run --shards 3 --skip ModelPreloadTests
 
 # Swift tests under sanitizers (slow — TSan ~7.5 min, ASan ~4.5 min on M-series)
 # CI runs these nightly via cron + on push to main; locally use ad-hoc
@@ -184,7 +192,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **Chromium helper selection** | Yes (`ChromiumHelperFilter` reads argv via `KERN_PROCARGS2`) | Not measured: if the sandbox refuses the sysctl for other processes, every argv reads empty and the tap keeps all helpers (the issue #791 stall); the refusal is logged with its errno |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
-| **Tests** | ~1,900 | fewer (CLI + RPC tests excluded via `#if !APPSTORE`) |
+| **Tests** | ~4,100 | ~3,600 (CLI + RPC tests excluded via `#if !APPSTORE`) |
 
 - CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` and `DebugRPCServer.swift` (each entire file `#if !APPSTORE`)
 - `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically
