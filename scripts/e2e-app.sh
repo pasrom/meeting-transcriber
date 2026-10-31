@@ -45,6 +45,7 @@ QUIT_FOREIGN_APP=false   # hand-runs: quit a dev app this driver did not start i
 ECHO_CANCEL=false        # same two pairs with the canceller ON: assert the far end is taken out of the mic audio (see run_echo_cancel)
 QUIT_FLUSH=false         # quit with a manual recording running + assert the recording survives as a job (issue #745, see run_quit_flush)
 MIC_STALL=""             # stall | stall-after-delivery: withhold the mic's buffers and assert the progress watchdog (see run_mic_stall)
+UPGRADE=false            # start the build on the data v0.8.1 leaves behind, in an isolated home (see run_upgrade)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -71,12 +72,13 @@ while [ $# -gt 0 ]; do
         --quit-flush)       QUIT_FLUSH=true ;;
         --mic-stall)        MIC_STALL=stall ;;
         --mic-stall-late)   MIC_STALL=stall-after-delivery ;;
+        --upgrade)          UPGRADE=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                   [--reimport-recorded | --reimport-latest] [--keep-recordings]
                   [--naming-escape] [--naming-switch] [--echo-bleed] [--echo-cancel]
-                  [--naming-confirm] [--quit-flush] [--fixture path/to.wav]
+                  [--naming-confirm] [--quit-flush] [--upgrade] [--fixture path/to.wav]
 
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app           Leave the dev app running on exit. Default: quit it.
@@ -249,6 +251,16 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
   --mic-stall-late     Same, but the microphone delivers for its first 10 s and
                        then stops with no configuration change: the shape a
                        one-shot first-buffer check never sees.
+  --upgrade            Start this build on what v0.8.1 leaves on disk (a model in
+                       Documents/huggingface, an unreadable speakers.json, an
+                       interrupted queued job, a finished-job record), in an
+                       isolated home removed on exit and with the network closed
+                       but for localhost; what it asserts is listed at
+                       run_upgrade. Clones the model from E2E_UPGRADE_MODEL_SOURCE
+                       (a `huggingface` folder with openai_whisper-small and its
+                       tokenizer), by default the account's app model folder,
+                       which it only reads. Records nothing, so needs no TCC
+                       grant and no audio device. Standalone lane.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
   --quit-foreign-app   Outside CI the driver refuses to start while a dev app it did
                        not launch is running (someone may be using it). Pass this
@@ -370,6 +382,20 @@ if [ -n "$MIC_STALL" ] && { [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" =
     echo "Error: --mic-stall/--mic-stall-late is a standalone lane; incompatible with the other lane flags and --fixture" >&2
     exit 2
 fi
+# --upgrade launches its own app in its own home, with its own settings and the
+# network closed; any other lane in the same run would run against that home or
+# without network, and --keep-app would leave an app writing into a home the
+# lane removes.
+if [ "$UPGRADE" = true ] && { [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] \
+    || [ "$NAMING_SWITCH" = true ] || [ "$RECORD_ONLY" = true ] || [ "$REIMPORT_RECORDED" = true ] \
+    || [ "$REIMPORT_LATEST" = true ] || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] \
+    || [ "$REDEPLOY_ONLY" = true ] || [ "$TWO_MEETINGS" = true ] || [ "$MIC_ONLY" = true ] \
+    || [ "$TITLE_SOURCE" = true ] || [ "$ECHO_BLEED" = true ] || [ "$ECHO_CANCEL" = true ] \
+    || [ "$QUIT_FLUSH" = true ] || [ -n "$MIC_STALL" ] || [ -n "$SIMULATOR_FIXTURE" ] \
+    || [ "$APP_AFTER" = leave ]; }; then
+    echo "Error: --upgrade is a standalone lane; incompatible with the other lane flags, --fixture and --keep-app" >&2
+    exit 2
+fi
 
 # --mic-device-change needs the fault-injection seam compiled in, so it must
 # build — `defaults`/runtime flags can't add the -DE2E_FAULT_INJECTION code.
@@ -463,6 +489,33 @@ if [ -n "$MIC_STALL" ]; then
     [ -d "$HOME/Library/Application Support/FluidAudio" ] \
         && ln -s "$HOME/Library/Application Support/FluidAudio" "$APP_HOME/Library/Application Support/FluidAudio"
 fi
+# The upgrade lane's home: a temp dir of its own like the mic-stall lane's, but
+# seeded with what v0.8.1 leaves behind rather than empty, and with no link to
+# the host's model caches, because the WhisperKit model is the thing under test
+# and the lane switches diarization and VAD off so no other model is needed.
+# `_ug_cleanup` (armed here, run again by on_exit) quits the app this lane
+# launched, since nothing else of value runs in that home, and then removes the
+# home, unless the app could not be stopped. Keyed on the pid `_ug_launch`
+# records at once, not on the readiness poll's record, so a launch whose RPC
+# never came up is stopped too; a run that never launched leaves any running
+# dev app alone, since that one is not writing into this home.
+_UG_HOME_STEM=e2e-upgrade-home
+_ug_cleanup() {
+    [ -n "${_UG_HOME_PARENT:-}" ] && declare -F e2e_is_lane_home >/dev/null || return 0
+    e2e_is_lane_home "$APP_HOME" "$_UG_HOME_STEM" "$_UG_HOME_PARENT" || return 0
+    if [ -n "${_UG_APP_PID:-}" ] && kill -0 "$_UG_APP_PID" 2>/dev/null && ! quit_running_app; then
+        printf '[e2e-app] [upgrade] the app could not be stopped; leaving its home %s\n' "$APP_HOME" >&2
+        return 0
+    fi
+    rm -rf "${APP_HOME:?}"
+}
+if [ "$UPGRADE" = true ]; then
+    _UG_HOME_PARENT="${TMPDIR:-/tmp}"
+    _UG_HOME_PARENT="${_UG_HOME_PARENT%/}"   # the app reports its paths without it
+    APP_HOME="$(mktemp -d "$_UG_HOME_PARENT/$_UG_HOME_STEM.XXXXXX")"
+    trap '_ug_cleanup' EXIT
+    mkdir -p "$APP_HOME/Library/Application Support" "$APP_HOME/Documents" "$APP_HOME/Downloads"
+fi
 RPC_TOKEN_FILE="$APP_HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 RPC_BASE="http://127.0.0.1:9876"
 
@@ -543,6 +596,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/e2e-helpers.sh"
 # the install it checks for agree on what a model file looks like.
 # shellcheck source=lib/localvqe-resources.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/localvqe-resources.sh"
+# The v0.8.1 on-disk shapes and folder fingerprints the upgrade lane seeds and
+# compares with.
+# shellcheck source=lib/upgrade-seed.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/upgrade-seed.sh"
 
 require_command() {
     command -v "$1" >/dev/null || fail "missing command: $1"
@@ -679,6 +736,167 @@ _mic_only_self_heal_output() {
 # unhealed poisons the mic track of every later lane on this host.
 _mic_only_self_heal_output
 
+# --- Upgrade lane: seed and launch ------------------------------------------
+#
+# What v0.8.1 leaves on disk, laid out in the lane's own home (APP_HOME, a
+# mktemp dir; see `_ug_cleanup`), and the launch that starts the new build on
+# it. The on-disk shapes come from scripts/lib/upgrade-seed.sh, which says what
+# each one is derived from. The assertions are at `run_upgrade`.
+
+# The variant the lane loads, one it seeds incomplete next to it, and the
+# tokenizer the loaded one needs. Small, because the lane needs a real model
+# that loads, not a large one.
+_UG_VARIANT=openai_whisper-small
+_UG_INCOMPLETE_VARIANT=openai_whisper-base
+_UG_TOKENIZER=whisper-small
+# The account's real model folders, old and new location. What the lane's app
+# would touch there if the isolated home did not hold (this variant, its
+# download metadata and its tokenizer) is fingerprinted before and after; not
+# the whole folders, which other jobs on the same account change meanwhile.
+_UG_REAL_DOCS_HF="$HOME/Documents/huggingface"
+_UG_REAL_APP_HF="$HOME/Library/Application Support/MeetingTranscriber/huggingface"
+_ug_real_fingerprint() {
+    local base
+    for base in "$_UG_REAL_DOCS_HF" "$_UG_REAL_APP_HF"; do
+        echo "== $base"
+        upgrade_tree_fingerprint "$base/$UPGRADE_WHISPERKIT_REPO/$_UG_VARIANT"
+        upgrade_tree_fingerprint "$base/$UPGRADE_WHISPERKIT_REPO/.cache/huggingface/download/$_UG_VARIANT"
+        upgrade_tree_fingerprint "$base/$UPGRADE_TOKENIZER_ORG/$_UG_TOKENIZER"
+    done
+}
+# Where the model is cloned from: a `huggingface` folder in the current layout.
+# CI points it at the runner's pre-warmed test home; by default it is the
+# account's own app model folder. Only ever read.
+_UG_MODEL_SOURCE="${E2E_UPGRADE_MODEL_SOURCE:-$_UG_REAL_APP_HF}"
+# What the lane imports to have the queue built (see run_upgrade): short, since
+# only the restored job's transcript is read.
+_UG_TRIGGER_FIXTURE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_en.wav"
+# The lane's own files (seed copies, fingerprints, the app's output) sit in the
+# home but outside every folder the app owns.
+_UG_LANE_DIR="$APP_HOME/.e2e-upgrade"
+_UG_DATA_DIR="$APP_HOME/Library/Application Support/MeetingTranscriber"
+_UG_DOCS_HF="$APP_HOME/Documents/huggingface"
+_UG_APP_HF="$_UG_DATA_DIR/huggingface"
+_UG_STAGING_DIR="$_UG_DATA_DIR/recordings"
+_UG_IPC_DIR="$_UG_DATA_DIR/ipc"
+_UG_PENDING_TITLE="Upgrade Seed Interrupted"
+_UG_FINISHED_TITLE="Upgrade Seed Finished"
+# A v0.8.1 speaker entry cut off mid-embedding: valid JSON up to that point,
+# so it reads as a damaged file and not as an empty one.
+_UG_SPEAKERS_SEED='[{"name":"Seed Voice","embeddings":[[0.125,-0.5,0.25'
+# Closes the network to everything but localhost, where the RPC server answers.
+# Not to measure that the app avoids the network but to make a download fail
+# loudly: WhisperKit's downloader contacts the Hub before it looks at any local
+# file (see WhisperKitLocalSnapshot), so with this profile a model that was not
+# found locally ends in a failed load instead of a quiet re-download.
+_UG_SANDBOX_PROFILE='(version 1)(allow default)(deny network-outbound (remote ip "*:*"))(allow network-outbound (remote ip "localhost:*"))'
+# The lane's settings, passed as launch arguments: they land in the argument
+# domain, which overrides the dev bundle's stored preferences for this process
+# and is never written back. Diarization and VAD are off so no FluidAudio model
+# is needed behind the closed network, protocol generation is off so no
+# transcript leaves the machine, and auto-watch is off so nothing asks for the
+# microphone: a binary started directly, as here, is not the bundle the
+# runner's grants were made for.
+_UG_APP_ARGS=(
+    -transcriptionEngine whisperKit -whisperKitModel "$_UG_VARIANT"
+    -whisperKitCustomModelEnabled NO -whisperLanguage de
+    -diarize NO -vadEnabled NO -protocolProvider none -autoWatch NO
+    -recordOnly NO -liveTranscriptionEnabled NO -echoCancellationEnabled NO
+)
+
+_ug_preflight() {
+    require_command sandbox-exec
+    require_command shasum
+    upgrade_variant_complete "$_UG_MODEL_SOURCE/$UPGRADE_WHISPERKIT_REPO/$_UG_VARIANT" \
+        && [ -f "$_UG_MODEL_SOURCE/$UPGRADE_TOKENIZER_ORG/$_UG_TOKENIZER/tokenizer.json" ] \
+        || fail "--upgrade needs a complete $_UG_VARIANT and its $_UG_TOKENIZER tokenizer under '$_UG_MODEL_SOURCE' (set E2E_UPGRADE_MODEL_SOURCE to a huggingface folder that has them; in CI that is the runner home the runner-home action pre-warms)"
+    # The profile has to close the Hub to this host's processes, or "loaded
+    # without a download" proves nothing. Checked with curl under the same
+    # profile the app gets.
+    if sandbox-exec -p "$_UG_SANDBOX_PROFILE" curl --silent --max-time 10 -o /dev/null https://huggingface.co/ 2>/dev/null; then
+        fail "--upgrade: the sandbox profile did not stop a connection to huggingface.co, so the lane could not tell a local load from a download"
+    fi
+}
+
+# Lay out the v0.8.1 data. Refuses any target outside the lane's own home.
+_ug_seed() {
+    local label="[upgrade]" d now stem
+    [ "$APP_HOME" != "$HOME" ] && e2e_is_lane_home "$APP_HOME" "$_UG_HOME_STEM" "$_UG_HOME_PARENT" \
+        || fail "$label: refusing to seed '$APP_HOME', which is not this lane's temp home"
+    for d in "$_UG_LANE_DIR" "$_UG_DOCS_HF" "$_UG_DATA_DIR" "$OUTPUT_DIR"; do
+        upgrade_path_inside "$d" "$APP_HOME" || fail "$label: refusing to seed '$d', outside the lane's home $APP_HOME"
+    done
+    mkdir -p "$_UG_LANE_DIR" "$_UG_STAGING_DIR" "$_UG_IPC_DIR" "$OUTPUT_DIR/protocols" "$RECORDINGS_DIR"
+    _ug_real_fingerprint >"$_UG_LANE_DIR/real-models.before"
+
+    # 1. The model, where v0.8.1 downloaded it. Next to it an incomplete
+    # variant (one weight file missing) and something another tool keeps in
+    # the shared folder: neither is the app's to move.
+    upgrade_seed_whisperkit "$_UG_MODEL_SOURCE" "$_UG_DOCS_HF" "$_UG_VARIANT" "$_UG_TOKENIZER" \
+        || fail "$label: could not seed the model from '$_UG_MODEL_SOURCE'"
+    local repo="$_UG_DOCS_HF/$UPGRADE_WHISPERKIT_REPO"
+    # Stand-in files: the migration judges a variant by which files exist.
+    local bundle file
+    for bundle in "${UPGRADE_REQUIRED_BUNDLES[@]}"; do
+        for file in "${UPGRADE_REQUIRED_FILES[@]}"; do
+            [ "$bundle/$file" = TextDecoder/weights/weight.bin ] && continue
+            mkdir -p "$(dirname "$repo/$_UG_INCOMPLETE_VARIANT/$bundle.mlmodelc/$file")"
+            printf 'stand-in' >"$repo/$_UG_INCOMPLETE_VARIANT/$bundle.mlmodelc/$file"
+        done
+    done
+    mkdir -p "$_UG_DOCS_HF/models/example-org/other-model"
+    printf '{"model_type":"other"}\n' >"$_UG_DOCS_HF/models/example-org/other-model/config.json"
+    upgrade_tree_fingerprint "$repo/$_UG_VARIANT" >"$_UG_LANE_DIR/variant.seeded"
+    upgrade_tree_fingerprint "$repo/.cache/huggingface/download/$_UG_VARIANT" >"$_UG_LANE_DIR/metadata.seeded"
+    upgrade_tree_fingerprint "$repo/$_UG_INCOMPLETE_VARIANT" >"$_UG_LANE_DIR/incomplete.seeded"
+    upgrade_tree_fingerprint "$_UG_DOCS_HF/models/example-org" >"$_UG_LANE_DIR/other.seeded"
+    upgrade_tree_fingerprint "$_UG_DOCS_HF/$UPGRADE_TOKENIZER_ORG" >"$_UG_LANE_DIR/tokenizer.seeded"
+    upgrade_tree_digest "$_UG_DOCS_HF/$UPGRADE_TOKENIZER_ORG/$_UG_TOKENIZER" >"$_UG_LANE_DIR/tokenizer.digest"
+
+    # 2. A speaker DB that does not decode.
+    printf '%s' "$_UG_SPEAKERS_SEED" >"$_UG_DATA_DIR/speakers.json"
+    printf '%s' "$_UG_SPEAKERS_SEED" >"$_UG_LANE_DIR/speakers.seed"
+
+    # 3. An interrupted job in the queue snapshot, its recording still in
+    # staging, plus a finished job's record and the processed-recordings
+    # ledger every v0.8.1 install has. The ledger names an older recording, as
+    # it would, so the app does not seed it afresh from the staging folder.
+    now="$(date +%s)"
+    stem="$(date -r $(( now - 600 )) +%Y%m%d_%H%M%S)_upgrade-seed"
+    _UG_SEEDED_MIX="$_UG_STAGING_DIR/${stem}_mix.wav"
+    cp "$DEFAULT_FIXTURE" "$_UG_SEEDED_MIX"
+    _UG_PENDING_ID="$(uuidgen)"
+    _UG_FINISHED_ID="$(uuidgen)"
+    _UG_FINISHED_TRANSCRIPT="$OUTPUT_DIR/protocols/$(date -r $(( now - 86400 )) +%Y%m%d_%H%M)_upgrade-seed-finished.md"
+    printf '# Transcript\n\nSeed.\n' >"$_UG_FINISHED_TRANSCRIPT"
+    jq -n --argjson job "$(upgrade_v081_pipeline_job "$_UG_PENDING_ID" "$_UG_PENDING_TITLE" transcribing "$_UG_SEEDED_MIX" $(( now - 600 )))" \
+        '[$job]' >"$_UG_IPC_DIR/pipeline_queue.json"
+    jq -n --argjson rec "$(upgrade_v081_terminal_record "$_UG_FINISHED_ID" "$_UG_FINISHED_TITLE" "$_UG_FINISHED_TRANSCRIPT")" \
+        '[$rec]' >"$_UG_IPC_DIR/terminal_jobs.json"
+    jq -n --arg p "$RECORDINGS_DIR/$(date -r $(( now - 86400 )) +%Y%m%d_%H%M%S)_older_mix.wav" \
+        '[$p]' >"$_UG_IPC_DIR/processed_recordings.json"
+    log "$label: seeded v0.8.1 data in $APP_HOME (model $_UG_VARIANT in Documents, unreadable speakers.json, job $_UG_PENDING_ID interrupted while transcribing, finished record $_UG_FINISHED_ID)"
+}
+
+# Start the deployed binary directly, inside the sandbox profile, with the
+# lane's home and settings. Directly and not with `open`, because only a
+# process this script starts can be put in the profile; that is also why the
+# lane never touches anything a TCC grant guards. Appends to the lane's log.
+_ug_launch() {
+    # The installed app serves the same port when its automation API is on.
+    # The readiness check would then time out on a token mismatch and blame
+    # this app; say what is actually in the way instead.
+    local holder
+    holder="$(lsof -nP -iTCP:9876 -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+    [ -z "$holder" ] \
+        || fail "[upgrade]: 127.0.0.1:9876 is already served by pid $holder ($(ps -o command= -p "$holder" 2>/dev/null | cut -c1-100)); this lane's app could not answer there"
+    CFFIXED_USER_HOME="$APP_HOME" MEETINGTRANSCRIBER_DEBUG_RPC=1 MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1 \
+        nohup sandbox-exec -p "$_UG_SANDBOX_PROFILE" "$DEV_BUNDLE_DEPLOY/Contents/MacOS/MeetingTranscriber" \
+        "${_UG_APP_ARGS[@]}" >>"$_UG_LANE_DIR/app.log" 2>&1 &
+    # sandbox-exec execs the app, so this is the app's pid.
+    _UG_APP_PID=$!
+}
+
 # --- preflight ------------------------------------------------------------
 
 require_command curl
@@ -687,12 +905,13 @@ require_command swift
 require_command codesign
 
 [ -f "$SIMULATOR_FIXTURE" ] || fail "simulator fixture not found: $SIMULATOR_FIXTURE"
+[ "$UPGRADE" = true ] && _ug_preflight
 
 # Sanity check: a virtual input device is set as default. If the runner
 # host has no built-in mic and no BlackHole/Loopback, AVAudioEngine binds
 # to a no-input device and the dual-source recorder hits a libmalloc abort
 # (observed on Mac mini hosts). Surface the misconfiguration up-front.
-if ! system_profiler SPAudioDataType 2>/dev/null | grep -A4 "Default Input" | grep -q "Input Channels"; then
+if [ "$UPGRADE" != true ] && ! system_profiler SPAudioDataType 2>/dev/null | grep -A4 "Default Input" | grep -q "Input Channels"; then
     fail "no default audio input device — install BlackHole 2ch (brew install blackhole-2ch + reboot/coreaudiod restart) and set it as the default Input in System Settings → Sound"
 fi
 
@@ -902,12 +1121,12 @@ fi
 _DEV_APP_PATTERN="MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber"
 # The marker a driver running the app in the host's own home leaves.
 _E2E_HOST_MARKER="$HOME/Library/Application Support/MeetingTranscriber/.e2e-app-launched"
-# The one a lane with an isolated home (--mic-stall) leaves. Outside that home,
+# The one a lane with an isolated home (--mic-stall, --upgrade) leaves. Outside that home,
 # which the next run never sees: kept there, an app a failed run left behind
 # read as foreign to every later run.
 _E2E_ISOLATED_MARKER="$_MS_STATE_DIR/isolated-home-app-launched"
 _E2E_APP_MARKER="$_E2E_HOST_MARKER"
-[ -n "$MIC_STALL" ] && _E2E_APP_MARKER="$_E2E_ISOLATED_MARKER"
+[ "$APP_HOME" != "$HOME" ] && _E2E_APP_MARKER="$_E2E_ISOLATED_MARKER"
 _running_app="$( { pgrep -f "$_DEV_APP_PATTERN" || true; } | head -1)"
 if [ -n "$_running_app" ]; then
     # Whichever marker names the running app, whichever lane left it.
@@ -1051,7 +1270,7 @@ if [ -n "$MIC_STALL" ]; then
     log "[mic-stall] deployed bundle is a fault-injection build"
 fi
 
-if [ ! -x "$SIMULATOR_BIN" ]; then
+if [ "$UPGRADE" != true ] && [ ! -x "$SIMULATOR_BIN" ]; then
     log "Building meeting-simulator"
     (cd "$SIMULATOR_PKG" && swift build -c release)
 fi
@@ -1415,12 +1634,17 @@ if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
     log "CI: reset stale pipeline-queue snapshot ($_ipc_dir/pipeline_queue.json)"
 fi
 
+[ "$UPGRADE" = true ] && _ug_seed
+
 log "Launching $DEV_BUNDLE_DEPLOY"
 if [ -n "$MIC_STALL" ]; then
     # `open --env`, not a leading `env`: only the former reaches a process
     # LaunchServices starts (see the e2e-architecture skill).
     log "[mic-stall] app home $APP_HOME, microphone fault '$MIC_STALL'"
     open --env CFFIXED_USER_HOME="$APP_HOME" --env MEETINGTRANSCRIBER_E2E_MIC_FAULT="$MIC_STALL" "$DEV_BUNDLE_DEPLOY"
+elif [ "$UPGRADE" = true ]; then
+    log "[upgrade] app home $APP_HOME, network closed but for localhost"
+    _ug_launch
 elif [ "$MIC_DEVICE_CHANGE" = true ]; then
     # The fault build injects nothing unless asked, so a leftover fault bundle
     # cannot inject into a later, unrelated launch.
@@ -1448,11 +1672,14 @@ poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready \
     || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
 log "RPC up"
 # Record which app this driver started, for the provenance guard above.
-_launched_app="$( { pgrep -f "$_DEV_APP_PATTERN" || true; } | head -1)"
-if [ -n "$_launched_app" ]; then
-    mkdir -p "$(dirname "$_E2E_APP_MARKER")"
-    printf '%s launched' "$_launched_app" >"$_E2E_APP_MARKER"
-fi
+_record_launched_app() {
+    _launched_app="$( { pgrep -f "$_DEV_APP_PATTERN" || true; } | head -1)"
+    if [ -n "$_launched_app" ]; then
+        mkdir -p "$(dirname "$_E2E_APP_MARKER")"
+        printf '%s launched' "$_launched_app" >"$_E2E_APP_MARKER"
+    fi
+}
+_record_launched_app
 
 
 # Single trap covers the simulator process + record-only side-effects for
@@ -1472,6 +1699,9 @@ on_exit() {
     if [ "$QUIT_FLUSH" = true ] && [ -n "$_QF_BACKUP_DIR" ]; then
         _qf_restore_shared_state
     fi
+    # Upgrade: stop the app this lane started and remove its home, before the
+    # provenance below, which then finds the app gone. A no-op for other lanes.
+    _ug_cleanup
     # Leave the app's provenance for the next driver: still running means this
     # run kept it (--keep-app) or failed before the quit; gone means we quit it.
     if [ -n "${_launched_app:-}" ]; then
@@ -3275,6 +3505,281 @@ run_mic_stall() {
     SIM_PID=""
 }
 
+# --- upgrade lane -------------------------------------------------------------
+#
+# Every other lane starts the app on a clean or an isolated empty home, so
+# nothing exercises the new build on the data an older release left behind,
+# and three of this release's changes act only on such data. Seeded before
+# launch by `_ug_seed` (above, with what each seed is derived from); asserted
+# here, each change from the layer that shows it:
+#   1. WhisperKit models move once from Documents/huggingface to the app's own
+#      folder (WhisperKitModelMigration): the variant being loaded moves whole,
+#      inode for inode, with its download metadata; its tokenizer is copied;
+#      it loads with the network closed, so not through a download; nothing
+#      else in the shared folder is touched, an incomplete variant included;
+#      the new folder is excluded from backup; a relaunch moves nothing.
+#   2. An undecodable speakers.json is quarantined on the first write instead
+#      of being overwritten (SpeakerMatcher.mutateDB): launch leaves it byte
+#      for byte, the first write moves it to speakers.json.corrupt-<stamp>
+#      unchanged, the DB starts empty, the user is told, the app keeps running.
+#   3. Queue snapshot and finished-job records written by v0.8.1 are read by
+#      the new folder logic (PipelineQueue.loadSnapshot, TerminalJobStore):
+#      the old record is still served; the interrupted job is restored, runs
+#      to done, its recording moves from staging to <output>/recordings and
+#      into the ledger, and neither this launch nor the next makes a second
+#      job of it.
+# Then the account's real model folders are compared with their state before
+# the seed, which is what shows the isolated home held.
+#
+# The queue is built, and the snapshot read, on the first watch start or import
+# (`PipelineController.rebuild`). The lane cannot watch (see _UG_APP_ARGS), so
+# it imports a fixture, which runs the same rebuild; that job is the "trigger"
+# below and is counted like any other.
+
+_UG_MODEL_TIMEOUT_S=300
+
+# Fail with the tail of the app's own output, which a home removed at exit
+# would otherwise take with it.
+_ug_fail() {
+    log "[upgrade] last lines of the app's output:"
+    tail -n 40 "$_UG_LANE_DIR/app.log" 2>/dev/null | sed 's/^/    /' || true
+    fail "$@"
+}
+
+# Polls until the WhisperKit engine reports the lane's variant loaded. Any
+# `downloading` seen on the way fails at once: with the network closed a
+# download cannot succeed, and its being tried at all means the local copy was
+# not found where the migration should have put it. A `loading` followed by
+# `unloaded` is a failed load, and fails at once too.
+_UG_MODEL_STATE=""
+_UG_MODEL_SEEN=""
+_ug_model_settled() {
+    assert_app_alive
+    local state variant
+    read -r state variant < <(rpc /state | jq -r '.engines.whisperKit | "\(.modelState // "") \(.modelVariant // "")"' 2>/dev/null || true) || true
+    [ -n "$state" ] || return 1
+    [ "$state" = "$_UG_MODEL_STATE" ] || _UG_MODEL_SEEN="$_UG_MODEL_SEEN $state"
+    _UG_MODEL_STATE="$state"
+    case "$state" in
+        downloading) return 0 ;;
+        loaded) [ "$variant" = "$_UG_VARIANT" ] ;;
+        unloaded) case "$_UG_MODEL_SEEN" in *loading*) return 0 ;; esac; return 1 ;;
+        *) return 1 ;;
+    esac
+}
+_ug_await_model() {
+    local label="$1"
+    _UG_MODEL_STATE="" _UG_MODEL_SEEN=""
+    poll_until "$_UG_MODEL_TIMEOUT_S" 1 _ug_model_settled \
+        || _ug_fail "$label: WhisperKit did not load $_UG_VARIANT within ${_UG_MODEL_TIMEOUT_S}s (states seen:${_UG_MODEL_SEEN:- none}). Only 'unloaded' seen usually means a load that failed between two polls: with the network closed, a download attempt fails within milliseconds"
+    [ "$_UG_MODEL_STATE" = loaded ] \
+        || _ug_fail "$label: WhisperKit went '$_UG_MODEL_STATE' (states seen:$_UG_MODEL_SEEN). With the network closed that means it did not find $_UG_VARIANT in its own folder and tried the Hub"
+    log "$label: $_UG_VARIANT loaded with the network closed (states seen:$_UG_MODEL_SEEN)"
+}
+
+# Fails unless `dir` now fingerprints as recorded in `file`; with a fifth
+# argument, by that function instead (upgrade_tree_digest for a copy).
+_ug_expect_fingerprint() {
+    local label="$1" what="$2" dir="$3" file="$4" measure="${5:-upgrade_tree_fingerprint}"
+    "$measure" "$dir" >"$file.now"
+    cmp -s "$file" "$file.now" \
+        || _ug_fail "$label: $what differs ($dir): $(diff "$file" "$file.now" | head -5 | tr '\n' ' ')"
+}
+
+# The one entry in `dir` matching `pattern`, left in _UG_FOUND; fails on none
+# or several. A global rather than printed, because `_ug_fail` inside a command
+# substitution would exit only the subshell and lose the app's output tail.
+_UG_FOUND=""
+_ug_single() {
+    local label="$1" dir="$2" pattern="$3"
+    _UG_FOUND="$(find "$dir" -maxdepth 1 -name "$pattern" -print)"
+    [ -n "$_UG_FOUND" ] && [ "$(printf '%s\n' "$_UG_FOUND" | wc -l | tr -d ' ')" = 1 ] \
+        || _ug_fail "$label: expected exactly one $pattern in $dir, found: ${_UG_FOUND:-none}"
+}
+
+_ug_assert_settings() {
+    local label="[upgrade:settings]" snap
+    snap="$(rpc /state)"
+    jq -e --arg v "$_UG_VARIANT" '.settings.transcription.engine == "whisperKit"
+        and .settings.transcription.whisperKitModel == $v
+        and .settings.diarization.diarize == false and .settings.diarization.vadEnabled == false
+        and .settings.protocolGeneration.provider == "none" and .settings.detection.autoWatch == false
+        and .watchState == null' <<<"$snap" >/dev/null \
+        || _ug_fail "$label: the app did not take the lane's launch arguments: $(jq -c '{t: .settings.transcription, d: .settings.diarization.diarize, v: .settings.diarization.vadEnabled, p: .settings.protocolGeneration.provider, w: .settings.detection.autoWatch, watchState}' <<<"$snap")"
+    log "$label: launch arguments in effect (WhisperKit $_UG_VARIANT, no diarization, no VAD, no protocol, not watching)"
+}
+
+_ug_assert_model() {
+    local label="[upgrade:model]"
+    local old_repo="$_UG_DOCS_HF/$UPGRADE_WHISPERKIT_REPO" new_repo="$_UG_APP_HF/$UPGRADE_WHISPERKIT_REPO"
+    _ug_await_model "$label"
+    [ ! -e "$old_repo/$_UG_VARIANT" ] \
+        || _ug_fail "$label: $_UG_VARIANT is still in Documents/huggingface after a load from the app's folder"
+    _ug_expect_fingerprint "$label" "the moved $_UG_VARIANT (inode, size or time of a file)" \
+        "$new_repo/$_UG_VARIANT" "$_UG_LANE_DIR/variant.seeded"
+    [ ! -e "$old_repo/.cache/huggingface/download/$_UG_VARIANT" ] \
+        || _ug_fail "$label: the download metadata of $_UG_VARIANT was left in Documents/huggingface"
+    _ug_expect_fingerprint "$label" "the moved download metadata" \
+        "$new_repo/.cache/huggingface/download/$_UG_VARIANT" "$_UG_LANE_DIR/metadata.seeded"
+    _ug_expect_fingerprint "$label" "the $_UG_TOKENIZER tokenizer copied to the app's folder (contents)" \
+        "$_UG_APP_HF/$UPGRADE_TOKENIZER_ORG/$_UG_TOKENIZER" "$_UG_LANE_DIR/tokenizer.digest" upgrade_tree_digest
+    _ug_expect_fingerprint "$label" "the tokenizer in Documents (it is copied, never moved)" \
+        "$_UG_DOCS_HF/$UPGRADE_TOKENIZER_ORG" "$_UG_LANE_DIR/tokenizer.seeded"
+    _ug_expect_fingerprint "$label" "the incomplete $_UG_INCOMPLETE_VARIANT" \
+        "$old_repo/$_UG_INCOMPLETE_VARIANT" "$_UG_LANE_DIR/incomplete.seeded"
+    [ ! -e "$new_repo/$_UG_INCOMPLETE_VARIANT" ] \
+        || _ug_fail "$label: the incomplete $_UG_INCOMPLETE_VARIANT appeared in the app's folder"
+    _ug_expect_fingerprint "$label" "another tool's model in the shared folder" \
+        "$_UG_DOCS_HF/models/example-org" "$_UG_LANE_DIR/other.seeded"
+    [ -z "$(find "$_UG_APP_HF" \( -name '*.incomplete' -o -name '.whisper-*.partial-*' \) -print -quit)" ] \
+        || _ug_fail "$label: partial downloads or copies were left in the app's folder"
+    # Checked on the attribute, not with `tmutil isexcluded`: that reports the
+    # whole temp dir this home lives in as excluded, so it would pass anyway.
+    xattr -p com.apple.metadata:com_apple_backup_excludeItem "$_UG_APP_HF" >/dev/null 2>&1 \
+        || _ug_fail "$label: the app's model folder is not excluded from backup"
+    log "$label: moved whole with its metadata, tokenizer copied, incomplete variant and shared content untouched, folder excluded from backup"
+}
+
+_ug_assert_speakers() {
+    local label="[upgrade:speakers]" status corrupt
+    cmp -s "$_UG_LANE_DIR/speakers.seed" "$_UG_DATA_DIR/speakers.json" \
+        || _ug_fail "$label: launching changed the unreadable speakers.json; it must stay as it is until something writes"
+    jq -e '.speakerDB.count == 0' <<<"$(rpc /state)" >/dev/null \
+        || _ug_fail "$label: /state does not read the unreadable DB as empty"
+    # Any write runs the read-modify-write that quarantines; deleting a name
+    # nobody has is the one that changes nothing else.
+    status="$(rpc_post_status /action/deleteSpeaker '{"name":"Nobody Enrolled"}')"
+    [ "$status" = 409 ] \
+        || _ug_fail "$label: a write to the unreadable DB answered $status, expected 409 (set aside and replaced)"
+    _ug_single "$label" "$_UG_DATA_DIR" 'speakers.json.corrupt-*'
+    corrupt="$_UG_FOUND"
+    cmp -s "$_UG_LANE_DIR/speakers.seed" "$corrupt" \
+        || _ug_fail "$label: the quarantined file is not the original bytes"
+    [ "$(stat -f '%Lp' "$corrupt")" = 600 ] \
+        || _ug_fail "$label: the quarantined file is not owner-only ($(stat -f '%Lp' "$corrupt"))"
+    jq -e '. == []' "$_UG_DATA_DIR/speakers.json" >/dev/null 2>&1 \
+        || _ug_fail "$label: the replacement speakers.json is not an empty DB"
+    jq -e --arg f "$(basename "$corrupt")" '.speakerDB.count == 0
+        and any(.notifications[]; .title == "Voice profiles could not be read" and (.body | contains($f)))' \
+        <<<"$(rpc /state)" >/dev/null \
+        || _ug_fail "$label: the user was not told the profiles were set aside as $(basename "$corrupt")"
+    assert_app_alive
+    log "$label: quarantined unchanged as $(basename "$corrupt"), DB empty, user notified"
+}
+
+_ug_assert_finished_record() {
+    local label="[upgrade:finished-record]" body
+    body="$(rpc "/v1/jobs/$_UG_FINISHED_ID")"
+    jq -e --arg t "$_UG_FINISHED_TITLE" --arg p "$_UG_FINISHED_TRANSCRIPT" \
+        '.state == "done" and .meetingTitle == $t and .transcriptPath == $p
+         and .echo.windowsScored == 12 and .echo.cancellationSeconds == null' <<<"$body" >/dev/null 2>&1 \
+        || _ug_fail "$label: GET /v1/jobs/$_UG_FINISHED_ID does not serve the v0.8.1 record: ${body:-<no answer>}"
+    log "$label: v0.8.1 record still served"
+}
+
+# POST /v1/jobs for one file; the one job id it created is left in _UG_JOB_ID
+# (a global for the reason given at `_ug_single`).
+_UG_JOB_ID=""
+_ug_enqueue() {
+    local enq
+    enq="$(rpc_post /v1/jobs "$(jq -nc --arg p "$1" '{paths: [$p]}')")"
+    _UG_JOB_ID="$(jq -er 'select(.jobIDs | length == 1) | .jobIDs[0]' <<<"$enq" 2>/dev/null || true)"
+    [ -n "$_UG_JOB_ID" ] || _ug_fail "[upgrade]: POST /v1/jobs did not create exactly one job: $enq"
+}
+
+_UG_STATUS=""
+_ug_job_terminal() {
+    assert_app_alive
+    _UG_STATUS="$(rpc "/v1/jobs/$1")"
+    jq -e '.state == "done" or .state == "error"' <<<"$_UG_STATUS" >/dev/null 2>&1
+}
+# Waits for a job to finish and requires done; leaves its status in _UG_STATUS.
+_ug_await_done() {
+    local label="$1" what="$2" id="$3"
+    poll_until "$PIPELINE_TIMEOUT_S" 2 _ug_job_terminal "$id" \
+        || _ug_fail "$label: $what ($id) did not finish within ${PIPELINE_TIMEOUT_S}s (last: ${_UG_STATUS:-<no answer>})"
+    jq -e '.state == "done"' <<<"$_UG_STATUS" >/dev/null \
+        || _ug_fail "$label: $what ($id) ended in error: $(jq -r '.error // "?"' <<<"$_UG_STATUS")"
+}
+
+# The finished-job records, which every job that reaches a terminal state adds
+# to: a recovered duplicate of the restored recording would show up here.
+_ug_assert_records() {
+    local label="$1" expected="$2"
+    local records="$_UG_IPC_DIR/terminal_jobs.json"
+    jq -e --argjson n "$expected" 'length == $n' "$records" >/dev/null 2>&1 \
+        || _ug_fail "$label: expected $expected finished-job records, found: $(jq -c '[.[] | {jobID, meetingTitle, state}]' "$records" 2>/dev/null)"
+    jq -e 'all(.[]; .meetingTitle | startswith("Recovered Recording") | not)' "$records" >/dev/null \
+        || _ug_fail "$label: the seeded recording was picked up a second time as an orphan: $(jq -c '[.[] | .meetingTitle]' "$records")"
+}
+
+_ug_assert_restored_job() {
+    local label="[upgrade:restored-job]" trigger transcript relocated base
+    _ug_enqueue "$_UG_TRIGGER_FIXTURE"
+    trigger="$_UG_JOB_ID"
+    log "$label: imported the fixture as job $trigger, which builds the queue and reads the snapshot"
+    _ug_await_done "$label" "the interrupted v0.8.1 job" "$_UG_PENDING_ID"
+    transcript="$(jq -r '.transcriptPath // empty' <<<"$_UG_STATUS")"
+    upgrade_path_inside "$transcript" "$OUTPUT_DIR" && [ -s "$transcript" ] \
+        || _ug_fail "$label: the restored job's transcript '$transcript' is not a file under $OUTPUT_DIR"
+    transcript_is_german "$transcript" \
+        || _ug_fail "$label: the restored job's transcript is not German (matched: ${GERMAN_MARKER_HITS:-none})"
+    [ ! -e "$_UG_SEEDED_MIX" ] \
+        || _ug_fail "$label: the recording is still in staging after its job finished"
+    _ug_single "$label" "$RECORDINGS_DIR" '*_mix.wav'
+    relocated="$_UG_FOUND"
+    base="$(basename "$relocated")"
+    jq -e --arg b "/MeetingTranscriber/recordings/$base" 'any(.[]; endswith($b))' \
+        "$_UG_IPC_DIR/processed_recordings.json" >/dev/null \
+        || _ug_fail "$label: the processed-recordings ledger does not name the moved recording $base: $(cat "$_UG_IPC_DIR/processed_recordings.json")"
+    _ug_await_done "$label" "the import" "$trigger"
+    _ug_assert_records "$label" 3
+    _UG_RELOCATED_MIX="$relocated"
+    log "$label: restored, done, transcript in the output folder, recording moved to $RECORDINGS_DIR and into the ledger, no duplicate"
+}
+
+# Quit, start again on the same home, and require that nothing is migrated or
+# run a second time.
+_ug_relaunch_and_assert() {
+    local label="[upgrade:relaunch]" new_repo="$_UG_APP_HF/$UPGRADE_WHISPERKIT_REPO" trigger
+    upgrade_tree_fingerprint "$new_repo/$_UG_VARIANT" >"$_UG_LANE_DIR/variant.before-relaunch"
+    quit_running_app || _ug_fail "$label: could not quit the app"
+    _ug_launch
+    poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || _ug_fail "$label: RPC did not come back after the relaunch"
+    _record_launched_app
+    _ug_await_model "$label"
+    _ug_expect_fingerprint "$label" "$_UG_VARIANT in the app's folder (the second launch must not move or rewrite it)" \
+        "$new_repo/$_UG_VARIANT" "$_UG_LANE_DIR/variant.before-relaunch"
+    [ ! -e "$_UG_DOCS_HF/$UPGRADE_WHISPERKIT_REPO/$_UG_VARIANT" ] \
+        || _ug_fail "$label: $_UG_VARIANT reappeared in Documents/huggingface"
+    _ug_enqueue "$_UG_TRIGGER_FIXTURE"
+    trigger="$_UG_JOB_ID"
+    _ug_await_done "$label" "the second import" "$trigger"
+    _ug_assert_records "$label" 4
+    jq -e '.state == "done"' <<<"$(rpc "/v1/jobs/$_UG_PENDING_ID")" >/dev/null \
+        || _ug_fail "$label: the restored job no longer reads as done"
+    [ -f "$_UG_RELOCATED_MIX" ] \
+        || _ug_fail "$label: the moved recording $_UG_RELOCATED_MIX is gone"
+    log "$label: no second migration, no second run of the restored job"
+}
+
+_ug_assert_isolation() {
+    local label="[upgrade:isolation]"
+    _ug_expect_fingerprint "$label" "$_UG_VARIANT and its tokenizer in the account's real model folders" \
+        "" "$_UG_LANE_DIR/real-models.before" _ug_real_fingerprint
+    log "$label: $_UG_VARIANT and its tokenizer in the account's real model folders are as they were"
+}
+
+run_upgrade() {
+    _ug_assert_settings
+    _ug_assert_model
+    _ug_assert_speakers
+    _ug_assert_finished_record
+    _ug_assert_restored_job
+    _ug_relaunch_and_assert
+    _ug_assert_isolation
+}
+
 # --- echo-bleed lane ------------------------------------------------------
 #
 # A dual-source recording made on loudspeakers carries the remote voices on the
@@ -4190,6 +4695,8 @@ elif [ "$QUIT_FLUSH" = true ]; then
     run_quit_flush
 elif [ -n "$MIC_STALL" ]; then
     run_mic_stall
+elif [ "$UPGRADE" = true ]; then
+    run_upgrade
 elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"

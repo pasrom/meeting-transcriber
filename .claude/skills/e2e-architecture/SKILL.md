@@ -183,8 +183,9 @@ PRs are excluded from the self-hosted runner.
   app track. The microphone file is not empty in the `stall` variant, by design:
   a capture restarted before it ever delivered bridges each wait with silence,
   so the track runs to the last rebuild as exact zeros, and that is what is
-  asserted. It is the only lane that runs the app with an isolated home
-  (`CFFIXED_USER_HOME` set to a temp dir through `open --env`), so it neither
+  asserted. It is one of two lanes that run the app with an isolated home
+  (`CFFIXED_USER_HOME` set to a temp dir through `open --env`; the other is
+  `--upgrade`, below), so it neither
   reads nor writes the host's data dir or output folder; UserDefaults are not
   redirected by that variable, and protocol generation is switched off for the
   run and restored after it, from a record kept under
@@ -207,6 +208,35 @@ PRs are excluded from the self-hosted runner.
   fault bundle a lane leaves at the shared deploy path cannot inject into a
   later launch; `--mic-device-change` asks for its fault with
   `MEETINGTRANSCRIBER_E2E_MIC_FAULT=device-change`. It has no workflow yet: it is run by hand.
+- The `--upgrade` lane is the only one that starts the app on data an older
+  release left behind; every other lane runs on a clean or an empty home, and
+  three changes of the release after v0.8.1 act only on such data. In its own
+  temp home it seeds, in v0.8.1's on-disk formats (derived from the sources at
+  that tag, in `scripts/lib/upgrade-seed.sh`): a WhisperKit model in
+  `Documents/huggingface` with its Hub metadata and tokenizer, an incomplete
+  variant and another tool's folder beside it, an undecodable `speakers.json`,
+  a job interrupted while transcribing in the queue snapshot with its recording
+  in staging, and a finished-job record. It asserts the model moved whole
+  (inode-identical fingerprint) and loaded, the tokenizer was copied, nothing
+  else in the shared folder changed, the new folder is excluded from backup; the
+  speaker DB survives the launch byte for byte and is quarantined unchanged on
+  the first write (a `deleteSpeaker` of nobody, answered `409`); the old record
+  is still served; the interrupted job runs to `done`, its recording moves to
+  `<output>/recordings` and into the ledger, and neither that launch nor a
+  relaunch makes a second job of it; and the account's real model folders are
+  unchanged. "Loaded without a download" is enforced, not inferred: the app is
+  started directly under `sandbox-exec` with a profile that closes the network
+  to everything but localhost, so a model not found locally ends in a failed
+  load (measured with an incomplete variant: `HubClientError`, nothing moved).
+  That is also why it cannot use `open` and why it never watches: a binary
+  started directly is not the bundle the runner's grants were made for, so the
+  lane touches nothing TCC guards. Its own settings go in as launch arguments
+  (the argument domain), which override the bundle's stored preferences for that
+  process without being written; the preference writes every e2e-app.sh run
+  makes before launch still happen. The queue,
+  and with it the snapshot restore, is built by an import of the fixture, which
+  runs the same rebuild a watch start does. The model is cloned from
+  `E2E_UPGRADE_MODEL_SOURCE`, in CI the runner's pre-warmed test home.
 - The `--quit-flush` lane (issue #745) quits the app while a manual recording
   runs and asserts the recording survives as a job. What it proves, its host
   guards and its state backup/restore are written at `run_quit_flush` in
