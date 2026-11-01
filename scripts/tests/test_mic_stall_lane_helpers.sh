@@ -147,12 +147,20 @@ DEV_PID="$(start "$TMP/MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscri
 PIDS="$PIDS $DEV_PID"
 OTHER_PID="$(start "$TMP/bin/MeetingTranscriber")"
 PIDS="$PIDS $OTHER_PID"
-sleep 0.2
+# Wait (with a ceiling only a stand-in that never starts reaches) until both
+# have exec'd under the name, not for a fixed time a loaded host can overrun:
+# a dev pid missing from the answer would pass its check untested.
+_both_named() {
+    local named p
+    named="$(pgrep -x MeetingTranscriber)"
+    for p in "$DEV_PID" "$OTHER_PID"; do grep -qx "$p" <<<"$named" || return 1; done
+}
+poll_until 20 0.1 _both_named || bad non_dev_setup "the stand-ins never ran as MeetingTranscriber"
 found="$(non_dev_meetingtranscriber_pids)"
 case " $found " in *" $OTHER_PID "*) ok non_dev_app_is_reported ;; *) bad non_dev_app_is_reported "got '$found'" ;; esac
 case " $found " in *" $DEV_PID "*) bad dev_app_is_not_reported "got '$found'" ;; *) ok dev_app_is_not_reported ;; esac
 kill -KILL "$OTHER_PID" 2>/dev/null || true
-sleep 0.1
+poll_until 20 0.1 _no_pid_alive "$OTHER_PID" || bad non_dev_kill_setup "pid $OTHER_PID outlived SIGKILL"
 found="$(non_dev_meetingtranscriber_pids)"
 case " $found " in *" $OTHER_PID "*) bad nothing_reported_once_it_is_gone "got '$found'" ;; *) ok nothing_reported_once_it_is_gone ;; esac
 
