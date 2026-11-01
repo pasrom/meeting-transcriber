@@ -42,12 +42,27 @@ struct StoredSpeaker: Codable, Identifiable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
-        if let multi = try? container.decode([[Float]].self, forKey: .embeddings) {
-            embeddings = multi
-        } else if let single = try? container.decode([Float].self, forKey: .embedding) {
-            embeddings = [single]
-        } else {
+        // The first voice field that decodes wins, as before; a damaged
+        // `embeddings` beside a valid legacy `embedding` therefore still loads
+        // with the legacy voice, as it always did. Neither present (or both
+        // null) means no samples. A field that is present but does not
+        // decode, with no usable one beside it, throws: the entry is then
+        // dropped and kept in the copied-aside file rather than loaded with
+        // its voice silently gone.
+        let multi = Result { try container.decodeIfPresent([[Float]].self, forKey: .embeddings) }
+        let single = Result { try container.decodeIfPresent([Float].self, forKey: .embedding) }
+        switch (multi, single) {
+        case let (.success(samples?), _):
+            embeddings = samples
+
+        case let (_, .success(sample?)):
+            embeddings = [sample]
+
+        case (.success(nil), .success(nil)):
             embeddings = []
+
+        case let (.failure(error), _), let (_, .failure(error)):
+            throw error
         }
         centroid = try container.decodeIfPresent([Float].self, forKey: .centroid)
         centroidSampleCount = try container.decodeIfPresent(Int.self, forKey: .centroidSampleCount) ?? 0

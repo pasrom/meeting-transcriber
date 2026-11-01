@@ -82,6 +82,43 @@ final class SpeakerDBSalvageTests: XCTestCase { // swiftlint:disable:this balanc
         XCTAssertEqual(result.dropped, 1)
     }
 
+    func testEmbeddingOverflowingFloatIsDropped() throws {
+        let result = try decode(#"[{"name":"A","embeddings":[[1,1e39]]},{"name":"B","embeddings":[[1]]}]"#)
+
+        XCTAssertEqual(result.names, ["B"])
+        XCTAssertEqual(result.dropped, 1)
+    }
+
+    /// A damaged voice field used to load as no voice at all, so the entry
+    /// counted as intact and the next write saved it empty, unreported.
+    func testEntryWithADamagedEmbeddingsFieldIsDropped() throws {
+        let result = try decode("""
+        [{"name":"A","embeddings":"x"},{"name":"L","embedding":[[1]]},{"name":"B","embeddings":[[1]]}]
+        """)
+
+        XCTAssertEqual(result.names, ["B"])
+        XCTAssertEqual(result.dropped, 2)
+    }
+
+    /// Before the entry-by-entry decode such an entry loaded with its legacy
+    /// voice; it must not be dropped now.
+    func testDamagedEmbeddingsFieldBesideAValidLegacyOneKeepsTheLegacyVoice() throws {
+        let result = try SpeakerMatcher.decodeSalvaging(Data(#"[{"name":"M","embeddings":"x","embedding":[2]}]"#.utf8))
+
+        XCTAssertEqual(result.kept.map(\.embeddings), [[[2]]])
+        XCTAssertEqual(result.dropped, 0)
+    }
+
+    /// Absent or null still falls back to the legacy single `embedding`.
+    func testEmbeddingsAbsentOrNullStillFallsBackToTheLegacyKey() throws {
+        let result = try SpeakerMatcher.decodeSalvaging(Data("""
+        [{"name":"A","embedding":[1,2]},{"name":"B","embeddings":null,"embedding":[3]},{"name":"C"}]
+        """.utf8))
+
+        XCTAssertEqual(result.kept.map(\.embeddings), [[[1, 2]], [[3]], []])
+        XCTAssertEqual(result.dropped, 0)
+    }
+
     func testEmptyArrayKeepsNothingAndDropsNothing() throws {
         let result = try decode("[]")
 
