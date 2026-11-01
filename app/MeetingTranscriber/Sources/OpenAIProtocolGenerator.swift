@@ -19,8 +19,8 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     /// a struggling LLM that trickles tokens run for hours (each byte resets the
     /// idle timer); this deadline ends it regardless. Generous by default so a
     /// legitimately long protocol isn't cut off. Note the deadline is applied per
-    /// attempt, so the `max_completion_tokens` fallback in `generate()` can span
-    /// up to twice it — only reachable via an endpoint that trickles a 400 body.
+    /// attempt, so a call can span up to three times it (see `RequestShape`) —
+    /// only reachable via an endpoint that trickles its 400 bodies.
     let maxTotalSeconds: TimeInterval
     /// Output-token cap sent as `max_tokens`, or `max_completion_tokens` when the
     /// endpoint rejects the former. Bounds a runaway/verbose
@@ -36,7 +36,9 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     /// models that accept it emit no reasoning tokens.
     let maxOutputTokens: Int
     /// Sampling overrides. Nil means the key is omitted from the request body
-    /// and the server's default applies.
+    /// and the server's default applies. An endpoint that refuses them with a
+    /// 400 naming `temperature` or `top_p` gets the request again without
+    /// either; the settings themselves are left alone.
     let temperature: Double?
     let topP: Double?
     let session: URLSession
@@ -86,12 +88,84 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
             ["role": "user", "content": transcript],
         ]
 
-        do {
-            return try await send(messages: messages, tokenLimit: .maxTokens)
-        } catch let ProtocolError.httpError(status, body)
-            where status == 400 && Self.rejectsMaxTokens(body) {
-            logger.info("Endpoint rejected 'max_tokens'; retrying with 'max_completion_tokens'")
-            return try await send(messages: messages, tokenLimit: .maxCompletionTokens)
+        var shape = RequestShape(
+            tokenLimit: .maxTokens,
+            includesSampling: temperature != nil || topP != nil,
+        )
+        while true {
+            do {
+                return try await send(messages: messages, shape: shape)
+            } catch let refusal as HTTPRefusal {
+                guard let next = shape.fallback(status: refusal.status, after: refusal.body) else {
+                    throw ProtocolError.httpError(refusal.status, refusal.shownBody)
+                }
+                shape = next
+            }
+        }
+    }
+
+    /// A non-2xx answer as `streamProtocol` read it. `body` is everything read,
+    /// up to `errorBodyReadCap`, and is what the fallbacks inspect; `shownBody`
+    /// is the shorter prefix that is logged and, when no fallback applies,
+    /// surfaced to the user as `ProtocolError.httpError`.
+    struct HTTPRefusal: Error {
+        let status: Int
+        let body: String
+        let shownBody: String
+    }
+
+    /// How much of an error body is read, in characters with line separators
+    /// excluded: enough for a pretty-printed refusal spread over many lines (as
+    /// LiteLLM sends them) to arrive whole and parse.
+    static let errorBodyReadCap = 4096
+    /// How much of it is logged and shown to the user: the same bound as before
+    /// the read cap was raised.
+    static let errorBodyShownCap = 500
+
+    /// The leading lines of an error body that are logged and shown: up to and
+    /// including the line that takes the running character count past
+    /// `errorBodyShownCap`. Lines are joined with newlines, like the full body,
+    /// because joining without a separator fuses words across lines.
+    static func shownErrorBody(_ lines: [String]) -> String {
+        var kept: [String] = []
+        var count = 0
+        for line in lines where count <= errorBodyShownCap {
+            kept.append(line)
+            count += line.count
+        }
+        return kept.joined(separator: "\n")
+    }
+
+    /// The parts of the request body a refusal can make `generate()` change.
+    /// Each fallback is one-way: the cap moves from `max_tokens` to
+    /// `max_completion_tokens`, and sent sampling overrides are dropped. Every
+    /// retry applies at least one of them (a single refusal may apply both), so
+    /// `generate()` makes at most three attempts.
+    struct RequestShape: Equatable {
+        var tokenLimit: TokenLimitParameter
+        /// Whether the overrides that are set go into the body. Starts true only
+        /// when at least one is set, so a refusal never retries without them
+        /// when nothing was sent.
+        var includesSampling: Bool
+
+        /// The shape to retry with after an HTTP `status` carrying `errorBody`,
+        /// or nil when it names nothing a fallback can still change (a fallback
+        /// that is already applied changes nothing), in which case the error
+        /// stands. The `max_tokens` rename is only ever answered with a 400, so
+        /// that fallback stays on 400; a sampling refusal may also come as the
+        /// 422 that FastAPI-based servers (TGI, vLLM's validation layer) use.
+        func fallback(status: Int, after errorBody: String) -> Self? {
+            var next = self
+            if status == 400, tokenLimit == .maxTokens, OpenAIProtocolGenerator.rejectsMaxTokens(errorBody) {
+                logger.info("Endpoint rejected 'max_tokens'; retrying with 'max_completion_tokens'")
+                next.tokenLimit = .maxCompletionTokens
+            }
+            if status == 400 || status == 422, includesSampling,
+               OpenAIProtocolGenerator.rejectsSamplingParameter(errorBody) {
+                logger.info("Endpoint rejected the sampling overrides; retrying without temperature/top_p for this request")
+                next.includesSampling = false
+            }
+            return next == self ? nil : next
         }
     }
 
@@ -114,26 +188,90 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
             && errorBody.contains(TokenLimitParameter.maxTokens.rawValue)
     }
 
-    /// The chat-completions request body. Shared by the first attempt and the
-    /// `max_completion_tokens` retry, so both carry the same sampling overrides;
-    /// an unset override is omitted rather than sent as a default.
-    func requestBody(messages: [[String: Any]], tokenLimit: TokenLimitParameter) -> [String: Any] {
+    /// True when an error body names a sampling parameter as a whole word, in
+    /// any case (`top_probs` does not count): reasoning models refuse any non-default
+    /// value, others the key itself or both keys together. Both overrides are
+    /// dropped either way, so one retry settles all of these. Only the parts
+    /// that describe the error are searched (see `errorTexts`), since some
+    /// servers echo the request, overrides included, in a validation error.
+    static func rejectsSamplingParameter(_ errorBody: String) -> Bool {
+        let names = Set(OpenAISamplingParameter.allCases.map(\.rawValue))
+        return errorTexts(in: errorBody).contains { text in
+            text.split { !($0.isLetter || $0.isNumber || $0 == "_") }
+                .contains { names.contains($0.lowercased()) }
+        }
+    }
+
+    /// The parts of an error body that describe the error. Plain text is
+    /// searched as is. JSON is searched by `errorTexts(inJSON:)`, and a body
+    /// that starts like JSON but does not parse (cut off at the read cap)
+    /// yields nothing, since its raw text may hold an echoed request. A string
+    /// inside the JSON goes through these same rules, so an upstream body that
+    /// a proxy embeds as a string is searched as JSON, not as raw text.
+    private static func errorTexts(in text: String) -> [String] {
+        guard let json = try? JSONSerialization.jsonObject(with: Data(text.utf8)) else {
+            let first = text.trimmingCharacters(in: .whitespacesAndNewlines).first
+            return first == "{" || first == "[" ? [] : [text]
+        }
+        return errorTexts(inJSON: json)
+    }
+
+    /// Every string value inside an OpenAI-style `error` object, nested ones
+    /// included (OpenRouter wraps the upstream refusal in `error.metadata.raw`);
+    /// in an object without one, its `error`, `param`, `message` and `detail`
+    /// strings; in an array (Gemini answers `[{"error": ...}]`), its elements.
+    /// Object keys are never searched, so a request echoed as an object does
+    /// not match.
+    private static func errorTexts(inJSON json: Any) -> [String] {
+        switch json {
+        case let array as [Any]:
+            return array.flatMap(errorTexts(inJSON:))
+
+        case let object as [String: Any]:
+            if let error = object["error"] as? [String: Any] {
+                return stringValues(in: error).flatMap(errorTexts(in:))
+            }
+            return ["error", "param", "message", "detail"]
+                .compactMap { object[$0] as? String }
+                .flatMap(errorTexts(in:))
+
+        default:
+            return []
+        }
+    }
+
+    /// All string values in a decoded JSON value, depth first.
+    private static func stringValues(in value: Any) -> [String] {
+        switch value {
+        case let string as String: [string]
+        case let object as [String: Any]: object.values.flatMap(stringValues)
+        case let array as [Any]: array.flatMap(stringValues)
+        default: []
+        }
+    }
+
+    /// The chat-completions request body for one attempt. An unset override is
+    /// omitted rather than sent as a default, and a shape without sampling
+    /// leaves both overrides out.
+    func requestBody(messages: [[String: Any]], shape: RequestShape) -> [String: Any] {
         var body: [String: Any] = [
             "model": model,
             "messages": messages,
             "stream": true,
-            tokenLimit.rawValue: maxOutputTokens,
+            shape.tokenLimit.rawValue: maxOutputTokens,
         ]
-        if let temperature { body[OpenAISamplingParameter.temperature.rawValue] = temperature }
-        if let topP { body[OpenAISamplingParameter.topP.rawValue] = topP }
+        if shape.includesSampling {
+            if let temperature { body[OpenAISamplingParameter.temperature.rawValue] = temperature }
+            if let topP { body[OpenAISamplingParameter.topP.rawValue] = topP }
+        }
         return body
     }
 
     private func send(
-        messages: [[String: Any]], tokenLimit: TokenLimitParameter,
+        messages: [[String: Any]], shape: RequestShape,
     ) async throws -> String {
         let bodyData = try JSONSerialization.data(
-            withJSONObject: requestBody(messages: messages, tokenLimit: tokenLimit),
+            withJSONObject: requestBody(messages: messages, shape: shape),
         )
 
         let requestURL = Self.apiBaseURL(from: endpoint)
@@ -208,16 +346,22 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         }
 
         guard (200 ... 299).contains(httpResponse.statusCode) else {
-            // Try to read error body
-            var errorBody = ""
+            var lines: [String] = []
+            var count = 0
             for try await line in bytes.lines {
-                errorBody += line
-                if errorBody.count > 500 { break }
+                lines.append(line)
+                count += line.count
+                if count > errorBodyReadCap { break }
             }
+            let shownBody = shownErrorBody(lines)
             logger.error(
-                "openai_http_error status=\(httpResponse.statusCode, privacy: .public) endpoint=\(requestURL.absoluteString, privacy: .public) body=\(errorBody, privacy: .public)",
+                "openai_http_error status=\(httpResponse.statusCode, privacy: .public) endpoint=\(requestURL.absoluteString, privacy: .public) body=\(shownBody, privacy: .public)",
             )
-            throw ProtocolError.httpError(httpResponse.statusCode, errorBody)
+            throw HTTPRefusal(
+                status: httpResponse.statusCode,
+                body: lines.joined(separator: "\n"),
+                shownBody: shownBody,
+            )
         }
 
         var parts: [String] = []
