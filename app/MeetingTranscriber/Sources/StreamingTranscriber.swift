@@ -47,6 +47,13 @@ actor StreamingTranscriber: LiveCaptionPipeline {
     private var lastPartialAt: Date = .distantPast
     private let onEvent: EventSink
 
+    /// Whether a failed transcription is worth a warning. A cancellation is
+    /// the session stopping, for instance while the engine still loads its
+    /// model, which throws `CancellationError` at once: nothing went wrong.
+    static func isReportable(_ error: any Error) -> Bool {
+        !(error is CancellationError)
+    }
+
     /// Silero v6 chunk size at 16 kHz — what FluidVAD expects per call.
     private static let chunkSize = 4096
     /// Minimum wall-clock gap between partial re-transcriptions while speaking.
@@ -161,11 +168,11 @@ actor StreamingTranscriber: LiveCaptionPipeline {
             if !text.isEmpty {
                 onEvent(.partial(text))
             }
-        } catch {
+        } catch where Self.isReportable(error) {
             logger.warning(
                 "[\(self.channelLabel, privacy: .public)] partial transcribe error: \(error.localizedDescription, privacy: .public)",
             )
-        }
+        } catch {}
     }
 
     private func commitFinal() async {
@@ -189,10 +196,10 @@ actor StreamingTranscriber: LiveCaptionPipeline {
             if !text.isEmpty {
                 onEvent(.finalized(text: text, audio: buffer))
             }
-        } catch {
+        } catch where Self.isReportable(error) {
             logger.warning(
                 "[\(self.channelLabel, privacy: .public)] final transcribe error: \(error.localizedDescription, privacy: .public)",
             )
-        }
+        } catch {}
     }
 }
