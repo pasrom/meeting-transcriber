@@ -39,8 +39,12 @@ bad() { echo "$1 ... FAIL: $2"; exit 1; }
 # ceiling, not a precision check: run_bounded's own wall-clock cap lets a 1 s
 # bound run close to 3 s, a 2.5 s limit failed on loaded runners after a bound
 # that had worked, and the bound itself is proven by the status (124 only
-# ever means run_bounded gave up) and by the blocked process being gone.
+# ever means run_bounded gave up) and by the blocked process being gone. The
+# same ceiling bounds the waits for a background stand-in to come up: they end
+# on its marker, and only one that never starts runs them out.
 HANG_CEILING_S=20
+# _cmd_has <pid> <text> — the process's command line carries <text>.
+_cmd_has() { ps -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
 
 # --- run_bounded ---------------------------------------------------------------
 
@@ -132,16 +136,30 @@ _tcc_grantee_from_ps 999 <<<"$terminal_table" >/dev/null \
 # this bare under `set -e` is not turned red. No answer but the app quits in
 # the wait after it: its own quit, status 0, nothing reported. Another error
 # (-600) is not a grant question either: the short wait, nothing reported
-# (here the app goes within it). Answered:
-# status 0, nothing reported. The app's hold is cut to 1 s for the test.
+# (here the app is already gone when the error comes back, since that wait is
+# a fixed 3 s no hold can stretch). Answered:
+# status 0, nothing reported. The app's hold is cut to 1 s for the test, so a
+# case whose app has to stay waits only twice that. The late quit's app goes
+# 0.5 s after the answer, from a background kill a loaded host can delay past
+# a 2 s wait, so that case gets a 5 s hold: a ceiling, as the wait ends when
+# the app is gone. A fake pkill logs each call, so a case whose app went by
+# itself fails if the signal ladder ran, rather than passing through it.
 mkdir -p "$TMP/bin"
-marker="e2e-quit-probe-$$"
+# Terminated: pgrep -f matches by substring, and run 4512's bare marker would
+# also match run 45123's stand-in on a shared runner.
+marker="e2e-quit-probe-$$-end"
+cat >"$TMP/bin/pkill" <<EOF
+#!/bin/sh
+echo "\$*" >>"$TMP/pkill.log"
+exec /usr/bin/pkill "\$@"
+EOF
+chmod +x "$TMP/bin/pkill"
 cat >"$TMP/bin/osascript" <<EOF
 #!/bin/sh
 case "\$(cat "$TMP/osa-mode")" in
     refuse) echo "execution error: Not authorized to send Apple events to MeetingTranscriber-Dev. (-1743)" >&2; exit 1 ;;
     timeout) echo "execution error: MeetingTranscriber-Dev got an error: AppleEvent timed out. (-1712)" >&2; exit 1 ;;
-    other) ( sleep 0.5; kill \$(cat "$TMP/quit-app.pid") ) >/dev/null 2>&1 &
+    other) kill \$(cat "$TMP/quit-app.pid") 2>/dev/null
            echo "execution error: MeetingTranscriber-Dev got an error: Application isn't running. (-600)" >&2; exit 1 ;;
     late) ( sleep 0.5; kill \$(cat "$TMP/quit-app.pid") ) >/dev/null 2>&1 &
           echo "execution error: MeetingTranscriber-Dev got an error: AppleEvent timed out. (-1712)" >&2; exit 1 ;;
@@ -154,28 +172,33 @@ start_quit_app() {
     echo $! >"$TMP/quit-app.pid"
     disown "$(cat "$TMP/quit-app.pid")"
     PIDS="$PIDS $(cat "$TMP/quit-app.pid")"
+    # Until the subshell has exec'd, its command line is this script's, and
+    # quit_running_app would find no app to quit.
+    poll_until "$HANG_CEILING_S" 0.05 _cmd_has "$(cat "$TMP/quit-app.pid")" "$marker" \
+        || bad quit_setup "the stand-in app never ran as $marker"
 }
 
 expect_quit() {
-    local name="$1" mode="$2" want="$3" annotation="$4" status=0 out
+    local name="$1" mode="$2" want="$3" annotation="$4" hold="${5:-1}" status=0 out
     echo "$mode" >"$TMP/osa-mode"
+    rm -f "$TMP/pkill.log"
     start_quit_app
-    out="$(PATH="$TMP/bin:$PATH" E2E_APP_QUIT_HOLD_S=1 quit_running_app some.bundle "$marker" 2>&1)" || status=$?
+    out="$(PATH="$TMP/bin:$PATH" E2E_APP_QUIT_HOLD_S="$hold" quit_running_app some.bundle "$marker" 2>&1)" || status=$?
     if [ "$status" -eq "$want" ] && _no_pid_alive "$(cat "$TMP/quit-app.pid")" \
         && case "$annotation" in
                error) grep -q '^::error title=TCC Automation → MeetingTranscriber-Dev not usable::' <<<"$out" ;;
                warning) grep -q '^::warning title=dev app did not quit::.*Possible causes: a pending Automation → MeetingTranscriber-Dev prompt' <<<"$out" \
                    && ! grep -q '^::error' <<<"$out" ;;
-               *) [ -z "$out" ] ;;
+               *) [ -z "$out" ] && [ ! -e "$TMP/pkill.log" ] ;;
            esac; then
         ok "$name"
     else
-        bad "$name" "status $status: $out"
+        bad "$name" "status $status, pkill: '$(cat "$TMP/pkill.log" 2>/dev/null)': $out"
     fi
 }
 expect_quit quit_reports_a_refused_apple_event_as_the_grant refuse 2 error
 expect_quit quit_warns_on_an_unanswered_quit_that_never_lands timeout 0 warning
-expect_quit quit_accepts_an_unanswered_quit_that_lands_late late 0 none
+expect_quit quit_accepts_an_unanswered_quit_that_lands_late late 0 none 5
 expect_quit quit_treats_another_error_as_no_grant_question other 0 none
 expect_quit quit_answered_is_a_clean_quit answer 0 none
 
@@ -264,7 +287,7 @@ sh -c 'sleep 300 & wait' &
 stuck=$!
 disown "$stuck"
 PIDS="$PIDS $stuck"
-poll_until 2 0.1 sh -c "pgrep -P $stuck >/dev/null" || bad reaper_setup "the stand-in has no child"
+poll_until "$HANG_CEILING_S" 0.1 sh -c "pgrep -P $stuck >/dev/null" || bad reaper_setup "the stand-in has no child"
 stuck_child="$(pgrep -P "$stuck")"
 PIDS="$PIDS $stuck_child"
 # A live process recorded with a different start time: a reused pid, which
@@ -293,28 +316,38 @@ kill -KILL "$reused" 2>/dev/null || true
 # reaper kills; the inner driver itself must be TERMed, not SIGKILLed with the
 # other children, and the outer one's cleanup must get to run to its end
 # rather than be cut off by a TERM sent after it began.
+#
+# Each stand-in writes its pid file only once its trap is armed, so the wait on
+# that file also proves a TERM cannot land before the trap does; the wait for
+# the inner one's child makes sure its blocking call exists before the reaper
+# takes its snapshot of the descendants it may SIGKILL. The unblock
+# stays short, since the inner driver is blocked until phase 2 and phase 1
+# always runs out; the grace is only a ceiling (the reaper returns as soon as
+# both are gone), long enough that the outer cleanup is never cut off by the
+# final SIGKILL on a loaded host, which is not the failure this case is about.
 cat >"$TMP/nested-inner" <<EOF
 #!/bin/bash
-echo \$\$ >"$TMP/inner.pid"
 trap 'echo inner >"$TMP/inner.trap"' EXIT
+echo \$\$ >"$TMP/inner.pid"
 sleep 300
 EOF
 cat >"$TMP/nested-outer" <<EOF
 #!/bin/bash
-echo \$\$ >"$TMP/outer.pid"
 trap 'echo start >"$TMP/outer.cleanup"; sleep 0.3; echo done >>"$TMP/outer.cleanup"' EXIT
+echo \$\$ >"$TMP/outer.pid"
 bash "$TMP/nested-inner" || exit 1
 EOF
 ( bash "$TMP/nested-outer" >/dev/null 2>&1 & )
-poll_until 2 0.1 test -s "$TMP/inner.pid" || bad reaper_nested_setup "the inner stand-in did not start"
+poll_until "$HANG_CEILING_S" 0.1 test -s "$TMP/inner.pid" || bad reaper_nested_setup "the inner stand-in did not start"
 outer="$(cat "$TMP/outer.pid")"
 inner="$(cat "$TMP/inner.pid")"
 PIDS="$PIDS $outer $inner"
+poll_until "$HANG_CEILING_S" 0.1 sh -c "pgrep -P $inner >/dev/null" || bad reaper_nested_setup "the inner stand-in never blocked"
 {
     printf '%s\t%s\t%s\n' "$outer" "$(ps -o lstart= -p "$outer")" e2e-channel-fault.sh
     printf '%s\t%s\t%s\n' "$inner" "$(ps -o lstart= -p "$inner")" e2e-app.sh
 } >"$list"
-E2E_REAP_UNBLOCK_S=1 E2E_REAP_GRACE_S=3 e2e_reap_registered_drivers "$list" >/dev/null
+E2E_REAP_UNBLOCK_S=1 E2E_REAP_GRACE_S=20 e2e_reap_registered_drivers "$list" >/dev/null
 _no_pid_alive "$outer" "$inner" && [ -s "$TMP/inner.trap" ] \
     && [ "$(tr '\n' ' ' <"$TMP/outer.cleanup" 2>/dev/null)" = "start done " ] \
     && ok reaper_lets_nested_drivers_finish_their_traps \
@@ -324,21 +357,23 @@ _no_pid_alive "$outer" "$inner" && [ -s "$TMP/inner.trap" ] \
 # moment TERM arrives, and that cleanup acts on the app it started as its own
 # child, after other work (restoring settings). The child must still be there
 # when it does: SIGKILLing the children together with the TERM took it away
-# first.
+# first. Unblock and grace are ceilings here: the trap runs at the TERM and the
+# reaper returns once the driver is gone. With a 2 s unblock, a cleanup that a
+# loaded host had not finished by then would lose its child to phase 2.
 cat >"$TMP/exit-only" <<EOF
 #!/bin/bash
 sleep 300 &
 app=\$!
-echo \$\$ >"$TMP/exit-only.pid"
 trap 'sleep 0.3; if kill -0 \$app 2>/dev/null; then echo alive; else echo gone; fi >"$TMP/exit-only.cleanup"; kill \$app' EXIT
+echo \$\$ >"$TMP/exit-only.pid"
 wait
 EOF
 ( bash "$TMP/exit-only" >/dev/null 2>&1 & )
-poll_until 2 0.1 test -s "$TMP/exit-only.pid" || bad reaper_exit_only_setup "the stand-in did not start"
+poll_until "$HANG_CEILING_S" 0.1 test -s "$TMP/exit-only.pid" || bad reaper_exit_only_setup "the stand-in did not start"
 eo="$(cat "$TMP/exit-only.pid")"
 PIDS="$PIDS $eo"
 printf '%s\t%s\t%s\n' "$eo" "$(ps -o lstart= -p "$eo")" e2e-silent-recording.sh >"$list"
-E2E_REAP_UNBLOCK_S=2 E2E_REAP_GRACE_S=4 e2e_reap_registered_drivers "$list" >/dev/null
+E2E_REAP_UNBLOCK_S=20 E2E_REAP_GRACE_S=30 e2e_reap_registered_drivers "$list" >/dev/null
 _no_pid_alive "$eo" && [ "$(cat "$TMP/exit-only.cleanup" 2>/dev/null)" = alive ] \
     && ok reaper_leaves_the_app_child_to_the_drivers_cleanup \
     || bad reaper_leaves_the_app_child_to_the_drivers_cleanup "cleanup saw the app: '$(cat "$TMP/exit-only.cleanup" 2>/dev/null)'"
