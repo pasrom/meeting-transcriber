@@ -338,10 +338,17 @@ jobs:
       # development client with no App Store variant, so the appstore leg would
       # repeat the identical run. About 13 s cold, 31 tests.
       #
+      # The compiler part of the key comes from the setup step above, which
+      # leaves `cache-spm` at its default; with it off that output is empty and
+      # the key would carry no compiler.
+      #
       # Its build tree is cached under a key that covers everything that goes
       # into it (compiler, manifest, dependencies, sources, tests), with no
-      # fallback to an older tree: a hit is exactly this build, any change is a
-      # cold build. Uncached, this step took 31 to 58 s.
+      # fallback to an older tree: a hit is a tree built from identical inputs,
+      # any change is a cold build. A hit does not skip the compile, though:
+      # the checkout stamps the sources with new modification times, so mt-cli
+      # itself is rebuilt either way. What a hit saves is the dependency
+      # checkout and its build. Uncached, this step took 31 to 58 s.
       - name: Cache mt-cli build
         if: matrix.variant == 'homebrew'
         uses: actions/cache@v6
