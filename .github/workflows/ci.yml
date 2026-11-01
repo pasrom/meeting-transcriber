@@ -253,10 +253,11 @@ jobs:
       actions: write
     strategy:
       # Both Homebrew and AppStore variants must pass. fail-fast: false NOT to
-      # keep the sibling running on failure — the `Cancel run on failure` step
-      # below cancels the whole run on any failure — but so the failing leg runs
-      # that step and names itself the culprit in the run summary, instead of
-      # being silently auto-cancelled by the matrix before it can.
+      # keep the sibling running when a leg's build or tests fail — the
+      # `Cancel run on failure` step below cancels the whole run then — but so
+      # the failing leg runs that step and names itself the culprit in the run
+      # summary, instead of being silently auto-cancelled by the matrix before
+      # it can.
       fail-fast: false
       matrix:
         variant: [homebrew, appstore]
@@ -292,6 +293,7 @@ jobs:
       # the run summary shows where the time went. Step timeouts fail as
       # `timed_out`, which a bare job timeout would report as `cancelled`.
       - name: Build tests
+        id: build-tests
         timeout-minutes: 15
         run: cd app/MeetingTranscriber && swift build --build-tests --enable-code-coverage ${{ matrix.swift-flags }}
       # Three shards for the runner's three vCPUs, not `swift test --parallel`,
@@ -306,6 +308,7 @@ jobs:
       # `--out` keeps the logs and raw profiles outside `.build`, which the
       # SPM cache would otherwise save and restore.
       - name: Swift tests
+        id: swift-tests
         timeout-minutes: 15
         run: cd app/MeetingTranscriber && ../../scripts/ci/test-shards.sh run --shards 3 --skip ModelPreloadTests --coverage --out "$RUNNER_TEMP/test-shards"
       # The shard logs are what `test-shards.sh weights` regenerates the weights
@@ -337,6 +340,7 @@ jobs:
       # development client with no App Store variant, so the appstore leg would
       # repeat the identical run. About 13 s cold, 31 tests.
       - name: mt-cli tests
+        id: mt-cli-tests
         if: matrix.variant == 'homebrew'
         timeout-minutes: 5
         run: cd tools/mt-cli && swift test --parallel
@@ -348,8 +352,25 @@ jobs:
           package-dir: app/MeetingTranscriber
           flag: ${{ matrix.variant }}
           codecov-token: ${{ secrets.CODECOV_TOKEN }}
+      # Cancels the run only when this leg's own build or tests failed, since
+      # that is when the run is known red for a reason that needs a new push,
+      # and the remaining legs are spent effort. A failure in setup (cache,
+      # downloads) or in the shard-log upload is usually no verdict on the
+      # code and a rerun of just that leg fixes it, so it does not take the
+      # sibling leg and the other jobs down with it. One accepted limit: on a model-cache
+      # miss the pre-warm in setup-swift-test compiles the test target, so a
+      # compile error can fail there and then cancels nothing; the leg still
+      # fails. A timed-out step shows as `timed_out` in the run summary, but
+      # its `steps.<id>.outcome` is `failure`, so a hang that hits its step
+      # timeout still cancels. One that runs into the 25 min job timeout first,
+      # possible on a cold cache, ends the job `cancelled` and cancels nothing.
       - name: Cancel run on failure
-        if: failure()
+        if: >-
+          failure() && (
+            steps.build-tests.outcome == 'failure' ||
+            steps.swift-tests.outcome == 'failure' ||
+            steps.mt-cli-tests.outcome == 'failure'
+          )
         uses: ./.github/actions/cancel-on-failure
         with:
           job-name: test (${{ matrix.variant }})
