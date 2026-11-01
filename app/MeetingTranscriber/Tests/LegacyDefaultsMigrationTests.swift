@@ -102,8 +102,8 @@ final class LegacyDefaultsMigrationTests: XCTestCase {
     func testRunCopiesAcrossDomainsAndIsIdempotent() throws {
         let legacyName = "LegacyDefaultsMigrationTests-legacy-\(UUID().uuidString)"
         let currentName = "LegacyDefaultsMigrationTests-current-\(UUID().uuidString)"
-        let legacy = try XCTUnwrap(UserDefaults(suiteName: legacyName))
-        let current = try XCTUnwrap(UserDefaults(suiteName: currentName))
+        let legacy = try XCTUnwrap(DefaultsSuite.open(legacyName))
+        let current = try XCTUnwrap(DefaultsSuite.open(currentName))
         defer {
             DefaultsSuite.remove(legacyName)
             DefaultsSuite.remove(currentName)
@@ -111,7 +111,7 @@ final class LegacyDefaultsMigrationTests: XCTestCase {
         legacy.set("de", forKey: "whisperLanguage")
         legacy.set(true, forKey: "autoWatch")
 
-        LegacyDefaultsMigration.run(into: current, legacyDomain: legacyName)
+        LegacyDefaultsMigration.run(into: current, legacyDomain: DefaultsSuite.domain(legacyName))
         XCTAssertEqual(current.string(forKey: "whisperLanguage"), "de")
         XCTAssertTrue(current.bool(forKey: "autoWatch"))
         XCTAssertTrue(current.bool(forKey: LegacyDefaultsMigration.markerKey))
@@ -119,7 +119,7 @@ final class LegacyDefaultsMigrationTests: XCTestCase {
         // Second run must be inert even though the legacy domain still exists:
         // the user's later choice under the new identifier has to survive.
         current.set("en", forKey: "whisperLanguage")
-        LegacyDefaultsMigration.run(into: current, legacyDomain: legacyName)
+        LegacyDefaultsMigration.run(into: current, legacyDomain: DefaultsSuite.domain(legacyName))
         XCTAssertEqual(current.string(forKey: "whisperLanguage"), "en")
     }
 }

@@ -18,7 +18,7 @@ final class AppSettingsUntypedDefaultsTests: XCTestCase {
         super.setUp()
         suiteName = "AppSettingsUntypedDefaultsTests-\(getpid())-\(UUID().uuidString)"
         apiKeyAccount = "AppSettingsUntypedDefaultsTests-openAIAPIKey-\(getpid())-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = DefaultsSuite.open(suiteName)
     }
 
     override func tearDown() {

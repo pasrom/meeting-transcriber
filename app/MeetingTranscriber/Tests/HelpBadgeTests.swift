@@ -17,7 +17,7 @@ final class HelpBadgeTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
         testSuiteName = "HelpBadgeTests-\(getpid())-\(UUID().uuidString)"
-        guard let suite = UserDefaults(suiteName: testSuiteName) else {
+        guard let suite = DefaultsSuite.open(testSuiteName) else {
             XCTFail("Could not create test UserDefaults suite")
             return
         }

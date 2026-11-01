@@ -40,7 +40,7 @@ final class LiveCaptionsSavedOriginTests: XCTestCase {
     /// as the saved origin when given.
     private func makeController(saved: CGPoint? = nil) throws -> (LiveCaptionsWindowController, UserDefaults) {
         let name = "captions-origin-\(getpid())-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        let defaults = try XCTUnwrap(DefaultsSuite.open(name))
         addTeardownBlock { DefaultsSuite.remove(name) }
         if let saved {
             defaults.set(["x": saved.x, "y": saved.y], forKey: LiveCaptionsWindowController.originDefaultsKey)

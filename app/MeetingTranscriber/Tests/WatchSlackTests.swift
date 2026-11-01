@@ -12,7 +12,7 @@ final class WatchSlackTests: XCTestCase {
     private func makeDefaults() throws -> UserDefaults {
         let suiteName = "WatchSlackTests.\(getpid()).\(UUID().uuidString)"
         addTeardownBlock { DefaultsSuite.remove(suiteName) }
-        return try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        return try XCTUnwrap(DefaultsSuite.open(suiteName))
     }
 
     private func makeSettings() throws -> AppSettings {

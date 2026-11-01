@@ -9,7 +9,7 @@ import XCTest
 final class SilentTrackWatchdogSettingTests: XCTestCase {
     private func freshSettings() -> AppSettings {
         let name = "silent-track-watchdog-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
+        let defaults = DefaultsSuite.open(name)!
         // swiftlint:disable:previous force_unwrapping
         addTeardownBlock { DefaultsSuite.remove(name) }
         return AppSettings(defaults: defaults)
@@ -25,7 +25,7 @@ final class SilentTrackWatchdogSettingTests: XCTestCase {
     func testTheChoicePersists() throws {
         let name = "silent-track-watchdog-persist-\(UUID().uuidString)"
         addTeardownBlock { DefaultsSuite.remove(name) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        let defaults = try XCTUnwrap(DefaultsSuite.open(name))
         AppSettings(defaults: defaults).silentTrackWatchdogEnabled = true
         XCTAssertTrue(
             AppSettings(defaults: defaults).silentTrackWatchdogEnabled,

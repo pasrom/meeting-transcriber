@@ -228,7 +228,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         // Zoom call fires.
         let suite = "WatchAppWiring-\(getpid())-\(UUID().uuidString)"
         addTeardownBlock { DefaultsSuite.remove(suite) }
-        let settings = try AppSettings(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
+        let settings = try AppSettings(defaults: XCTUnwrap(DefaultsSuite.open(suite)))
         settings.watchTeams = false
         settings.watchZoom = true
         settings.watchWebex = false
@@ -263,7 +263,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         func detector(browserOn: Bool) throws -> PowerAssertionDetector {
             let suite = "BrowserWatchWiring-\(browserOn)-\(getpid())-\(UUID().uuidString)"
             addTeardownBlock { DefaultsSuite.remove(suite) }
-            let settings = try AppSettings(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
+            let settings = try AppSettings(defaults: XCTUnwrap(DefaultsSuite.open(suite)))
             settings.watchBrowserMeetings = browserOn
             let d = try XCTUnwrap(
                 WatchingController.defaultDetectors(settings: settings)

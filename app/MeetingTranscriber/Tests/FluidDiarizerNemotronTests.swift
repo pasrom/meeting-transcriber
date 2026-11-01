@@ -20,7 +20,7 @@ final class FluidDiarizerNemotronTests: XCTestCase {
     func testDiarizerModePersistsNemotron() throws {
         let suiteName = "nemotron-diarizer-mode-\(getpid())-\(UUID().uuidString)"
         addTeardownBlock { DefaultsSuite.remove(suiteName) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let defaults = try XCTUnwrap(DefaultsSuite.open(suiteName))
 
         AppSettings(defaults: defaults).diarizerMode = .nemotron
         XCTAssertEqual(defaults.string(forKey: "diarizerMode"), "nemotron")

@@ -22,7 +22,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         testLogDir = try makeTempDirectory(prefix: "AppStateTests")
         let suite = "AppStateTests-\(getpid())-\(UUID().uuidString)"
         settings = try AppSettings(
-            defaults: XCTUnwrap(UserDefaults(suiteName: suite)),
+            defaults: XCTUnwrap(DefaultsSuite.open(suite)),
             defaultOutputDir: testLogDir.appendingPathComponent("output", isDirectory: true),
         )
         addTeardownBlock { DefaultsSuite.remove(suite) }

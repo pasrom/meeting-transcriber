@@ -9,7 +9,7 @@ final class FluidDiarizerSortformerTests: XCTestCase {
         // the test host's real domain, which is not the default.
         let suite = "FluidDiarizerSortformerTests-\(getpid())-\(UUID().uuidString)"
         defer { DefaultsSuite.remove(suite) }
-        let settings = try AppSettings(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
+        let settings = try AppSettings(defaults: XCTUnwrap(DefaultsSuite.open(suite)))
         XCTAssertEqual(settings.diarizerMode, .offline)
     }
 

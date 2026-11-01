@@ -258,7 +258,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
     private func makeEligibleCoordinator(_ suiteName: String, isRecording: @escaping () -> Bool)
         -> (LiveTranscriptionCoordinator, AppSettings, () -> Int) {
         // swiftlint:disable:next force_unwrapping
-        let settings = AppSettings(defaults: UserDefaults(suiteName: suiteName)!)
+        let settings = AppSettings(defaults: DefaultsSuite.open(suiteName)!)
         settings.transcriptionEngine = .parakeet
         settings.parakeetLanguage = ""
         settings.whisperLanguage = ""

@@ -27,7 +27,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         suiteName = "PipelineControllerOutputFolderTests-\(getpid())-\(UUID().uuidString)"
         apiKeyAccount = "\(suiteName ?? "")-openAI"
         claudeKeyAccount = "\(suiteName ?? "")-claude"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let defaults = try XCTUnwrap(DefaultsSuite.open(suiteName))
         settings = AppSettings(
             defaults: defaults, apiKeyAccount: apiKeyAccount, claudeAPIKeyAccount: claudeKeyAccount,
             defaultOutputDir: tmpDir.appendingPathComponent("default-output", isDirectory: true),

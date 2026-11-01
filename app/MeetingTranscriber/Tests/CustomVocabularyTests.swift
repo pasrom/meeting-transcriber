@@ -14,7 +14,7 @@ final class CustomVocabularyTests: XCTestCase {
     override func setUp() {
         super.setUp()
         testSuiteName = "CustomVocabularyTests-\(getpid())-\(UUID().uuidString)"
-        guard let suite = UserDefaults(suiteName: testSuiteName) else {
+        guard let suite = DefaultsSuite.open(testSuiteName) else {
             XCTFail("Could not create test UserDefaults suite")
             return
         }

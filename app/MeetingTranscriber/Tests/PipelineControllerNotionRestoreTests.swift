@@ -20,7 +20,7 @@ final class PipelineControllerNotionRestoreTests: XCTestCase {
         let suite = "PipelineControllerNotionRestoreTests-\(getpid())-\(UUID().uuidString)"
         addTeardownBlock { DefaultsSuite.remove(suite) }
         return try AppSettings(
-            defaults: XCTUnwrap(UserDefaults(suiteName: suite)),
+            defaults: XCTUnwrap(DefaultsSuite.open(suite)),
             defaultOutputDir: tmpDir.appendingPathComponent("output", isDirectory: true),
         )
     }

@@ -8,7 +8,7 @@ final class GeneralSettingsCustomAppsTests: XCTestCase {
 
     private func makeSettings(customApps: [String]) throws -> AppSettings {
         let suiteName = "GeneralSettingsCustomAppsTests.\(UUID().uuidString)"
-        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let suite = try XCTUnwrap(DefaultsSuite.open(suiteName))
         addTeardownBlock { DefaultsSuite.remove(suiteName) }
         let settings = AppSettings(defaults: suite)
         settings.watchCustomApps = customApps

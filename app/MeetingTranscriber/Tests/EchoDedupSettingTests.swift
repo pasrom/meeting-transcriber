@@ -9,7 +9,7 @@ import XCTest
 final class EchoDedupSettingTests: XCTestCase {
     private func freshSettings() -> AppSettings {
         let name = "echo-dedup-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
+        let defaults = DefaultsSuite.open(name)!
         // swiftlint:disable:previous force_unwrapping
         addTeardownBlock { DefaultsSuite.remove(name) }
         return AppSettings(defaults: defaults)
@@ -28,7 +28,7 @@ final class EchoDedupSettingTests: XCTestCase {
     func testTogglePersists() throws {
         let name = "echo-dedup-persist-\(UUID().uuidString)"
         addTeardownBlock { DefaultsSuite.remove(name) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        let defaults = try XCTUnwrap(DefaultsSuite.open(name))
         let settings = AppSettings(defaults: defaults)
         settings.echoDedupEnabled = false
         XCTAssertFalse(AppSettings(defaults: defaults).echoDedupEnabled, "the choice has to survive a relaunch")

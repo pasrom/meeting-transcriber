@@ -22,7 +22,7 @@ final class AppSettingsOutputDirectoryTests: XCTestCase {
         try super.setUpWithError()
         suiteName = "AppSettingsOutputDirectoryTests-\(getpid())-\(UUID().uuidString)"
         apiKeyAccount = "AppSettingsOutputDirectoryTests-openAIAPIKey-\(getpid())-\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults = try XCTUnwrap(DefaultsSuite.open(suiteName))
         fallbackDir = try makeTempDirectory(prefix: "OutputDirFallback")
         settings = AppSettings(defaults: defaults, apiKeyAccount: apiKeyAccount, defaultOutputDir: fallbackDir)
     }

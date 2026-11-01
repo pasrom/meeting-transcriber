@@ -189,7 +189,7 @@ final class NotionExportSettingsViewTests: XCTestCase {
             DefaultsSuite.remove(suite)
             KeychainHelper.delete(key: keyAccount)
         }
-        guard let defaults = UserDefaults(suiteName: suite) else { fatalError("Cannot create test defaults") }
+        guard let defaults = DefaultsSuite.open(suite) else { fatalError("Cannot create test defaults") }
         let settings = AppSettings(defaults: defaults, notionAPIKeyAccount: keyAccount)
         settings.notionExportEnabled = true
         settings.notionAPIKey = "test-key"

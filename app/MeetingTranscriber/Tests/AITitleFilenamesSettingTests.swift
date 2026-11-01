@@ -18,7 +18,7 @@ final class AITitleFilenamesSettingTests: XCTestCase {
         super.setUp()
         suiteName = "AITitleFilenamesSettingTests-\(getpid())-\(UUID().uuidString)"
         apiKeyAccount = "AITitleFilenamesSettingTests-openAIAPIKey-\(getpid())-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = DefaultsSuite.open(suiteName)
         settings = AppSettings(defaults: defaults, apiKeyAccount: apiKeyAccount)
     }
 
