@@ -73,6 +73,22 @@ struct PendingNotionExport {
     let savedLocally: Bool
 }
 
+/// A job's chain of exports, which run one after another. `task`, `token` and
+/// `export` are the newest one, the only one a hand-over restarts.
+struct NotionExportRun {
+    let token: UUID
+    let task: Task<Void, Never>
+    let export: PendingNotionExport
+    /// The database of every export in the chain that has not finished, keyed by
+    /// its token and including the newest one. The one running has a page
+    /// request in flight, and when a re-export waits behind it, with the
+    /// database setting changed in between, it is not the newest. Only the
+    /// newest is handed over, so the page an older one is creating would stay
+    /// unknown to the job unless the hold asks every one of them. A finished
+    /// export leaves the set and stops deciding.
+    var unfinishedDatabases: [UUID: String]
+}
+
 extension PipelineQueue {
     static let notionExportUnconfiguredWarning =
         "Notion export skipped: add an API token and choose a database in Settings → Output"
@@ -103,7 +119,8 @@ extension PipelineQueue {
     }
 
     private func startNotionExport(_ export: PendingNotionExport, jobID: UUID) {
-        let previous = notionExportTasks[jobID]?.task
+        let previousRun = notionExportTasks[jobID]
+        let previous = previousRun?.task
         let token = UUID()
         let task = Task { [self] in
             // Cancelling this export must reach the one it waits behind as well.
@@ -119,9 +136,15 @@ extension PipelineQueue {
             } else if !export.savedLocally, !isRetired {
                 noteNotionBackupMissing(jobID: jobID)
             }
-            if notionExportTasks[jobID]?.token == token { notionExportTasks.removeValue(forKey: jobID) }
+            if notionExportTasks[jobID]?.token == token {
+                notionExportTasks.removeValue(forKey: jobID)
+            } else {
+                notionExportTasks[jobID]?.unfinishedDatabases.removeValue(forKey: token)
+            }
         }
-        notionExportTasks[jobID] = (token, task, export)
+        var unfinished = previousRun?.unfinishedDatabases ?? [:]
+        unfinished[token] = export.configuration.databaseID
+        notionExportTasks[jobID] = NotionExportRun(token: token, task: task, export: export, unfinishedDatabases: unfinished)
     }
 
     /// Whether every export still in progress can move to a replacement queue,
@@ -134,11 +157,16 @@ extension PipelineQueue {
     /// the page, and the restart would create a second one with no warning and
     /// no retry entry, unlike a quit, which ends the job as failed. That window
     /// is the create request alone, so the swap waits for that, not for the whole export.
+    ///
+    /// Every unfinished export of the chain is asked, not just the newest: see
+    /// `NotionExportRun.unfinishedDatabases`.
     func canHandOverNotionExports(builtHere: Bool) -> Bool {
         jobs.allSatisfy { job in
             guard job.notionExportStatus == .inProgress else { return true }
             guard builtHere, let running = notionExportTasks[job.id] else { return false }
-            return Self.notionPageToReuse(for: job, databaseID: Self.normalizedDatabaseID(running.export.configuration.databaseID)) != nil
+            return running.unfinishedDatabases.values.allSatisfy { databaseID in
+                Self.notionPageToReuse(for: job, databaseID: Self.normalizedDatabaseID(databaseID)) != nil
+            }
         }
     }
 
