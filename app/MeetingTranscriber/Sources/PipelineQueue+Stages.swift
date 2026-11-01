@@ -1047,7 +1047,8 @@ extension PipelineQueue {
     // MARK: - Protocol generation
 
     /// Run the LLM protocol generator over a transcript, save the .md file,
-    /// stash its path on the job. No-op if no protocol generator is configured.
+    /// stash its path on the job. Without a protocol generator nothing is generated,
+    /// but an export that is switched on and cannot run still gets its warning.
     /// Used by: main pipeline (if no naming pending) and the session's
     /// reapplySpeakerNames / skipped / stale paths. Internal (not private)
     /// because it is a `SpeakerNamingSessionDelegate` witness.
@@ -1061,9 +1062,13 @@ extension PipelineQueue {
     ) async throws(CancellationError) {
         // No generator and no LLM call for a job that is already gone.
         try ensureStillQueued(jobID)
-        guard let job = job(withID: jobID),
-              let protocolGeneratorFactory, let generator = protocolGeneratorFactory()
-        else { return }
+        guard let job = job(withID: jobID) else { return }
+        guard let protocolGeneratorFactory, let generator = protocolGeneratorFactory() else {
+            // No protocol, so no export, but an export that is switched on and
+            // cannot run is still worth a reason on the job.
+            resolveNotionExport(jobID: jobID)
+            return
+        }
         let shortID = PipelineJob.shortID(for: jobID)
         // Reuse the basename fixed when the transcript was saved (persisted as
         // namingSlug), so the .md shares the .txt/audio stem exactly. This runs
@@ -1101,6 +1106,7 @@ extension PipelineQueue {
             logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .public)")
             // Matched by /v1 clients and persisted jobs; keep the text stable.
             addWarning(id: jobID, "Protocol generation failed — transcript saved")
+            resolveNotionExport(jobID: jobID)
             return
         }
 
@@ -1123,11 +1129,7 @@ extension PipelineQueue {
             ? protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
             : protocolMD
 
-        let resolution = notionExportConfigurationProvider?() ?? .disabled
-        if case .unconfigured = resolution {
-            addWarning(id: jobID, Self.notionExportUnconfiguredWarning)
-        }
-        let configuration = resolution.configuration
+        let configuration = resolveNotionExport(jobID: jobID).configuration
         // Saved first, even for a Notion-only export: the job reaches `.done` and
         // the queue moves on while the export runs, so this is what a quit or a
         // failed export falls back on. A successful Notion-only export removes it.
@@ -1144,6 +1146,19 @@ extension PipelineQueue {
                 jobID: jobID,
             )
         }
+    }
+
+    /// Reads the export configuration and, when the export is on but cannot run
+    /// (no token or no database), tells the job why. Every way out of
+    /// `generateProtocol` asks, not only the one that produced a protocol,
+    /// because the user who switched the export on wants the reason in each.
+    @discardableResult
+    private func resolveNotionExport(jobID: UUID) -> NotionExportResolution {
+        let resolution = notionExportConfigurationProvider?() ?? .disabled
+        if case .unconfigured = resolution {
+            addWarning(id: jobID, Self.notionExportUnconfiguredWarning)
+        }
+        return resolution
     }
 
     private func saveProtocolLocally(_ markdown: String, basename: String, jobID: UUID, protocolsDir: URL) -> Bool {
