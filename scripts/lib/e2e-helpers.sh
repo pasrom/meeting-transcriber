@@ -1406,3 +1406,192 @@ e2e_reap_registered_drivers() {
     fi
     return 0
 }
+
+# --- preference overrides a lane must undo, even after a killed run ----------
+#
+# A lane that changes a host's own settings (not a test toggle but a user's
+# choice, such as the protocol provider) has to put them back on every exit, and
+# a run killed before its trap fires must not leave them changed for good. So
+# the old values go to a record file on disk BEFORE the first write, and every
+# later run of the driver restores a record it finds before changing anything.
+#
+# Values are kept as their property-list XML (`<real>0.7</real>`, `<true/>`,
+# `<string>…</string>`), read through `defaults export` and written back with
+# `defaults write <plist> <key> '<fragment>'`, both through cfprefsd. Not
+# `defaults read` and `-float`: `-float` stores a 32-bit float (0.7 comes back
+# as 0.69999998807907104), and `defaults read` prints both as "0.7", so a
+# read-back would hide the loss. Measured on macOS 26.
+#
+# Record lines are plist, key, value fragment (or `absent`) and, once marked,
+# the lane's own value, separated by the ASCII unit separator (0x1f), not a tab:
+# a tab is IFS whitespace, so `read` would collapse an empty field.
+
+# _defaults_export <plist> — the whole plist as XML, through cfprefsd. Returns
+# 1 when nothing readable came back, which callers must not mistake for "every
+# key absent". A plist that does not exist exports as an empty dictionary.
+_defaults_export() {
+    local xml
+    xml="$(/usr/bin/defaults export "$1" - 2>/dev/null)" || return 1
+    case "$xml" in *"<plist"*) printf '%s' "$xml" ;; *) return 1 ;; esac
+}
+
+# _defaults_fragment <export-xml> <key> — the key's value in what
+# `_defaults_export` printed, as one line of plist XML; `absent` when the key is
+# not there. Returns 1 for empty input, for a value that spans lines (a string
+# with a newline, a dictionary or an array), which a record line cannot carry,
+# and when plutil fails for any other reason than a missing key.
+_defaults_fragment() {
+    local out
+    [ -n "$1" ] || return 1
+    if ! out="$(plutil -extract "$2" xml1 -o - - <<<"$1" 2>&1)"; then
+        case "$out" in
+            *"No value at that key path"*) printf 'absent'; return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    out="$(sed -n '/^<plist/,/^<\/plist>/p' <<<"$out" | sed '1d;$d')"
+    case "$out" in
+        ''|*$'\n'*|*$'\x1f'*) return 1 ;;
+    esac
+    printf '%s' "$out"
+}
+
+# defaults_record_keys <record> <plist> <key>... — append one line per key to
+# `record`: plist, key, the value's plist XML (or `absent`). `plist` is an
+# absolute path, as write_dev_default writes. Returns 1, recording nothing for
+# this plist, when the plist cannot be read or a key holds something a line
+# cannot carry: the caller must not change a value it could not put back.
+defaults_record_keys() {
+    local record="$1" plist="$2" key xml fragment lines=""
+    shift 2
+    xml="$(_defaults_export "$plist")" || {
+        echo "defaults_record_keys: could not read $plist" >&2; return 1; }
+    for key in "$@"; do
+        fragment="$(_defaults_fragment "$xml" "$key")" || {
+            echo "defaults_record_keys: $key in $plist is not a single-line value; not recordable" >&2; return 1; }
+        lines="$lines$plist"$'\x1f'"$key"$'\x1f'"$fragment"$'\n'
+    done
+    printf '%s' "$lines" >>"$record"
+}
+
+# defaults_mark_lane_values <record> — append to each line the value its key
+# holds now, once the lane has written its own. The restore then puts back only
+# keys that still hold the lane's value: anything else is a choice made since (a
+# killed run, then a person changing the setting before the next run repairs
+# it), which an old record must not overwrite. A record never marked (a run
+# killed between the record and its writes) restores every key. Marking again
+# replaces the old marks. Returns 1, leaving the record unmarked, when a plist
+# cannot be read: a mark taken from a failed read would later make every key
+# look changed and nothing would be restored.
+defaults_mark_lane_values() {
+    local record="$1" plist key value _old xml="" xml_of="" now out=""
+    [ -f "$record" ] || return 0
+    # shellcheck disable=SC2034  # an old mark is read only to be dropped
+    while IFS=$'\x1f' read -r plist key value _old; do
+        [ -n "$key" ] || continue
+        if [ "$plist" != "$xml_of" ]; then
+            xml="$(_defaults_export "$plist")" || return 1
+            xml_of="$plist"
+        fi
+        now="$(_defaults_fragment "$xml" "$key")" || return 1
+        out="$out$plist"$'\x1f'"$key"$'\x1f'"$value"$'\x1f'"$now"$'\n'
+    done <"$record"
+    printf '%s' "$out" >"$record.tmp" && mv "$record.tmp" "$record"
+}
+
+# defaults_restore_record <record> — put back every value `record` holds, then
+# read each one back. A key no longer holding the lane's marked value is left
+# as it is, and said; so is one whose current value a line could not carry,
+# which the lane never writes. A line not in this format is dropped, and said.
+# Lines that are settled are dropped; a line whose value did not come back, or
+# whose plist could not be read at all, stays in the record, and then this
+# returns 1, so a later run retries exactly those and never re-applies a settled
+# one over a choice made in between. The defaults writes swallow their own
+# errors, so the read-back is the only evidence a restore landed. Each plist is
+# exported once before the writes and once after them.
+defaults_restore_record() {
+    local record="$1" plist key value lane line xml="" xml_of="" now keep="" written=""
+    [ -f "$record" ] || return 0
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        IFS=$'\x1f' read -r plist key value lane <<<"$line"
+        case "$value" in
+            absent|"<"*) ;;
+            *) echo "defaults_restore_record: dropping a line it cannot read: $key in $plist" >&2; continue ;;
+        esac
+        case "$lane" in
+            *$'\x1f'*) echo "defaults_restore_record: dropping a line it cannot read: $key in $plist" >&2; continue ;;
+        esac
+        if [ "$plist" != "$xml_of" ]; then
+            xml="$(_defaults_export "$plist")" || xml=""
+            xml_of="$plist"
+        fi
+        [ -n "$xml" ] || { keep="$keep$line"$'\n'; continue; }
+        now="$(_defaults_fragment "$xml" "$key")" || now="<not representable>"
+        if [ -n "$lane" ] && [ "$now" != "$lane" ]; then
+            echo "defaults_restore_record: $key in $plist changed since the lane set it; keeping it" >&2
+            continue
+        fi
+        if [ "$value" = absent ]; then
+            /usr/bin/defaults delete "$plist" "$key" >/dev/null 2>&1 || true
+        else
+            /usr/bin/defaults write "$plist" "$key" "$value" 2>/dev/null || true
+        fi
+        written="$written$line"$'\n'
+    done <"$record"
+    xml_of=""
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        IFS=$'\x1f' read -r plist key value lane <<<"$line"
+        if [ "$plist" != "$xml_of" ]; then
+            xml="$(_defaults_export "$plist")" || xml=""
+            xml_of="$plist"
+        fi
+        now="$(_defaults_fragment "$xml" "$key")" || now=""
+        [ "$now" = "$value" ] || keep="$keep$line"$'\n'
+    done <<<"$written"
+    if [ -n "$keep" ]; then
+        printf '%s' "$keep" >"$record.tmp" && mv "$record.tmp" "$record"
+        echo "defaults_restore_record: did not restore: $(cut -d $'\x1f' -f2 "$record" | tr '\n' ' '); keeping them in $record for the next run" >&2
+        return 1
+    fi
+    rm -f "$record"
+}
+
+# openai_stub_request_violations <request> <expect> — what is wrong with one
+# request the --protocol lane's stub logged (scripts/fixtures/openai-chat-stub.py),
+# one line per problem, nothing when it is the request the lane expects. Both
+# arguments are JSON. `expect` carries: path, model, language, transcript,
+# temperature and topP (null: the key must be absent from the body), and
+# languageInPrompt (false when a custom prompt is installed, which need not name
+# the language at all). The API key is not checked here: the lane runs with
+# whatever key the host has, and where it goes is covered by
+# OpenAIProtocolGeneratorTests.
+openai_stub_request_violations() {
+    jq -nr --argjson r "$1" --argjson e "$2" '
+        def sampling($name; $want):
+            if $want == null then
+                (if ($r.body | has($name)) then "\($name) was sent (\($r.body[$name])) but no override is set" else empty end)
+            elif $r.body[$name] != $want then "\($name) is \($r.body[$name] // "absent"), expected \($want)"
+            else empty end;
+        if ($r.body | type) != "object" then "the body is not a JSON object (\($r.bodyBytes) bytes)"
+        else
+            (if $r.method != "POST" then "method is \($r.method), expected POST" else empty end),
+            (if $r.path != $e.path then "path is \($r.path), expected \($e.path)" else empty end),
+            (if ($r.contentType | startswith("application/json") | not) then "Content-Type is \($r.contentType | tojson), expected application/json" else empty end),
+            (if $r.body.model != $e.model then "model is \($r.body.model | tojson), expected \($e.model | tojson)" else empty end),
+            (if $r.body.stream != true then "stream is \($r.body.stream | tojson), expected true" else empty end),
+            (if ($r.body.max_tokens | type) != "number" then "max_tokens is \($r.body.max_tokens | tojson), expected a number on the first attempt" else empty end),
+            sampling("temperature"; $e.temperature),
+            sampling("top_p"; $e.topP),
+            (if ($r.body.messages | type) != "array" or ($r.body.messages | length) != 2 then "messages is not a [system, user] pair"
+             else
+                $r.body.messages[0] as $sys | $r.body.messages[1] as $user |
+                (if $sys.role != "system" then "messages[0].role is \($sys.role | tojson), expected system" else empty end),
+                (if $user.role != "user" then "messages[1].role is \($user.role | tojson), expected user" else empty end),
+                (if ($sys.content | tostring | contains("{LANGUAGE}")) then "the system prompt still holds the {LANGUAGE} placeholder" else empty end),
+                (if $e.languageInPrompt and ($sys.content | tostring | contains($e.language) | not) then "the system prompt does not name the protocol language \($e.language | tojson)" else empty end),
+                (if $user.content != $e.transcript then "the user message is not the transcript (\($user.content | tostring | length) chars sent, \($e.transcript | length) in the transcript file)" else empty end)
+             end)
+        end'
+}
