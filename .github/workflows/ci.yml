@@ -404,6 +404,7 @@ jobs:
           restore-keys: |
             audiotap-spm-${{ runner.os }}-
       - name: Swift tests
+        id: swift-tests
         timeout-minutes: 5
         run: cd tools/audiotap && swift test --parallel --enable-code-coverage
       - uses: ./.github/actions/export-lcov
@@ -412,6 +413,15 @@ jobs:
           package-dir: tools/audiotap
           flag: audiotap
           codecov-token: ${{ secrets.CODECOV_TOKEN }}
+      # Load-bearing, unlike in `lint` and `analyze`: this job is NOT a required
+      # check, so cancelling the still-running required `test` legs is the only
+      # way a failing AudioTapLib test blocks the merge (see the mt-cli step in
+      # `test` for the limit of that). Scoped to the test step, so that a
+      # failure elsewhere, such as the coverage export, does not take the
+      # required legs down with it. The test step is not a pure library verdict
+      # either: a stale or incompatible `.build` from the cache (restored through
+      # restore-keys, or after an Xcode change, which the key does not carry)
+      # also fails inside it, and then still cancels.
       - name: Cancel run on failure
-        if: failure()
+        if: failure() && steps.swift-tests.outcome == 'failure'
         uses: ./.github/actions/cancel-on-failure
