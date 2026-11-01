@@ -527,7 +527,10 @@
             case .dbReset:
                 return HTTPResponse(
                     status: 409, reason: "Conflict",
-                    body: Data("speaker database was damaged, set aside and replaced by an empty one\n".utf8),
+                    body: Data(
+                        ("speaker database was damaged and set aside; only the profiles that could "
+                            + "still be read were kept, and the action found nothing to act on among them\n").utf8,
+                    ),
                     contentType: "text/plain",
                 )
 
@@ -566,8 +569,9 @@
         /// Not `notFound`: a DB that was never read says nothing about whether
         /// the speaker is in it.
         case notSaved
-        /// The speaker DB was undecodable, set aside and replaced by an
-        /// empty one, so the action had nothing to act on. Not `notFound`
+        /// The speaker DB was damaged, set aside and replaced by the profiles
+        /// that could still be read (none, if it did not decode at all), and
+        /// the action found nothing to act on among them. Not `notFound`
         /// either: the name may well be in the set-aside copy.
         case dbReset
     }
