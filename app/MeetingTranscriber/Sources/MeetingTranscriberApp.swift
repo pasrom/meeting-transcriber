@@ -309,6 +309,7 @@ struct MeetingTranscriberApp: App {
                 speakerMatcherFactory: SpeakerMatcher.factory(
                     dbPath: appState.pipeline.speakersDB, notifier: appState.notifier,
                 ),
+                legacyWhisperModels: appState.engines.legacyWhisperModels,
             )
         }
         .windowResizability(.contentSize)

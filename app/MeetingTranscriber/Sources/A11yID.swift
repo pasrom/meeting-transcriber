@@ -54,6 +54,15 @@ enum A11yID {
 
     static let recordOnlyBanner = "recordOnlyBanner"
     static let transcriptionSection = "transcriptionSection"
+    /// Opens a confirmation dialog, so it stays off the `/ui/press` allowlist.
+    static let legacyWhisperModelsTrashButton = "legacyWhisperModelsTrashButton"
+
+    /// Per-variant checkbox in the old-models row, addressed by ROW INDEX like
+    /// `consentDeniedAppRemove`.
+    static func legacyWhisperModelToggle(_ index: Int) -> String {
+        "legacyWhisperModelToggle.\(index)"
+    }
+
     static let protocolSection = "protocolSection"
     static let includeFullTranscriptToggle = "includeFullTranscriptToggle"
     static let saveRawTranscriptToggle = "saveRawTranscriptToggle"

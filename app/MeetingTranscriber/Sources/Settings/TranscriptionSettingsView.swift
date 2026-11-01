@@ -16,7 +16,17 @@ struct TranscriptionSettingsView: View {
     /// acts on every settings write.
     @State private var customModelDrafts: WhisperKitCustomModelDrafts
 
-    init(settings: AppSettings, whisperKitEngine: WhisperKitEngine, parakeetEngine: ParakeetEngine) {
+    /// WhisperKit models earlier builds left in `Documents`. Nil leaves the row
+    /// out, so a view built without one (as most view tests do) is never bound
+    /// to the real `Documents` and Trash; `SettingsView` passes the live one.
+    @State private var legacyModels: LegacyWhisperModelsState?
+
+    init(
+        settings: AppSettings,
+        whisperKitEngine: WhisperKitEngine,
+        parakeetEngine: ParakeetEngine,
+        legacyModels: LegacyWhisperModelsState? = nil,
+    ) {
         self.settings = settings
         self.whisperKitEngine = whisperKitEngine
         self.parakeetEngine = parakeetEngine
@@ -25,9 +35,13 @@ struct TranscriptionSettingsView: View {
         // so a view inspected outside a hierarchy, as the view tests do, would get
         // a new object on every read and lose each edit.
         _customModelDrafts = State(initialValue: WhisperKitCustomModelDrafts())
+        _legacyModels = State(initialValue: legacyModels)
     }
 
-    private static let whisperKitModels: [(variant: String, label: String)] = [
+    /// Also the variants `LegacyWhisperModelsState` may offer to remove from the
+    /// old location: the picker has offered exactly these since the app first
+    /// downloaded into `Documents`.
+    static let whisperKitModels: [(variant: String, label: String)] = [
         ("openai_whisper-large-v3-v20240930_turbo", "Large V3 Turbo (recommended)"),
         ("openai_whisper-large-v3-v20240930", "Large V3"),
         ("openai_whisper-large-v2", "Large V2"),
@@ -40,8 +54,20 @@ struct TranscriptionSettingsView: View {
         Form {
             transcriptionSection
             liveTranscriptionSection
+            legacyModelsSection
         }
         .formStyle(.grouped)
+        // On appear, and again whenever the model settings change, so the list
+        // never offers what just became the selected or picked model.
+        .onAppear { legacyModels?.paneAppeared() }
+        .task(id: LegacyWhisperModelsState.ScopeInputs(settings)) { await legacyModels?.refresh() }
+    }
+
+    /// Last, so it moves no control the view tests reach by position.
+    @ViewBuilder private var legacyModelsSection: some View {
+        if let legacyModels {
+            LegacyWhisperModelsSection(state: legacyModels)
+        }
     }
 
     /// Each group of controls is a named property rather than inline in
@@ -64,6 +90,9 @@ struct TranscriptionSettingsView: View {
         }
         .accessibilityIdentifier(A11yID.transcriptionSection)
         .recordOnlyDisabled(settings.recordOnly)
+        // Not while a removal runs: a model picked or loaded meanwhile could be
+        // one whose old copy is on its way to the Trash.
+        .disabled(legacyModels?.isRemoving == true)
     }
 
     private var enginePicker: some View {
