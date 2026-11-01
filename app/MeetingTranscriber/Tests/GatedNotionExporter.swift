@@ -16,12 +16,14 @@ actor GatedNotionExporter: NotionExporting {
 
     private let gate = AsyncGate()
     private let pageCreation: PageCreation
+    private let pageID: String
     private(set) var startedExports = 0
     /// The page each call was told to reuse, in call order.
     private(set) var existingPageIDs: [String?] = []
 
-    init(pageCreation: PageCreation = .never) {
+    init(pageCreation: PageCreation = .never, pageID: String = "page-1") {
         self.pageCreation = pageCreation
+        self.pageID = pageID
     }
 
     func release() async {
@@ -40,7 +42,7 @@ actor GatedNotionExporter: NotionExporting {
     ) async -> NotionPageResult {
         startedExports += 1
         existingPageIDs.append(existingPageID)
-        let page = NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1")
+        let page = NotionPageResult(pageID: pageID, url: "https://www.notion.so/\(pageID)")
         if pageCreation == .beforeRelease { await onPageCreated(page) }
         await gate.wait()
         if pageCreation == .afterRelease { await onPageCreated(page) }

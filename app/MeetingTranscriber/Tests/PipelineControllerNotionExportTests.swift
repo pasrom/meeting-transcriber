@@ -77,11 +77,104 @@ final class PipelineControllerNotionExportTests: XCTestCase {
         await assertSwapIsHeld(forJob: job)
     }
 
-    private func assertSwapIsHeld(forJob job: PipelineJob) async {
+    /// The same Notion database, spelled the three ways a job and the settings
+    /// can hold it: the 32 characters alone, a dashed UUID, or a pasted URL.
+    private static let databaseSpellings = [
+        "0123456789abcdef0123456789abcdef",
+        "01234567-89AB-cdef-0123-456789abcdef",
+        "https://www.notion.so/workspace/Meetings-0123456789abcdef0123456789abcdef?v=fedcba9876543210fedcba9876543210",
+    ]
+
+    /// Whether the export knows its page is decided on the database itself, not
+    /// on how the job or the settings happen to write its ID down.
+    func testTheSameDatabaseSpelledDifferentlyCountsAsTheExportsPage() async {
+        for onJob in Self.databaseSpellings {
+            for inSettings in Self.databaseSpellings {
+                let exporter = GatedNotionExporter(pageCreation: .never)
+                let pc = makeBuiltController()
+                let before = pc.queue
+                var job = makeStandupJob()
+                job.recordNotionPage(NotionPageResult(pageID: "page-1"), databaseID: onJob)
+                pc.queue.seedFinishedJobWithRunningExport(exporter: exporter, job: job, databaseID: inSettings)
+                await waitFor { await exporter.startedExports == 1 }
+
+                pc.rebuild()
+
+                XCTAssertNotIdentical(pc.queue, before, "held for \(onJob) on the job against \(inSettings) in the settings")
+                await exporter.release()
+                await pc.queue.awaitNotionExports()
+            }
+        }
+    }
+
+    /// The control for the test above: the spelling does not make every ID equal.
+    func testADifferentDatabaseSpelledAsAURLStillDoesNotCountAsTheExportsPage() async {
+        var job = makeStandupJob()
+        job.recordNotionPage(NotionPageResult(pageID: "page-1"), databaseID: Self.databaseSpellings[1])
+        let other = "https://www.notion.so/workspace/Meetings-ffffffffffffffffffffffffffffffff?v=0123456789abcdef0123456789abcdef"
+        await assertSwapIsHeld(forJob: job, databaseID: other)
+    }
+
+    // MARK: - Chained exports
+
+    /// Starts an export of the job into one database and, while it runs, queues
+    /// a second one into another behind it. The job already holds a page of the
+    /// second export's database, so only the older export is without its page.
+    @discardableResult
+    private func startChainedExports(
+        on queue: PipelineQueue, older: GatedNotionExporter, newer: GatedNotionExporter,
+    ) async -> UUID {
+        var job = makeStandupJob()
+        job.recordNotionPage(NotionPageResult(pageID: "page-b-earlier"), databaseID: "database-b")
+        let jobID = queue.seedFinishedJobWithRunningExport(exporter: older, job: job, databaseID: "database-a")
+        await waitFor { await older.startedExports == 1 }
+        queue.queueReExport(exporter: newer, databaseID: "database-b", jobID: jobID)
+        return jobID
+    }
+
+    /// Two exports of one job into different databases: the older one is the
+    /// request in flight, so its page, not the newer one's, decides the hold.
+    /// Only the newer export is handed over, which would leave the page the
+    /// older one creates unknown to the job.
+    func testAnOlderExportThatHasNotCreatedItsPageHoldsTheQueueWhileTheNewerOneKnowsItsOwn() async {
+        let older = GatedNotionExporter(pageCreation: .never, pageID: "page-a")
+        let newer = GatedNotionExporter(pageCreation: .beforeRelease, pageID: "page-b")
+        let pc = makeBuiltController()
+        let before = pc.queue
+        await startChainedExports(on: pc.queue, older: older, newer: newer)
+
+        pc.rebuild()
+
+        XCTAssertIdentical(pc.queue, before, "the page the older export creates would be unknown to the job")
+        await older.release()
+        await newer.release()
+        await pc.queue.awaitNotionExports()
+    }
+
+    /// An older export that has finished no longer decides anything: the chain
+    /// would otherwise keep the queue until its last export ends.
+    func testAnOlderExportThatHasFinishedNoLongerHoldsTheQueue() async {
+        let older = GatedNotionExporter(pageCreation: .never, pageID: "page-a")
+        let newer = GatedNotionExporter(pageCreation: .beforeRelease, pageID: "page-b")
+        let pc = makeBuiltController()
+        let before = pc.queue
+        let jobID = await startChainedExports(on: pc.queue, older: older, newer: newer)
+        await older.release()
+        // The newer export started and reported its page, so the job is back on its database.
+        await waitFor { pc.queue.job(withID: jobID)?.notionPageID == "page-b" && pc.queue.job(withID: jobID)?.notionDatabaseID == "database-b" }
+
+        pc.rebuild()
+
+        XCTAssertNotIdentical(pc.queue, before, "a finished export kept the queue in place")
+        await newer.release()
+        await pc.queue.awaitNotionExports()
+    }
+
+    private func assertSwapIsHeld(forJob job: PipelineJob, databaseID: String = "database-1") async {
         let exporter = GatedNotionExporter(pageCreation: .never)
         let pc = makeBuiltController()
         let before = pc.queue
-        pc.queue.seedFinishedJobWithRunningExport(exporter: exporter, job: job)
+        pc.queue.seedFinishedJobWithRunningExport(exporter: exporter, job: job, databaseID: databaseID)
         await waitFor { await exporter.startedExports == 1 }
 
         pc.rebuild()
@@ -166,15 +259,7 @@ final class PipelineControllerNotionExportTests: XCTestCase {
         let before = pc.queue
         let jobID = pc.queue.seedFinishedJobWithRunningExport(exporter: exporter)
         await waitForPage(of: jobID, on: pc.queue)
-        pc.queue.queueNotionExport(
-            PendingNotionExport(
-                protocolMD: "# Standup", transcript: nil, speakerNames: ["Alice"],
-                configuration: NotionExportConfiguration(exporter: exporter, databaseID: "database-1"),
-                savedLocally: true,
-            ),
-            jobID: jobID,
-        )
-        pc.queue.startPendingNotionExport(jobID: jobID)
+        pc.queue.queueReExport(exporter: exporter, databaseID: "database-1", jobID: jobID)
         pc.rebuild()
         // Marks the replaced queue's copy of the job; a run that still treats
         // the queue as live puts it back to in progress when it starts.
@@ -277,6 +362,7 @@ extension PipelineQueue {
         job: PipelineJob? = nil,
         deadline: Duration = NotionExportConfiguration.defaultDeadline,
         skipLocalMarkdown: Bool = false,
+        databaseID: String = "database-1",
     ) -> UUID {
         var job = job ?? makeStandupJob()
         job.state = .done
@@ -288,7 +374,7 @@ extension PipelineQueue {
             PendingNotionExport(
                 protocolMD: "# Standup", transcript: nil, speakerNames: [],
                 configuration: NotionExportConfiguration(
-                    exporter: exporter, databaseID: "database-1", skipLocalMarkdown: skipLocalMarkdown, deadline: deadline,
+                    exporter: exporter, databaseID: databaseID, skipLocalMarkdown: skipLocalMarkdown, deadline: deadline,
                 ),
                 savedLocally: true,
             ),
@@ -296,6 +382,21 @@ extension PipelineQueue {
         )
         startPendingNotionExport(jobID: job.id)
         return job.id
+    }
+}
+
+extension PipelineQueue {
+    /// A second export of a job whose first one is still running, chained behind it.
+    func queueReExport(exporter: any NotionExporting, databaseID: String, jobID: UUID) {
+        queueNotionExport(
+            PendingNotionExport(
+                protocolMD: "# Standup", transcript: nil, speakerNames: ["Alice"],
+                configuration: NotionExportConfiguration(exporter: exporter, databaseID: databaseID),
+                savedLocally: true,
+            ),
+            jobID: jobID,
+        )
+        startPendingNotionExport(jobID: jobID)
     }
 }
 
