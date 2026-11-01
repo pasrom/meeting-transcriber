@@ -819,15 +819,48 @@ require_command() {
 
 RPC_TOKEN=""  # populated once when the token file appears
 
-# Returns empty string + exit 0 on transient curl failure so callers in
-# `set -e` poll loops keep going. 15 s timeout covers brief main-thread
-# blocks during model load + audio teardown.
-rpc() {
-    local path="$1"
-    curl --silent --show-error --max-time 15 \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        "$RPC_BASE$path" 2>/dev/null || true
+# A /v1 job that has stopped moving: what the lanes poll for (rpc_is).
+_JOB_TERMINAL='.state == "done" or .state == "error"'
+
+# _job_parked <label> <job> — a poll_rpc predicate on GET /v1/jobs/<job>: true
+# once the job waits at speaker naming. A job that ends first (error or done)
+# can never park, so it fails the lane at once with what happened, instead of
+# being waited out.
+_job_parked() {
+    case "$(rpc_field '.state // empty')" in
+        speakerNamingPending) return 0 ;;
+        error) fail "$1: job $2 errored before reaching speaker naming: $(rpc_field '.error // "<none>"')" ;;
+        done) fail "$1: job $2 finished without parking at speaker naming (diarization produced no dialog?)" ;;
+    esac
+    return 1
 }
+
+# _await_job_done <label> <what> <job> <interval_s> <fail-fn> [poll_rpc options]
+# Waits up to PIPELINE_TIMEOUT_S for the job to reach a terminal state and
+# requires it to be done, failing through <fail-fn> (each lane has its own)
+# with the poll's status worded by rpc_why. Leaves the final GET /v1/jobs/<job>
+# body in RPC_BODY. The options go to poll_rpc before the window (--not-yet 404
+# for a job that is restored rather than enqueued).
+_await_job_done() {
+    local label="$1" what="$2" job="$3" interval="$4" failer="$5" state
+    shift 5
+    poll_rpc "/v1/jobs/$job" "$@" --each assert_app_alive --judge-deadline-read "$PIPELINE_TIMEOUT_S" "$interval" \
+        rpc_is "$_JOB_TERMINAL" \
+        || "$failer" "$(rpc_why $? "/v1/jobs/$job" "$label: $what ($job) did not reach a terminal state within ${PIPELINE_TIMEOUT_S}s")"
+    state="$(jq -r '.state' <<<"$RPC_BODY")"
+    [ "$state" = "done" ] \
+        || "$failer" "$label: $what ($job) ended as '$state', expected done. error=$(jq -r '.error // "<none>"' <<<"$RPC_BODY")"
+}
+
+# Resolve a job parked at speaker naming with a Skip, so the dialog does not
+# reopen on the next launch. Best effort, for teardown. The empty body still
+# goes out as an explicit zero Content-Length, which a POST with no body needs.
+_naming_skip() { rpc_post_status "/v1/jobs/$1/naming/skip" '' 10 >/dev/null; }
+
+# A poll_rpc --each check for teardown: non-zero (which stops the poll with
+# status 4) once the dev app is gone, instead of ending the run as
+# assert_app_alive does, so a crashed app does not cost a whole window per job.
+_dev_app_running() { pgrep -f "$_DEV_APP_PATTERN" >/dev/null 2>&1; }
 
 
 # --- Mic-only lane: audio routing ------------------------------------------
@@ -1939,13 +1972,13 @@ else
 fi
 
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
-# Assigns RPC_TOKEN in caller scope on success so subsequent `rpc` calls
-# carry the bearer token.
-# `rpc` ends in `|| true` so its callers can read a body without tripping
-# `set -e`, which also means it reports success for a refused connection. That
-# made this check "the token file exists", and the token file survives every
-# previous run on the host, so "RPC up" could be logged 70 ms after launch with
-# nothing listening yet. Ask curl directly and let its exit status decide.
+# Assigns RPC_TOKEN in caller scope on success so subsequent RPC reads carry
+# the bearer token.
+# This once went through a reader ending in `|| true`, which reported success
+# for a refused connection. That made this check "the token file exists", and
+# the token file survives every previous run on the host, so "RPC up" could be
+# logged 70 ms after launch with nothing listening yet. Ask curl directly and
+# let its exit status decide.
 _rpc_ready() {
     [ -f "$RPC_TOKEN_FILE" ] || return 1
     RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")"
@@ -2201,7 +2234,7 @@ log "Pre-trigger lastJob.jobID: ${PRE_LAST_JOB_ID:-<none>}"
 # ${PIPELINE_TIMEOUT_S}s of unanswered reads. --judge-deadline-read: the
 # verdict is in the snapshot itself (a job that is new and terminal), so the
 # read that follows a gap at the deadline counts like any answered tick. That
-# lets a job finishing up to about two read bounds (2 x STATE_READ_BOUND_S)
+# lets a job finishing up to about two read bounds (2 x RPC_READ_BOUND_S)
 # past ${PIPELINE_TIMEOUT_S}s pass, which is accepted: the timeout is a hang
 # guard, not a latency budget, and an answered last tick already overruns it
 # by up to one bound.
@@ -2982,11 +3015,9 @@ run_naming_escape() {
     [ -n "$job_id" ] || fail "$label: POST /v1/jobs did not return a job id (response: $enq)"
     log "$label: enqueued job $job_id"
 
-    _naming_escape_parked() {
-        [ "$(rpc "/v1/jobs/$job_id" | jq -r '.state // empty')" = "speakerNamingPending" ]
-    }
-    poll_until "$PIPELINE_TIMEOUT_S" 5 _naming_escape_parked \
-        || fail "$label: job $job_id never parked at speaker-naming within ${PIPELINE_TIMEOUT_S}s"
+    poll_rpc "/v1/jobs/$job_id" --each assert_app_alive --judge-deadline-read "$PIPELINE_TIMEOUT_S" 5 \
+        _job_parked "$label" "$job_id" \
+        || fail "$(rpc_why $? "/v1/jobs/$job_id" "$label: job $job_id never parked at speaker-naming within ${PIPELINE_TIMEOUT_S}s")"
 
     poll_state 30 2 state_is "$_NAMING_WINDOW_VISIBLE" \
         || fail "$(state_why $? "$label: naming window never became visible")"
@@ -3018,16 +3049,14 @@ run_naming_escape() {
     # The half that separates a dismiss from a Skip: the job must be untouched
     # and still resolvable. A Skip here would have committed the auto-names and
     # deleted the naming data.
-    local state
-    state="$(rpc "/v1/jobs/$job_id" | jq -r '.state // empty')"
-    [ "$state" = "speakerNamingPending" ] \
-        || fail "$label: Escape resolved the job (state=$state, expected speakerNamingPending)"
+    rpc_read "/v1/jobs/$job_id" \
+        || fail "$(rpc_why $? "/v1/jobs/$job_id" "$label: whether Escape left the job parked")"
+    rpc_is '.state == "speakerNamingPending"' \
+        || fail "$label: Escape resolved the job (HTTP $RPC_STATUS, state=$(rpc_field '.state // empty'), expected speakerNamingPending)"
     log "$label: job still parked — dismiss did not resolve it"
 
     # Leave nothing pending behind; the dialog would reopen on the next launch.
-    curl --silent --show-error --max-time 10 -X POST \
-        --header "Authorization: Bearer $RPC_TOKEN" --header "Content-Length: 0" \
-        "$RPC_BASE/v1/jobs/$job_id/naming/skip" >/dev/null 2>&1 || true
+    _naming_skip "$job_id"
     rm -rf "$fixture_dir"
     log "$label: PASS"
 }
@@ -3149,9 +3178,11 @@ run_naming_confirm() {
 
     # Read the naming choice: raw labels + auto-name suggestions + speaking time.
     local naming speaker_count
-    naming="$(curl --silent --show-error --max-time 10 \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        "$RPC_BASE/v1/jobs/$job_id/naming" 2>/dev/null || echo '{}')"
+    rpc_read "/v1/jobs/$job_id/naming" \
+        || fail "$(rpc_why $? "/v1/jobs/$job_id/naming" "$label: the naming choice")"
+    [ "$RPC_STATUS" = 200 ] \
+        || fail "$label: GET naming answered HTTP $RPC_STATUS (expected 200): $RPC_BODY"
+    naming="$RPC_BODY"
     echo "$naming" | jq '.' | sed 's/^/    /'
     speaker_count="$(jq -r '.speakers | length' <<<"$naming")"
     [ "${speaker_count:-0}" -ge 2 ] 2>/dev/null \
@@ -3178,23 +3209,9 @@ run_naming_confirm() {
     log "$label: naming confirmed; polling job to a terminal state"
 
     # Poll GET /v1/jobs/<id> (never /state → no auto-skip) until terminal.
-    local state=""
-    _job_terminal() {
-        assert_app_alive
-        state="$(curl --silent --show-error --max-time 10 \
-            --header "Authorization: Bearer $RPC_TOKEN" \
-            "$RPC_BASE/v1/jobs/$job_id" 2>/dev/null | jq -r '.state // empty')"
-        [ "$state" = "done" ] || [ "$state" = "error" ]
-    }
-    poll_until "$PIPELINE_TIMEOUT_S" 5 _job_terminal \
-        || fail "$label: job $job_id did not reach a terminal state within ${PIPELINE_TIMEOUT_S}s"
-
-    local final transcript_path
-    final="$(curl --silent --show-error --max-time 10 \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        "$RPC_BASE/v1/jobs/$job_id" 2>/dev/null || echo '{}')"
+    _await_job_done "$label" "job" "$job_id" 5 fail
+    local final="$RPC_BODY" transcript_path
     echo "$final" | jq '.' | sed 's/^/    /'
-    [ "$state" = "done" ] || fail "$label: job state=$state, expected done. Error: $(jq -r '.error // "<none>"' <<<"$final")"
     transcript_path="$(jq -r '.transcriptPath // empty' <<<"$final")"
     [ -n "$transcript_path" ] || fail "$label: job has no transcriptPath"
     [ -f "$transcript_path" ] || fail "$label: transcript file missing: $transcript_path"
@@ -3378,36 +3395,44 @@ run_naming_switch() {
         --voice-speaker B --out "$_NS_DIR/pairs" --stem "$stem" 2>&1 | sed 's/^/    /' \
         || fail "$label: could not build the pairs"
 
-    # Wait for a job to park at speaker naming and stash its naming DTO in the
-    # caller's `_NS_NAMING` (bash dynamic scoping, as the echo lanes do). An
-    # errored job is reported as such instead of being waited out.
-    _ns_parked() {
-        assert_app_alive
-        local state
-        state="$(rpc "/v1/jobs/$1" | jq -r '.state // empty')"
-        case "$state" in
-            error) fail "$label: job $1 errored before reaching speaker naming: $(rpc "/v1/jobs/$1" | jq -r '.error // "<none>"')" ;;
-            done) fail "$label: job $1 finished without parking at speaker naming (diarization produced no dialog?)" ;;
-        esac
-        _NS_NAMING="$(rpc "/v1/jobs/$1/naming")"
-        jq -e '(.speakers | length) > 0' <<<"$_NS_NAMING" >/dev/null 2>&1
+    # Wait for a job to park at speaker naming (an errored or finished job fails
+    # at once, see _job_parked), then for its naming DTO, which leaves the DTO
+    # in RPC_BODY. GET .../naming answers 404 until the job is awaiting naming,
+    # so that is a "not yet" there.
+    _ns_await_parked() {
+        local which="$1" job="$2"
+        poll_rpc "/v1/jobs/$job" --each assert_app_alive --judge-deadline-read "$PIPELINE_TIMEOUT_S" 5 \
+            _job_parked "$label" "$job" \
+            || fail "$(rpc_why $? "/v1/jobs/$job" "$label: $which job $job never parked at speaker naming within ${PIPELINE_TIMEOUT_S}s")"
+        local rc=0 why
+        poll_rpc "/v1/jobs/$job/naming" --not-yet 404 --each assert_app_alive --judge-deadline-read 30 1 \
+            rpc_is '(.speakers | length) > 0' || rc=$?
+        [ "$rc" -ne 0 ] || return 0
+        why="$(rpc_why "$rc" "/v1/jobs/$job/naming" "$label: $which job $job parked, but its naming choice listed no speakers within 30s")"
+        # A 404 there also means the job left speaker naming after it was
+        # seen parked; say so rather than blame the naming choice.
+        if rpc_read "/v1/jobs/$job" && ! rpc_is '.state == "speakerNamingPending"'; then
+            # `|| state=""`: rpc_field fails on a non-200, and a bare failing
+            # assignment would end the run under set -e before the message.
+            local state
+            state="$(rpc_field '.state // empty')" || state=""
+            why="$label: $which job $job left speaker naming before its naming choice was read (now HTTP $RPC_STATUS, state '$state')"
+        fi
+        fail "$why"
     }
-    local _NS_NAMING=""
 
     # First job: several mic speakers. Enqueued alone and parked before the
     # second is enqueued, so the window opens on this one.
     local first second first_naming second_naming
     first="$(_echo_enqueue "$label" "$_NS_DIR/pairs/first" "$stem")"
     log "$label: first pair enqueued as $first; waiting for it to park at naming (timeout ${PIPELINE_TIMEOUT_S}s)"
-    poll_until "$PIPELINE_TIMEOUT_S" 5 _ns_parked "$first" \
-        || fail "$label: first job $first never parked at speaker naming within ${PIPELINE_TIMEOUT_S}s"
-    first_naming="$_NS_NAMING"
+    _ns_await_parked first "$first"
+    first_naming="$RPC_BODY"
 
     second="$(_echo_enqueue "$label" "$_NS_DIR/pairs/second" "$stem")"
     log "$label: second pair enqueued as $second; waiting for it to park at naming"
-    poll_until "$PIPELINE_TIMEOUT_S" 5 _ns_parked "$second" \
-        || fail "$label: second job $second never parked at speaker naming within ${PIPELINE_TIMEOUT_S}s"
-    second_naming="$_NS_NAMING"
+    _ns_await_parked second "$second"
+    second_naming="$RPC_BODY"
 
     # --- the geometry, asserted rather than assumed ------------------------
     # Sorted labels are the dialog's row order (the view sorts `data.mapping`'s
@@ -3558,17 +3583,7 @@ run_naming_switch() {
     # dialog holds. `confirm-button` is A11yID.confirmButton.
     "$driver" press --identifier "confirm-button" 2>&1 | sed 's/^/    /' \
         || fail "$label: could not press the Confirm button"
-    local state=""
-    _ns_terminal() {
-        assert_app_alive
-        state="$(rpc "/v1/jobs/$1" | jq -r '.state // empty')"
-        [ "$state" = "done" ] || [ "$state" = "error" ]
-    }
-    poll_until "$PIPELINE_TIMEOUT_S" 5 _ns_terminal "$second" \
-        || fail "$label: second job $second did not reach a terminal state within ${PIPELINE_TIMEOUT_S}s after Confirm (state=$state)"
-    local final
-    final="$(rpc "/v1/jobs/$second")"
-    [ "$state" = "done" ] || fail "$label: second job state=$state after Confirm, expected done. Error: $(jq -r '.error // "<none>"' <<<"$final")"
+    _await_job_done "$label" "second job after Confirm" "$second" 5 fail
 
     # Assert the confirmed name reached the speaker DB, read over RPC
     # (`/state.speakerDB`). This is the confirm going through end to end: the
@@ -3589,10 +3604,8 @@ run_naming_switch() {
     # Leave nothing parked: the first job was never resolved (the lane switched
     # away from it via the picker rather than resolving it). Skip it over RPC so
     # the dialog does not reopen on the next launch, then let it settle.
-    curl --silent --show-error --max-time 10 -X POST \
-        --header "Authorization: Bearer $RPC_TOKEN" --header "Content-Length: 0" \
-        "$RPC_BASE/v1/jobs/$first/naming/skip" >/dev/null 2>&1 || true
-    poll_until "$PIPELINE_TIMEOUT_S" 5 _ns_terminal "$first" || true
+    _naming_skip "$first"
+    poll_rpc "/v1/jobs/$first" --each assert_app_alive "$PIPELINE_TIMEOUT_S" 5 rpc_is "$_JOB_TERMINAL" || true
     log "$label: PASS"
 }
 
@@ -3692,7 +3705,7 @@ run_mic_stall() {
     # MIC_STALL_LATEST_S into the recording. Unlike the lastJob poll, the
     # deadline read is not judged: MIC_STALL_LATEST_S bounds when the stall
     # may land, the snapshot does not say when it landed, and that read can
-    # return up to STATE_READ_BOUND_S after the window.
+    # return up to RPC_READ_BOUND_S after the window.
     local fault="" count="" mic_age="" app_age="" watch="" elapsed=0 saw_mic_buffer=false status=0
     _ms_stalled() {
         fault=""; count=""; mic_age=""; app_age=""; watch=""
@@ -4010,12 +4023,13 @@ _ug_assert_speakers() {
 }
 
 _ug_assert_finished_record() {
-    local label="[upgrade:finished-record]" body
-    body="$(rpc "/v1/jobs/$_UG_FINISHED_ID")"
-    jq -e --arg t "$_UG_FINISHED_TITLE" --arg p "$_UG_FINISHED_TRANSCRIPT" \
-        '.state == "done" and .meetingTitle == $t and .transcriptPath == $p
-         and .echo.windowsScored == 12 and .echo.cancellationSeconds == null' <<<"$body" >/dev/null 2>&1 \
-        || _ug_fail "$label: GET /v1/jobs/$_UG_FINISHED_ID does not serve the v0.8.1 record: ${body:-<no answer>}"
+    local label="[upgrade:finished-record]"
+    rpc_read "/v1/jobs/$_UG_FINISHED_ID" \
+        || _ug_fail "$(rpc_why $? "/v1/jobs/$_UG_FINISHED_ID" "$label: whether the v0.8.1 record is still served")"
+    rpc_is '.state == "done" and .meetingTitle == $t and .transcriptPath == $p
+         and .echo.windowsScored == 12 and .echo.cancellationSeconds == null' \
+        --arg t "$_UG_FINISHED_TITLE" --arg p "$_UG_FINISHED_TRANSCRIPT" \
+        || _ug_fail "$label: GET /v1/jobs/$_UG_FINISHED_ID does not serve the v0.8.1 record: HTTP $RPC_STATUS ${RPC_BODY:-<empty body>}"
     log "$label: v0.8.1 record still served"
 }
 
@@ -4030,18 +4044,11 @@ _ug_enqueue() {
 }
 
 _UG_STATUS=""
-_ug_job_terminal() {
-    assert_app_alive
-    _UG_STATUS="$(rpc "/v1/jobs/$1")"
-    jq -e '.state == "done" or .state == "error"' <<<"$_UG_STATUS" >/dev/null 2>&1
-}
-# Waits for a job to finish and requires done; leaves its status in _UG_STATUS.
+# _ug_await_done <label> <what> <job> [poll_rpc options] — waits for a job to
+# finish and requires done; leaves its status in _UG_STATUS.
 _ug_await_done() {
-    local label="$1" what="$2" id="$3"
-    poll_until "$PIPELINE_TIMEOUT_S" 2 _ug_job_terminal "$id" \
-        || _ug_fail "$label: $what ($id) did not finish within ${PIPELINE_TIMEOUT_S}s (last: ${_UG_STATUS:-<no answer>})"
-    jq -e '.state == "done"' <<<"$_UG_STATUS" >/dev/null \
-        || _ug_fail "$label: $what ($id) ended in error: $(jq -r '.error // "?"' <<<"$_UG_STATUS")"
+    _await_job_done "$1" "$2" "$3" 2 _ug_fail "${@:4}"
+    _UG_STATUS="$RPC_BODY"
 }
 
 # The finished-job records, which every job that reaches a terminal state adds
@@ -4060,7 +4067,9 @@ _ug_assert_restored_job() {
     _ug_enqueue "$_UG_TRIGGER_FIXTURE"
     trigger="$_UG_JOB_ID"
     log "$label: imported the fixture as job $trigger, which builds the queue and reads the snapshot"
-    _ug_await_done "$label" "the interrupted v0.8.1 job" "$_UG_PENDING_ID"
+    # --not-yet 404: the job is restored from the v0.8.1 snapshot when the
+    # import builds the queue, so the app may not know it on the first read.
+    _ug_await_done "$label" "the interrupted v0.8.1 job" "$_UG_PENDING_ID" --not-yet 404
     transcript="$(jq -r '.transcriptPath // empty' <<<"$_UG_STATUS")"
     upgrade_path_inside "$transcript" "$OUTPUT_DIR" && [ -s "$transcript" ] \
         || _ug_fail "$label: the restored job's transcript '$transcript' is not a file under $OUTPUT_DIR"
@@ -4103,8 +4112,10 @@ _ug_relaunch_and_assert() {
     trigger="$_UG_JOB_ID"
     _ug_await_done "$label" "the second import" "$trigger"
     _ug_assert_records "$label" 4
-    jq -e '.state == "done"' <<<"$(rpc "/v1/jobs/$_UG_PENDING_ID")" >/dev/null \
-        || _ug_fail "$label: the restored job no longer reads as done"
+    rpc_read "/v1/jobs/$_UG_PENDING_ID" \
+        || _ug_fail "$(rpc_why $? "/v1/jobs/$_UG_PENDING_ID" "$label: whether the restored job still reads as done")"
+    rpc_is '.state == "done"' \
+        || _ug_fail "$label: the restored job no longer reads as done: HTTP $RPC_STATUS ${RPC_BODY:-<empty body>}"
     [ -f "$_UG_RELOCATED_MIX" ] \
         || _ug_fail "$label: the moved recording $_UG_RELOCATED_MIX is gone"
     log "$label: no second migration, no second run of the restored job"
@@ -4193,21 +4204,16 @@ _echo_enqueue() {
 # without one is a failure, but it has to be READ as one: polling only for the
 # verdict would turn a job that errored in its first second into a timeout, and
 # report a two-minute wait instead of the error that caused it.
-_echo_settled() {
-    assert_app_alive
-    # Writes the caller's `_ECHO_STATUS`: bash locals are dynamically scoped, so
-    # the lane declares it and this stashes the last response for the
-    # post-loop assertions. Same shape the naming lanes use.
-    _ECHO_STATUS="$(rpc "/v1/jobs/$1")"
-    jq -e '.echo != null or .state == "done" or .state == "error"' <<<"$_ECHO_STATUS" >/dev/null 2>&1
-}
+_ECHO_SETTLED='.echo != null or .state == "done" or .state == "error"'
 
-# Waits for the verdict on $1 and leaves it in $_ECHO_STATUS.
+# Waits for the verdict on $1 and leaves it in $_ECHO_STATUS (the caller's,
+# through bash's dynamic scoping: the lane declares it for the post-loop
+# assertions, the same shape the naming lanes use).
 _echo_await_verdict() {
     local label="$1" job="$2"
-    _ECHO_STATUS=""
-    poll_until "$PIPELINE_TIMEOUT_S" 3 _echo_settled "$job" \
-        || fail "$label: job $job produced neither an echo verdict nor a terminal state within ${PIPELINE_TIMEOUT_S}s (last: $_ECHO_STATUS)"
+    poll_rpc "/v1/jobs/$job" --each assert_app_alive --judge-deadline-read "$PIPELINE_TIMEOUT_S" 3 rpc_is "$_ECHO_SETTLED" \
+        || fail "$(rpc_why $? "/v1/jobs/$job" "$label: job $job produced neither an echo verdict nor a terminal state within ${PIPELINE_TIMEOUT_S}s")"
+    _ECHO_STATUS="$RPC_BODY"
     jq -e '.echo != null' <<<"$_ECHO_STATUS" >/dev/null \
         || fail "$label: job $job reached state=$(jq -r '.state // "?"' <<<"$_ECHO_STATUS") with NO echo verdict. Every dual-source job is measured, so a missing verdict means the tracks never reached the detector. error=$(jq -r '.error // "<none>"' <<<"$_ECHO_STATUS")"
     log "$label: verdict $(jq -c '.echo' <<<"$_ECHO_STATUS")"
@@ -4219,23 +4225,14 @@ _echo_await_verdict() {
 # Best effort: this is teardown, and a job that will not settle is not this
 # lane's failure to report.
 _echo_settled_or_skipped() {
-    local state
-    state="$(rpc "/v1/jobs/$1" | jq -r '.state // empty')"
-    case "$state" in
+    case "$(rpc_field '.state // empty')" in
         done|error) return 0 ;;
-        speakerNamingPending)
-            # Same call the naming-escape lane makes; the explicit zero
-            # Content-Length matters for a POST with no body.
-            curl --silent --show-error --max-time 10 -X POST \
-                --header "Authorization: Bearer $RPC_TOKEN" \
-                --header "Content-Length: 0" \
-                "$RPC_BASE/v1/jobs/$1/naming/skip" >/dev/null 2>&1 || true
-            ;;
+        speakerNamingPending) _naming_skip "$1" ;;
     esac
     return 1
 }
 _echo_release() {
-    poll_until "$PIPELINE_TIMEOUT_S" 2 _echo_settled_or_skipped "$1" || true
+    poll_rpc "/v1/jobs/$1" --each _dev_app_running "$PIPELINE_TIMEOUT_S" 2 _echo_settled_or_skipped "$1" || true
 }
 
 # Fetches a finished job and requires it to have settled as done. Both echo
@@ -4245,11 +4242,11 @@ _echo_release() {
 # because `fail` is an `exit` and an exit inside a command substitution leaves
 # only the subshell.
 _echo_read_done() {
-    local label="$1" which="$2" job="$3" state
-    _ECHO_STATUS="$(rpc "/v1/jobs/$job")"
-    state="$(jq -r '.state // empty' <<<"$_ECHO_STATUS")"
-    [ "$state" = "done" ] \
-        || fail "$label: $which settled as '$state', expected done. error=$(jq -r '.error // "<none>"' <<<"$_ECHO_STATUS")"
+    local label="$1" which="$2" job="$3"
+    rpc_read "/v1/jobs/$job" || fail "$(rpc_why $? "/v1/jobs/$job" "$label: how the $which settled")"
+    _ECHO_STATUS="$RPC_BODY"
+    rpc_is '.state == "done"' \
+        || fail "$label: $which settled as '$(rpc_field '.state // empty')' (HTTP $RPC_STATUS), expected done. error=$(rpc_field '.error // "<none>"')"
 }
 
 # Asserts a verdict was computed over enough windows to mean anything. Shared
@@ -4264,7 +4261,7 @@ _echo_assert_scored() {
 
 run_echo_bleed() {
     local label="[echo-bleed]"
-    # Stashed by _echo_settled through bash's dynamic scoping (see there).
+    # Stashed by _echo_await_verdict and _echo_read_done through bash's dynamic scoping (see there).
     local _ECHO_STATUS=""
     require_command python3
 
@@ -4455,7 +4452,7 @@ _echo_removed_state() {
 
 run_echo_cancel() {
     local label="[echo-cancel]"
-    # Stashed by _echo_settled through bash's dynamic scoping (see there).
+    # Stashed by _echo_await_verdict and _echo_read_done through bash's dynamic scoping (see there).
     local _ECHO_STATUS=""
     require_command python3
     _echo_require_model "$label"
@@ -4646,14 +4643,14 @@ _pp_register_outputs() {
     done <<<"$paths"
 }
 
-# Writes `_PP_STATUS` (dynamic scoping, as the echo lanes' poll does), and
-# registers the outputs on every tick, so a job that times out after saving its
-# transcript still has it removed.
+# A poll_rpc predicate. Writes `_PP_STATUS` and registers the outputs on every
+# answered tick, so a job that times out after saving its transcript still has
+# it removed.
 _pp_terminal() {
-    assert_app_alive
-    _PP_STATUS="$(rpc "/v1/jobs/$1")"
+    [ "$RPC_STATUS" = 200 ] || return 1
+    _PP_STATUS="$RPC_BODY"
     _pp_register_outputs
-    jq -e '.state == "done" or .state == "error"' <<<"$_PP_STATUS" >/dev/null 2>&1
+    rpc_is "$_JOB_TERMINAL"
 }
 
 # Import one fixture copy and wait for the job to settle. Leaves the final
@@ -4670,8 +4667,8 @@ _pp_run_job() {
     log "$label: enqueued job $job"
     printf '%s\n' "$job" >>"$_PP_JOBS_RECORD"
     _PP_STATUS=""
-    poll_until "$PIPELINE_TIMEOUT_S" 2 _pp_terminal "$job" \
-        || fail "$label: job $job did not settle within ${PIPELINE_TIMEOUT_S}s (last: $_PP_STATUS)"
+    poll_rpc "/v1/jobs/$job" --each assert_app_alive --judge-deadline-read "$PIPELINE_TIMEOUT_S" 2 _pp_terminal \
+        || fail "$(rpc_why $? "/v1/jobs/$job" "$label: job $job did not settle within ${PIPELINE_TIMEOUT_S}s")"
     _PP_NEW_REQUESTS="$(tail -n +"$(( before + 1 ))" "$_PP_DIR/requests.jsonl" 2>/dev/null || true)"
     _PP_TRANSCRIPT="$(jq -r '.transcriptPath // empty' <<<"$_PP_STATUS")"
     _PP_PROTOCOL="$(jq -r '.protocolPath // empty' <<<"$_PP_STATUS")"
@@ -5073,15 +5070,11 @@ _qf_cycle() {
 
     # And the next launch restores it under its title.
     _qf_relaunch "$label"
-    # Polled: the restore runs when auto-watch starts, a beat after RPC is up.
-    local dto=""
-    _qf_restored() {
-        dto="$(rpc "/v1/jobs/$_QF_JOB_ID")"
-        [ "$(jq -r '.meetingTitle // empty' <<<"$dto" 2>/dev/null || true)" = "$_QF_TITLE" ]
-    }
-    poll_until 30 1 _qf_restored \
-        || fail "$label: after the relaunch GET /v1/jobs/$_QF_JOB_ID does not return the job with its title within 30s (last: ${dto:-<no response>})"
-    log "$label: restored after relaunch: $(jq -c '{jobID, state, meetingTitle}' <<<"$dto")"
+    # Polled: the restore runs when auto-watch starts, a beat after RPC is up,
+    # so a 404 until then is an answer ("not restored yet"), not a gap.
+    poll_rpc "/v1/jobs/$_QF_JOB_ID" --not-yet 404 --judge-deadline-read 30 1 rpc_is '.meetingTitle == $t' --arg t "$_QF_TITLE" \
+        || fail "$(rpc_why $? "/v1/jobs/$_QF_JOB_ID" "$label: after the relaunch GET /v1/jobs/$_QF_JOB_ID does not return the job with its title within 30s")"
+    log "$label: restored after relaunch: $(jq -c '{jobID, state, meetingTitle}' <<<"$RPC_BODY")"
     _QF_CYCLE_ACTIVE=""
 }
 
@@ -5126,8 +5119,12 @@ _qf_release_jobs() {
             [ -n "$f" ] && _QF_OWNED_PATHS+=("$f")
         done < <(_qf_job_file_paths "$job")
         _echo_release "$job"
-        dto="$(rpc "/v1/jobs/$job")"
-        state="$(jq -r '.state // empty' <<<"$dto")"
+        if ! rpc_read "/v1/jobs/$job"; then
+            log "[quit-flush] NOTE: no answer from the app about job $job, so its files stay where they are"
+            continue
+        fi
+        dto="$RPC_BODY"
+        state="$(rpc_field '.state // empty')" || state=""
         if [ "$state" != "done" ]; then
             log "[quit-flush] NOTE: job $job settled as '${state:-unknown}', not done; it stays in the queue until dismissed in the app. error=$(jq -r '.error // "<none>"' <<<"$dto")"
             continue
