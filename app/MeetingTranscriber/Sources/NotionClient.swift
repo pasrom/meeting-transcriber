@@ -273,11 +273,13 @@ actor NotionClient: NotionExporting {
 
     /// Replace the job's page with the current protocol, including on a retry
     /// of a partially appended export. Append first: a failed append must not
-    /// erase the previous protocol. A failure can temporarily leave duplicates,
-    /// but a retry never adds to them: it recognises a complete copy that an
-    /// interrupted replace already wrote (`NotionReplacePlan`), appends nothing
-    /// then, and only removes what precedes it. The old blocks go one request
-    /// at a time and a failed delete does not stop the rest (`deleteBlocks`).
+    /// erase the previous protocol. A failure can temporarily leave duplicates.
+    /// A retry that finds a complete copy of the new content at the end of the
+    /// page, left by an interrupted replace, appends nothing and only removes
+    /// what precedes it (`NotionReplacePlan`). When it cannot tell (the text
+    /// differs, or the copy is partial) it appends a fresh copy, so the page
+    /// can grow until a pass deletes cleanly. The old blocks go one request at
+    /// a time and a failed delete does not stop the rest (`deleteBlocks`).
     /// Re-export replaces manual edits on this app-owned page as well.
     private func recoverExistingPage(
         _ pageID: String,

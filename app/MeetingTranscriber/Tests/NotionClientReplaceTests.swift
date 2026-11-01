@@ -55,20 +55,70 @@ final class NotionClientReplaceTests: XCTestCase {
         XCTAssertEqual(page.creates, 0)
     }
 
-    func testRetryAfterAFailedDeleteLeavesExactlyOneCopy() async throws {
+    func testInterruptedReplaceOfARealProtocolConvergesWithoutGrowth() async throws {
+        // A protocol as the app saves it ends in toggles that carry the full
+        // transcript as children, and has a table: the shapes whose content a
+        // listing of root blocks cannot show. The recognition must still work
+        // for them, or it would not help the protocols users actually export.
+        let protocolMarkdown = """
+        # Weekly Sync
+
+        ## Summary
+
+        - Alice presented the plan.
+        - Bob raised a risk.
+
+        | Owner | Task |
+        | --- | --- |
+        | Alice | Draft |
+
+        ---
+
+        ## Full Transcript
+
+        Alice: Hello.
+        Bob: Hi.
+        """
+        let expected = MarkdownToNotionBlocks.convert(markdown: protocolMarkdown, transcript: nil)
+        XCTAssertEqual(expected.last?.type, "toggle", "The fixture must end in a transcript toggle")
+        XCTAssertTrue(expected.contains { $0.type == "table" })
         let page = FakeNotionPage(initial: texts("Old", count: 4))
         let client = page.makeClient(databaseID: databaseID)
-        let newContent = markdown("New", count: 4)
 
         page.deletePlan = .succeedThenFail(successes: 1)
-        await assertFails(client, markdown: newContent)
-        XCTAssertTrue(page.texts.contains { $0.hasPrefix("Old") }, "The content is still duplicated after the failure")
+        await assertFails(client, markdown: protocolMarkdown)
+        let sizeAfterFirstFailure = page.texts.count
+
+        page.deletePlan = .succeedThenFail(successes: 0)
+        await assertFails(client, markdown: protocolMarkdown)
+        XCTAssertLessThanOrEqual(page.texts.count, sizeAfterFirstFailure, "A failed replace must not make the page grow")
+        XCTAssertEqual(page.appends, 1, "Only the first pass wrote the protocol")
 
         page.deletePlan = .alwaysSucceed
         _ = try await client.exportMeeting(
-            title: "Notes", date: nil, tags: [], markdown: newContent, transcript: nil, existingPageID: pageID,
+            title: "Notes", date: nil, tags: [], markdown: protocolMarkdown, transcript: nil, existingPageID: pageID,
         )
-        XCTAssertEqual(page.texts, texts("New", count: 4))
+        XCTAssertEqual(page.types, expected.map(\.type))
+        XCTAssertEqual(page.appends, 1)
+    }
+
+    func testAHeadingIsNotTakenForAParagraphWithTheSameText() async throws {
+        // The page ends in a heading "Alpha" and a paragraph "Beta"; the new
+        // content is two paragraphs with that same text. The text matches, the
+        // types do not, so the new content must still be written.
+        let page = FakeNotionPage(initial: [
+            .init(type: "paragraph", text: "Old"),
+            .init(type: "heading_1", text: "Alpha"),
+            .init(type: "paragraph", text: "Beta"),
+        ])
+        let client = page.makeClient(databaseID: databaseID)
+
+        _ = try await client.exportMeeting(
+            title: "Notes", date: nil, tags: [], markdown: "Alpha\n\nBeta", transcript: nil, existingPageID: pageID,
+        )
+        XCTAssertEqual(page.texts, ["Alpha", "Beta"])
+        XCTAssertEqual(page.types, ["paragraph", "paragraph"])
+        XCTAssertEqual(page.appends, 1)
     }
 
     func testAChangedProtocolIsStillAppendedWhenTheTailDoesNotMatch() async throws {
@@ -104,7 +154,7 @@ final class NotionClientReplaceTests: XCTestCase {
     func testAFailedDeleteDoesNotStopTheRemainingDeletes() async {
         let page = FakeNotionPage(initial: texts("Old", count: 4))
         let client = page.makeClient(databaseID: databaseID)
-        page.deletePlan = .failBlock(containing: "Old paragraph 2.")
+        page.deletePlan = .failBlocks(containing: ["Old paragraph 2."])
 
         do {
             _ = try await client.exportMeeting(
@@ -128,6 +178,46 @@ final class NotionClientReplaceTests: XCTestCase {
         XCTAssertEqual(page.deleteAttempts, 3)
     }
 
+    func testSuccessfulDeleteResetsTheConsecutiveFailureCount() async {
+        // Failures on blocks 1, 3 and 4 are never three in a row, so every
+        // block is tried and only the three that failed remain.
+        let page = FakeNotionPage(initial: texts("Old", count: 6))
+        let client = page.makeClient(databaseID: databaseID)
+        page.deletePlan = .failBlocks(containing: ["Old paragraph 1.", "Old paragraph 3.", "Old paragraph 4."])
+
+        await assertFails(client, markdown: markdown("New", count: 2))
+        XCTAssertEqual(page.deleteAttempts, 6, "A success between failures keeps the loop going")
+        XCTAssertEqual(page.texts, ["Old paragraph 1.", "Old paragraph 3.", "Old paragraph 4."] + texts("New", count: 2))
+    }
+
+    // MARK: - Listing more than one page of root blocks
+
+    func testEveryRootBlockOfALongPageIsReplaced() async throws {
+        let page = FakeNotionPage(initial: texts("Old", count: 150))
+        let client = page.makeClient(databaseID: databaseID)
+
+        _ = try await client.exportMeeting(
+            title: "Notes", date: nil, tags: [], markdown: markdown("New", count: 3), transcript: nil, existingPageID: pageID,
+        )
+        XCTAssertEqual(page.listCalls, 2)
+        XCTAssertEqual(page.deleteAttempts, 150)
+        XCTAssertEqual(page.texts, texts("New", count: 3))
+    }
+
+    func testACompleteCopyIsRecognisedWhenTheListingNeedsSeveralPages() async throws {
+        // 120 leftovers then the copy: the copy straddles the 100-block page
+        // boundary of the listing, so it is only seen when every page is read.
+        let page = FakeNotionPage(initial: texts("Old", count: 120) + texts("New", count: 3))
+        let client = page.makeClient(databaseID: databaseID)
+
+        _ = try await client.exportMeeting(
+            title: "Notes", date: nil, tags: [], markdown: markdown("New", count: 3), transcript: nil, existingPageID: pageID,
+        )
+        XCTAssertEqual(page.appends, 0)
+        XCTAssertEqual(page.deleteAttempts, 120)
+        XCTAssertEqual(page.texts, texts("New", count: 3))
+    }
+
     // MARK: - Helpers
 
     private func texts(_ prefix: String, count: Int) -> [String] {
@@ -146,20 +236,29 @@ final class NotionClientReplaceTests: XCTestCase {
     }
 }
 
-/// A Notion page whose root blocks are plain paragraphs, served through the
-/// URL protocol below.
+/// A Notion page with root blocks of any type, served through `MockURLProtocol`.
+/// The block listing pages through 100 blocks at a time, as Notion does.
 private final class FakeNotionPage: @unchecked Sendable {
     enum DeletePlan {
         case alwaysSucceed
         /// The first `successes` deletes of the pass work, every later one fails.
         case succeedThenFail(successes: Int)
-        case failBlock(containing: String)
+        case failBlocks(containing: Set<String>)
+    }
+
+    struct Seed {
+        let type: String
+        let text: String
     }
 
     private struct Block {
         let id: String
+        let type: String
         let text: String
+        let hasChildren: Bool
     }
+
+    private static let listPageSize = 100
 
     var deletePlan = DeletePlan.alwaysSucceed {
         didSet { deletesThisPlan = 0 }
@@ -168,6 +267,7 @@ private final class FakeNotionPage: @unchecked Sendable {
     private(set) var creates = 0
     private(set) var appends = 0
     private(set) var deleteAttempts = 0
+    private(set) var listCalls = 0
     private var deletesThisPlan = 0
     private var blocks: [Block] = []
     private var nextID = 0
@@ -176,8 +276,16 @@ private final class FakeNotionPage: @unchecked Sendable {
         blocks.map(\.text)
     }
 
-    init(initial: [String]) {
-        blocks = initial.map { Block(id: newID(), text: $0) }
+    var types: [String] {
+        blocks.map(\.type)
+    }
+
+    init(initial: [Seed]) {
+        blocks = initial.map { Block(id: newID(), type: $0.type, text: $0.text, hasChildren: false) }
+    }
+
+    convenience init(initial: [String]) {
+        self.init(initial: initial.map { Seed(type: "paragraph", text: $0) })
     }
 
     private static func body(of request: URLRequest) -> Data? {
@@ -237,14 +345,21 @@ private final class FakeNotionPage: @unchecked Sendable {
     }
 
     private func list(_ request: URLRequest) -> (HTTPURLResponse, Data) {
-        let objects: [[String: Any]] = blocks.map { block in
+        listCalls += 1
+        let cursor = URLComponents(url: request.url ?? URL(fileURLWithPath: "/"), resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "start_cursor" }?.value.flatMap(Int.init) ?? 0
+        let end = min(cursor + Self.listPageSize, blocks.count)
+        let objects: [[String: Any]] = blocks[cursor ..< end].map { block in
             [
                 "id": block.id,
-                "type": "paragraph",
-                "paragraph": ["rich_text": [["type": "text", "plain_text": block.text, "text": ["content": block.text]]]],
+                "type": block.type,
+                "has_children": block.hasChildren,
+                block.type: ["rich_text": [["type": "text", "plain_text": block.text, "text": ["content": block.text]]]],
             ]
         }
-        let data = (try? JSONSerialization.data(withJSONObject: ["results": objects, "has_more": false])) ?? Data()
+        var payload: [String: Any] = ["results": objects, "has_more": end < blocks.count]
+        if end < blocks.count { payload["next_cursor"] = String(end) }
+        let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
         return (respond(request, json: "{}").0, data)
     }
 
@@ -253,9 +368,11 @@ private final class FakeNotionPage: @unchecked Sendable {
         let body = Self.body(of: request)
         let object = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         for child in object?["children"] as? [[String: Any]] ?? [] {
-            let richText = (child["paragraph"] as? [String: Any])?["rich_text"] as? [[String: Any]]
+            let type = child["type"] as? String ?? ""
+            let content = child[type] as? [String: Any]
+            let richText = content?["rich_text"] as? [[String: Any]]
             let text = richText?.compactMap { ($0["text"] as? [String: Any])?["content"] as? String }.joined() ?? ""
-            blocks.append(Block(id: newID(), text: text))
+            blocks.append(Block(id: newID(), type: type, text: text, hasChildren: content?["children"] != nil))
         }
         return respond(request, json: "{}")
     }
@@ -267,7 +384,7 @@ private final class FakeNotionPage: @unchecked Sendable {
         let fails: Bool = switch deletePlan {
         case .alwaysSucceed: false
         case let .succeedThenFail(successes): deletesThisPlan > successes
-        case let .failBlock(text): blocks.first { $0.id == id }?.text == text
+        case let .failBlocks(texts): blocks.first { $0.id == id }.map { texts.contains($0.text) } ?? false
         }
         if fails {
             return respond(
