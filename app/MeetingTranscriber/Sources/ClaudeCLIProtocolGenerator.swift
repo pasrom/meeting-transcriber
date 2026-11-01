@@ -23,18 +23,19 @@
         /// `timeoutSeconds`; tests pass a short one.
         let timeout: TimeInterval
 
-        /// How long a CLI sent SIGTERM may take to exit before it gets SIGKILL.
+        /// How long a CLI sent SIGTERM, for a run or for its `--help` probe,
+        /// may take to exit before it gets SIGKILL.
         let terminationGrace: TimeInterval
 
         /// How long the CLI's output is still read after it has exited
         /// (`ProcessOutput.defaultDrainGrace` in production).
         let outputDrainGrace: TimeInterval
 
-        /// What `timeout` is measured on; see `BoundedProcess.init`. The
-        /// `--help` probe keeps the suspending clock.
+        /// What `timeout` and `helpProbeTimeout` are measured on; see
+        /// `BoundedProcess.init`.
         let clock: any Clock<Duration>
 
-        /// How long the `--help` probe may take
+        /// How long the `--help` probe may take, on `clock`
         /// (`helpProbeTimeoutSeconds` in production).
         let helpProbeTimeout: TimeInterval
 
@@ -77,16 +78,12 @@
             meetingStartTime: Date?,
         ) async throws -> String {
             let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language, meetingStartTime: meetingStartTime) + transcript
-            let launch = await Self.launchConfiguration(
-                claudeBin: claudeBin, anthropicAPIKey: anthropicAPIKey, helpTimeout: helpProbeTimeout,
-            )
+            let launch = await launchConfiguration()
             try Task.checkCancellation()
             do {
                 return try await run(prompt: prompt, launch: launch)
             } catch let rejection as NoSessionPersistenceRejected {
-                let retry = await Self.launchWithoutRejectedFlag(
-                    after: launch, claudeBin: claudeBin, helpTimeout: helpProbeTimeout,
-                )
+                let retry = await launchWithoutRejectedFlag(after: launch)
                 try Task.checkCancellation()
                 guard let retry else { throw rejection.error }
                 return try await run(prompt: prompt, launch: retry)

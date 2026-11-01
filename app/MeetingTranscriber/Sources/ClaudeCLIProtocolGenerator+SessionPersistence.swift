@@ -44,24 +44,20 @@
         /// in only when `--help` lists it, since a CLI older than the flag
         /// rejects it; a help text that cannot be read counts as no, which
         /// keeps the behaviour from before the flag existed.
-        static func launchConfiguration(
-            claudeBin: String, anthropicAPIKey: String?, helpTimeout: TimeInterval,
-        ) async -> LaunchConfiguration {
-            let resolvedBin = resolveClaudePath(claudeBin)
-            let environment = buildEnvironment(
+        func launchConfiguration() async -> LaunchConfiguration {
+            let resolvedBin = Self.resolveClaudePath(claudeBin)
+            let environment = Self.buildEnvironment(
                 baseEnvironment: ProcessInfo.processInfo.environment,
-                searchPaths: searchPaths,
+                searchPaths: Self.searchPaths,
                 anthropicAPIKey: anthropicAPIKey,
             )
-            let answer = await askNoSessionPersistence(
-                resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment, helpTimeout: helpTimeout,
-            )
+            let answer = await askNoSessionPersistence(resolvedBin: resolvedBin, environment: environment)
             if answer != .listed, !Task.isCancelled {
                 logger.warning(
                     "claude_cli_session_persistence_on helpRead=\(answer != .unread, privacy: .public) — the CLI keeps this run's session, transcript included",
                 )
             }
-            let arguments = buildSubprocessArgs(
+            let arguments = Self.buildSubprocessArgs(
                 claudeBin: claudeBin, resolvedBin: resolvedBin, noSessionPersistence: answer == .listed,
             )
             return (resolvedBin, arguments, environment)
@@ -71,20 +67,15 @@
         /// or nil for none. Drops the remembered yes and asks `--help` again:
         /// only a help text that was read and does not list the flag earns a
         /// run without it, with the same executable and environment.
-        static func launchWithoutRejectedFlag(
-            after failed: LaunchConfiguration, claudeBin: String, helpTimeout: TimeInterval,
-        ) async -> LaunchConfiguration? {
-            let key = cacheKey(resolvedBin: failed.resolvedBin, claudeBin: claudeBin)
-            _ = binariesAcceptingNoSessionPersistence.withLock { $0.remove(key) }
-            let answer = await askNoSessionPersistence(
-                resolvedBin: failed.resolvedBin, claudeBin: claudeBin, environment: failed.environment,
-                helpTimeout: helpTimeout,
-            )
+        func launchWithoutRejectedFlag(after failed: LaunchConfiguration) async -> LaunchConfiguration? {
+            let key = Self.cacheKey(resolvedBin: failed.resolvedBin, claudeBin: claudeBin)
+            _ = Self.binariesAcceptingNoSessionPersistence.withLock { $0.remove(key) }
+            let answer = await askNoSessionPersistence(resolvedBin: failed.resolvedBin, environment: failed.environment)
             logger.warning(
                 "claude_cli_rejected_no_session_persistence help=\(String(describing: answer), privacy: .public) retry=\(answer == .notListed, privacy: .public)",
             )
             guard answer == .notListed else { return nil }
-            let arguments = buildSubprocessArgs(
+            let arguments = Self.buildSubprocessArgs(
                 claudeBin: claudeBin, resolvedBin: failed.resolvedBin, noSessionPersistence: false,
             )
             return (failed.resolvedBin, arguments, failed.environment)
@@ -103,19 +94,17 @@
         }
 
         /// What the CLI's `--help` says about the flag, or the remembered yes.
-        private static func askNoSessionPersistence(
-            resolvedBin: String, claudeBin: String, environment: [String: String], helpTimeout: TimeInterval,
-        ) async -> HelpAnswer {
-            let key = cacheKey(resolvedBin: resolvedBin, claudeBin: claudeBin)
-            if binariesAcceptingNoSessionPersistence.withLock({ $0.contains(key) }) { return .listed }
-            let help = await readHelp(
-                resolvedBin: resolvedBin, claudeBin: claudeBin, environment: environment, timeout: helpTimeout,
-            )
+        /// The probe is bounded like a run: `helpProbeTimeout` on the
+        /// generator's clock, then its termination grace.
+        private func askNoSessionPersistence(resolvedBin: String, environment: [String: String]) async -> HelpAnswer {
+            let key = Self.cacheKey(resolvedBin: resolvedBin, claudeBin: claudeBin)
+            if Self.binariesAcceptingNoSessionPersistence.withLock({ $0.contains(key) }) { return .listed }
+            let help = await readHelp(resolvedBin: resolvedBin, environment: environment)
             // A probe ended by a cancelled job says nothing about the CLI;
             // the job ends right after.
             guard let help, !Task.isCancelled else { return .unread }
-            guard helpListsNoSessionPersistence(help) else { return .notListed }
-            _ = binariesAcceptingNoSessionPersistence.withLock { $0.insert(key) }
+            guard Self.helpListsNoSessionPersistence(help) else { return .notListed }
+            _ = Self.binariesAcceptingNoSessionPersistence.withLock { $0.insert(key) }
             return .listed
         }
 
@@ -152,25 +141,19 @@
         }
 
         /// The CLI's `--help` output, or nil when it could not be started or
-        /// did not exit within `timeout`. Runs in a working directory of its
+        /// did not exit within `helpProbeTimeout`. Runs in a working directory of its
         /// own, like a real run, so the probe neither inherits the app's
         /// directory nor touches the one the real run is about to get.
         ///
         /// Output goes to a file in that directory rather than a pipe, so a
         /// child of the CLI holding its output open cannot hold up the
-        /// protocol. A probe still running at `timeout` is stopped (SIGTERM,
-        /// then SIGKILL after the termination grace) and its exit awaited
-        /// before the directory is removed, so the probe takes at most
-        /// `timeout` plus that grace. Cancellation stops it the same way.
-        /// `clock` is what `timeout` is measured on; see `BoundedProcess.init`.
-        static func readHelp(
-            resolvedBin: String,
-            claudeBin: String,
-            environment: [String: String],
-            timeout: TimeInterval = helpProbeTimeoutSeconds,
-            clock: any Clock<Duration> = SuspendingClock(),
-        ) async -> String? {
-            guard let directory = try? makeWorkingDirectory() else { return nil }
+        /// protocol. A probe still running at `helpProbeTimeout` on `clock` is
+        /// stopped (SIGTERM, then SIGKILL after `terminationGrace`) and its
+        /// exit awaited before the directory is removed, so the probe takes
+        /// at most that limit plus the grace. Cancellation stops it the same
+        /// way.
+        func readHelp(resolvedBin: String, environment: [String: String]) async -> String? {
+            guard let directory = try? Self.makeWorkingDirectory() else { return nil }
             defer { try? FileManager.default.removeItem(at: directory) }
             let outputFile = directory.appendingPathComponent("help.txt")
             guard FileManager.default.createFile(atPath: outputFile.path, contents: nil),
@@ -185,7 +168,8 @@
             process.standardError = FileHandle.nullDevice
             process.standardInput = FileHandle.nullDevice
 
-            let outcome = try? await BoundedProcess(process, clock: clock).run(timeout: timeout)
+            let outcome = try? await BoundedProcess(process, terminationGrace: terminationGrace, clock: clock)
+                .run(timeout: helpProbeTimeout)
             try? output.close()
             guard case .exited = outcome, let data = try? Data(contentsOf: outputFile) else { return nil }
             return String(bytes: data, encoding: .utf8)
