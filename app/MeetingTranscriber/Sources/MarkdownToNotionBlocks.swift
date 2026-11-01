@@ -12,11 +12,28 @@ enum MarkdownToNotionBlocks {
     private static let maxParagraphBytes = 200_000
     private static let maxToggleBytes = 380_000
 
+    /// Whether the Markdown has the heading that `convert` turns into the transcript toggle.
+    /// A saved protocol carries its transcript under it, so a missing heading means the
+    /// transcript cannot be recreated from that text.
+    static func hasFullTranscriptHeading(in markdown: String) -> Bool {
+        lines(of: markdown)
+            .contains { isFullTranscriptHeading($0.trimmingCharacters(in: .whitespaces)) }
+    }
+
+    /// The one way both entry points cut Markdown into lines, so they cannot disagree on where a heading sits.
+    private static func lines(of markdown: String) -> [String] {
+        markdown.components(separatedBy: "\r\n").flatMap { $0.components(separatedBy: "\n") }
+    }
+
+    private static func isFullTranscriptHeading(_ trimmedLine: String) -> Bool {
+        let lowered = trimmedLine.lowercased()
+        return lowered.hasPrefix("## full transcript") || lowered.hasPrefix("# full transcript")
+    }
+
     /// Converts markdown text (and optional verbatim transcript) into an array of `NotionBlock`s.
     static func convert(markdown: String, transcript: String? = nil) -> [NotionBlock] { // swiftlint:disable:this cyclomatic_complexity function_body_length
         var blocks: [NotionBlock] = []
-        let rawLines = markdown.components(separatedBy: "\r\n")
-            .flatMap { $0.components(separatedBy: "\n") }
+        let rawLines = lines(of: markdown)
 
         var lineIndex = 0
         var insideFullTranscript = false
@@ -32,7 +49,7 @@ enum MarkdownToNotionBlocks {
             }
 
             // Check if this line starts a "Full Transcript" heading
-            if trimmed.lowercased().hasPrefix("## full transcript") || trimmed.lowercased().hasPrefix("# full transcript") {
+            if isFullTranscriptHeading(trimmed) {
                 insideFullTranscript = true
                 lineIndex += 1
                 continue

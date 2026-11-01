@@ -82,6 +82,8 @@ extension PipelineQueue {
     static let notionExportInterruptedReason = "interrupted when the app quit"
     private static let notionRetryConfigurationWarning = "Configure and enable Notion export in Settings before retrying"
     private static let notionRetryReadWarning = "Could not read the local protocol backup; Notion export was not retried"
+    private static let notionRetryTranscriptWarning =
+        "The local protocol backup no longer has the transcript; Notion export was not retried"
 
     /// Marks the export as running before the `.done` transition, so nothing
     /// reading that transition can mistake the job for one with no export.
@@ -240,6 +242,7 @@ extension PipelineQueue {
                 warning.hasPrefix(Self.notionExportFailurePrefix)
                     || warning == Self.notionRetryConfigurationWarning
                     || warning == Self.notionRetryReadWarning
+                    || warning == Self.notionRetryTranscriptWarning
             }
             addNotionExportWarnings(pageResult, id: jobID)
             persistNotionExportChange(jobID: jobID)
@@ -301,6 +304,15 @@ extension PipelineQueue {
               let markdown = try? String(contentsOf: path, encoding: .utf8),
               !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             addWarning(id: id, Self.notionRetryReadWarning)
+            persistNotionExportChange(jobID: id)
+            return false
+        }
+        // The retry replaces the page's blocks. The backup is the only place the
+        // transcript survives (the export got it appended under its heading), so
+        // a backup without it would swap a page that has the transcript for one
+        // that has none.
+        if job.includeFullTranscriptInProtocol == true, !MarkdownToNotionBlocks.hasFullTranscriptHeading(in: markdown) {
+            addWarning(id: id, Self.notionRetryTranscriptWarning)
             persistNotionExportChange(jobID: id)
             return false
         }

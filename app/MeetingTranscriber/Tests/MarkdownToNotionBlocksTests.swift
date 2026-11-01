@@ -83,6 +83,21 @@ final class MarkdownToNotionBlocksTests: XCTestCase {
         XCTAssertNotNil(toggle, "Transcript should be converted into a toggle block")
     }
 
+    /// The heading the converter reads a saved transcript from is the one the check looks for.
+    func testFullTranscriptHeadingCheckAgreesWithTheConverter() {
+        let withTranscript = "# Minutes\n\n---\n\n## Full Transcript\n\n[Alice]: Hi"
+        let withoutTranscript = "# Minutes\n\nFull transcript attached separately.\n\n- full transcript"
+        for (markdown, expected) in [(withTranscript, true), (withoutTranscript, false), ("  # FULL TRANSCRIPT\r\nx", true)] {
+            XCTAssertEqual(MarkdownToNotionBlocks.hasFullTranscriptHeading(in: markdown), expected, markdown)
+        }
+        XCTAssertTrue(MarkdownToNotionBlocks.convert(markdown: withTranscript).contains { $0.type == "toggle" })
+        XCTAssertFalse(MarkdownToNotionBlocks.convert(markdown: withoutTranscript).contains { $0.type == "toggle" })
+        // A line break the converter does not split on is not a heading start for the check either.
+        let unicodeBreak = "# Minutes\u{2028}## Full Transcript\n"
+        XCTAssertFalse(MarkdownToNotionBlocks.hasFullTranscriptHeading(in: unicodeBreak))
+        XCTAssertFalse(MarkdownToNotionBlocks.convert(markdown: unicodeBreak, transcript: nil).contains { $0.type == "toggle" })
+    }
+
     func testLongTranscriptFirstLineAndMarkdownCharactersRemainVerbatim() throws {
         let firstLine = String(repeating: "A", count: 1201)
         let secondLine = "[Alice]: 2 * 3 * 4; press *enter*"

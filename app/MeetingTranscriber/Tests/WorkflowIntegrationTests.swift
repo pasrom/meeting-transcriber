@@ -1225,6 +1225,96 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertEqual(exports.count, 1, "No second export without a backup to export")
     }
 
+    /// What the exporter turns an export's arguments into: the retry replaces the
+    /// page's blocks, so these are what the page ends up holding.
+    private func sentBlocks(_ export: StubNotionExporter.Export) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return try encoder.encode(MarkdownToNotionBlocks.convert(markdown: export.markdown, transcript: export.transcript))
+    }
+
+    private func failedNotionExportWithTranscript(
+        includeFullTranscript: Bool,
+    ) async throws -> (harness: Harness, exporter: StubNotionExporter, job: PipelineJob, backup: URL) {
+        let exporter = StubNotionExporter(
+            result: NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
+            failAfterPageCreatedCount: 1,
+        )
+        let (harness, _) = try makeHarness(
+            includeFullTranscriptInProtocol: includeFullTranscript,
+            notionExportConfiguration: NotionExportConfiguration(exporter: exporter, databaseID: "database-1"),
+        )
+        let job = makeJob(audioPath: harness.audioPath)
+        harness.queue.enqueue(job)
+        await harness.queue.awaitProcessing()
+        let failed = try XCTUnwrap(harness.queue.jobs.first)
+        XCTAssertEqual(failed.notionExportStatus, .failed)
+        return try (harness, exporter, failed, XCTUnwrap(failed.protocolPath))
+    }
+
+    /// The retry replaces the page's blocks, so a page that came out poorer
+    /// would delete what the first attempt wrote. With the option on, the
+    /// transcript sits in the backup the retry reads, and the page gets the
+    /// same blocks as before.
+    func testNotionRetrySendsTheSameBlocksAsTheExportItRepeats() async throws {
+        let (harness, exporter, job, _) = try await failedNotionExportWithTranscript(includeFullTranscript: true)
+
+        let retrySucceeded = await harness.queue.retryNotionExport(id: job.id)
+
+        XCTAssertTrue(retrySucceeded)
+        let exports = await exporter.exports
+        XCTAssertEqual(exports.count, 2)
+        let first = try sentBlocks(exports[0])
+        let firstText = try XCTUnwrap(String(data: first, encoding: .utf8))
+        XCTAssertTrue(firstText.contains("Full Transcript"), "The first export carries the transcript toggle")
+        XCTAssertTrue(firstText.contains("Hello world"))
+        XCTAssertEqual(try sentBlocks(exports[1]), first, "The retry must send what the first export sent")
+    }
+
+    /// A backup cut short after the export wrote the transcript cannot recreate
+    /// it. The retry then sends nothing instead of replacing the page with a
+    /// poorer one, and the job stays failed with the reason.
+    func testNotionRetryRefusesABackupThatLostTheTranscriptTheExportIncluded() async throws {
+        let (harness, exporter, job, backup) = try await failedNotionExportWithTranscript(includeFullTranscript: true)
+        let complete = try String(contentsOf: backup, encoding: .utf8)
+        let withoutTranscript = try XCTUnwrap(complete.components(separatedBy: "## Full Transcript").first)
+        try withoutTranscript.write(to: backup, atomically: true, encoding: .utf8)
+
+        let retrySucceeded = await harness.queue.retryNotionExport(id: job.id)
+
+        XCTAssertFalse(retrySucceeded)
+        let exportsAfterRefusal = await exporter.exports
+        XCTAssertEqual(exportsAfterRefusal.count, 1, "A page without the transcript is never sent")
+        let refused = try XCTUnwrap(harness.queue.jobs.first)
+        XCTAssertEqual(refused.notionExportStatus, .failed)
+        XCTAssertTrue(refused.warnings.contains(
+            "The local protocol backup no longer has the transcript; Notion export was not retried",
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path), "The backup stays for the user")
+
+        try complete.write(to: backup, atomically: true, encoding: .utf8)
+        let secondTry = await harness.queue.retryNotionExport(id: job.id)
+        XCTAssertTrue(secondTry)
+        XCTAssertFalse(
+            harness.queue.jobs.first?.warnings.contains { $0.hasSuffix("Notion export was not retried") } ?? true,
+            "A retry that goes through takes the refusal back",
+        )
+    }
+
+    /// Only a job whose first export carried the transcript is held to it: with
+    /// the option off there was nothing to lose, and the retry goes ahead.
+    func testNotionRetryWithoutTheTranscriptOptionIsNotRefused() async throws {
+        let (harness, exporter, job, backup) = try await failedNotionExportWithTranscript(includeFullTranscript: false)
+        XCTAssertFalse(try String(contentsOf: backup, encoding: .utf8).contains("Full Transcript"))
+
+        let retrySucceeded = await harness.queue.retryNotionExport(id: job.id)
+
+        XCTAssertTrue(retrySucceeded)
+        let exports = await exporter.exports
+        XCTAssertEqual(exports.count, 2)
+        XCTAssertEqual(try sentBlocks(exports[1]), try sentBlocks(exports[0]))
+    }
+
     func testSuccessfulNotionRetryKeepsLocalProtocolWithoutSkipLocal() async throws {
         let exporter = StubNotionExporter(
             result: NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
