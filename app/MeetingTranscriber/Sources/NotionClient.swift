@@ -510,6 +510,9 @@ enum NotionClientError: LocalizedError, Equatable {
         case is URLError:
             "network error"
 
+        case is NotionBlockTooLargeError:
+            "a block is too large for Notion"
+
         case is CancellationError:
             "cancelled"
 
