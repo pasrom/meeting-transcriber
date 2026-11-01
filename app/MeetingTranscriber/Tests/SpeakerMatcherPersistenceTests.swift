@@ -7,35 +7,13 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     // swiftlint:disable implicitly_unwrapped_optional
     private var tmpDir: URL!
     private var dbPath: URL!
+    private var db: SpeakerDBFixture!
     // swiftlint:enable implicitly_unwrapped_optional
 
     override func setUpWithError() throws {
         tmpDir = try makeTempDirectory(prefix: "SpeakerMatcherPersistenceTests")
-        dbPath = tmpDir.appendingPathComponent("speakers.json")
-    }
-
-    /// Problems a matcher reported, in order.
-    private final class ProblemLog {
-        var problems: [SpeakerMatcher.DBProblem] = []
-    }
-
-    /// A matcher on the temp DB that records its problems and does not wait
-    /// before re-reading, unless `settle` says otherwise.
-    private func makeMatcher(
-        settle: @escaping () -> Void = {},
-    ) -> (SpeakerMatcher, ProblemLog) {
-        let log = ProblemLog()
-        let matcher = SpeakerMatcher(
-            dbPath: dbPath,
-            onDBProblem: { log.problems.append($0) },
-            settleBeforeReread: settle,
-        )
-        return (matcher, log)
-    }
-
-    private func quarantinedFiles() throws -> [URL] {
-        try FileManager.default.contentsOfDirectory(at: tmpDir, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix("speakers.json.corrupt-") }
+        db = SpeakerDBFixture(dir: tmpDir)
+        dbPath = db.dbPath
     }
 
     @discardableResult
@@ -45,21 +23,8 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
         matcher.updateDB(mapping: ["SPEAKER_0": name], embeddings: ["SPEAKER_0": embedding])
     }
 
-    private func setPermissions(_ mode: Int, of url: URL) throws {
-        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
-    }
-
     private func makeDBUnreadable() throws {
         try makeUnreadable(dbPath)
-    }
-
-    /// Make the next DB write fail while leaving the directory writable, so a
-    /// quarantine move still succeeds: the temp file the write goes through is
-    /// occupied by a directory.
-    private func blockDBWrites() throws {
-        try FileManager.default.createDirectory(
-            at: tmpDir.appendingPathComponent("speakers.json.tmp"), withIntermediateDirectories: false,
-        )
     }
 
     // MARK: - Undecodable file
@@ -67,11 +32,11 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     func testMutateOnUndecodableDBPreservesOriginalBytes() throws {
         let original = Data("[{\"name\":\"Alice\",\"embeddings\":[[1,0,0]] TRUNCATED".utf8)
         try original.write(to: dbPath)
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
 
         let outcome = confirm(matcher, name: "Bob")
 
-        let quarantined = try quarantinedFiles()
+        let quarantined = try db.quarantinedFiles()
         XCTAssertEqual(quarantined.count, 1, "undecodable DB must be moved aside, not overwritten")
         let movedTo = try XCTUnwrap(quarantined.first)
         XCTAssertEqual(try Data(contentsOf: movedTo), original)
@@ -83,11 +48,11 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
 
     func testQuarantinedFileIsOwnerOnly() throws {
         try Data("not json".utf8).write(to: dbPath)
-        let (matcher, _) = makeMatcher()
+        let (matcher, _) = db.makeMatcher()
 
         confirm(matcher, name: "Bob")
 
-        let quarantined = try XCTUnwrap(quarantinedFiles().first)
+        let quarantined = try XCTUnwrap(db.quarantinedFiles().first)
         let attrs = try FileManager.default.attributesOfItem(atPath: quarantined.path)
         XCTAssertEqual(attrs[.posixPermissions] as? Int, 0o600)
     }
@@ -95,14 +60,14 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     func testSecondQuarantineDoesNotReplaceTheFirst() throws {
         let first = Data("first broken".utf8)
         let second = Data("second broken".utf8)
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
 
         try first.write(to: dbPath)
         confirm(matcher, name: "Bob")
         try second.write(to: dbPath)
         confirm(matcher, name: "Carol")
 
-        let contents = try Set(quarantinedFiles().map { try Data(contentsOf: $0) })
+        let contents = try Set(db.quarantinedFiles().map { try Data(contentsOf: $0) })
         XCTAssertEqual(contents, [first, second])
         XCTAssertEqual(log.problems.count, 2, "each quarantine moved a different file, so each is reported")
     }
@@ -116,7 +81,7 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
         let completeData = try JSONEncoder().encode([complete])
         var settles = 0
         let path: URL = dbPath
-        let (matcher, log) = makeMatcher {
+        let (matcher, log) = db.makeMatcher {
             settles += 1
             try? completeData.write(to: path)
         }
@@ -124,7 +89,7 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
         confirm(matcher, name: "Bob")
 
         XCTAssertEqual(settles, 1)
-        XCTAssertTrue(try quarantinedFiles().isEmpty)
+        XCTAssertTrue(try db.quarantinedFiles().isEmpty)
         XCTAssertEqual(Set(matcher.loadDB().map(\.name)), ["Alice", "Bob"])
         XCTAssertTrue(log.problems.isEmpty)
     }
@@ -132,12 +97,12 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     func testFileStillUndecodableAfterRereadIsQuarantined() throws {
         try Data("not json".utf8).write(to: dbPath)
         var settles = 0
-        let (matcher, _) = makeMatcher { settles += 1 }
+        let (matcher, _) = db.makeMatcher { settles += 1 }
 
         confirm(matcher, name: "Bob")
 
         XCTAssertEqual(settles, 1)
-        XCTAssertEqual(try quarantinedFiles().count, 1)
+        XCTAssertEqual(try db.quarantinedFiles().count, 1)
     }
 
     /// A file that stayed undecodable and could not be moved is not going to
@@ -145,13 +110,13 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     func testUnmovableUndecodableDBIsNotWaitedOnTwice() throws {
         try XCTSkipIf(geteuid() == 0, "root writes into a mode-0555 directory, so the move would succeed")
         try Data("not json".utf8).write(to: dbPath)
-        try setPermissions(0o555, of: tmpDir)
+        try db.setPermissions(0o555, of: tmpDir)
         let dirPath: String = tmpDir.path
         addTeardownBlock {
             try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dirPath)
         }
         var settles = 0
-        let (matcher, _) = makeMatcher { settles += 1 }
+        let (matcher, _) = db.makeMatcher { settles += 1 }
 
         confirm(matcher, name: "Bob")
         confirm(matcher, name: "Carol")
@@ -161,7 +126,7 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
 
     func testDecodableDBIsNotReread() {
         var settles = 0
-        let (matcher, _) = makeMatcher { settles += 1 }
+        let (matcher, _) = db.makeMatcher { settles += 1 }
 
         confirm(matcher, name: "Bob")
         confirm(matcher, name: "Carol")
@@ -172,34 +137,34 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     // MARK: - Missing or blank file
 
     func testMissingDBStartsEmptyWithoutQuarantine() throws {
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
 
         confirm(matcher, name: "Bob")
 
         XCTAssertEqual(matcher.loadDB().map(\.name), ["Bob"])
-        XCTAssertTrue(try quarantinedFiles().isEmpty)
+        XCTAssertTrue(try db.quarantinedFiles().isEmpty)
         XCTAssertTrue(log.problems.isEmpty)
     }
 
     func testEmptyDBCountsAsMissing() throws {
         try Data().write(to: dbPath)
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
 
         confirm(matcher, name: "Bob")
 
         XCTAssertEqual(matcher.loadDB().map(\.name), ["Bob"])
-        XCTAssertTrue(try quarantinedFiles().isEmpty)
+        XCTAssertTrue(try db.quarantinedFiles().isEmpty)
         XCTAssertTrue(log.problems.isEmpty, "an empty file holds no voices, so there is nothing to warn about")
     }
 
     func testWhitespaceOnlyDBCountsAsMissing() throws {
         try Data(" \n\t\r\n".utf8).write(to: dbPath)
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
 
         confirm(matcher, name: "Bob")
 
         XCTAssertEqual(matcher.loadDB().map(\.name), ["Bob"])
-        XCTAssertTrue(try quarantinedFiles().isEmpty)
+        XCTAssertTrue(try db.quarantinedFiles().isEmpty)
         XCTAssertTrue(log.problems.isEmpty)
     }
 
@@ -208,16 +173,16 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     func testDBThatFailsToReadIsLeftInPlaceAndNotWritten() throws {
         // A read error (here: no permission) says nothing about the contents,
         // so the file may be intact and must be neither moved nor replaced.
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
         matcher.saveDB([StoredSpeaker(name: "Alice", embeddings: [[1, 0, 0]])])
         let original = try Data(contentsOf: dbPath)
         try makeDBUnreadable()
 
         let outcome = confirm(matcher, name: "Bob")
 
-        try setPermissions(0o600, of: dbPath)
+        try db.setPermissions(0o600, of: dbPath)
         XCTAssertEqual(try Data(contentsOf: dbPath), original)
-        XCTAssertTrue(try quarantinedFiles().isEmpty)
+        XCTAssertTrue(try db.quarantinedFiles().isEmpty)
         XCTAssertEqual(log.problems, [.leftInPlace])
         XCTAssertEqual(outcome.persistence, .dbUnavailable)
         XCTAssertTrue(outcome.stored.isEmpty, "nothing reached the disk, so nothing counts as stored")
@@ -229,13 +194,13 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
         // aside does too, so the file must stay and nothing may replace it.
         let original = Data("not json".utf8)
         try original.write(to: dbPath)
-        try setPermissions(0o555, of: tmpDir)
+        try db.setPermissions(0o555, of: tmpDir)
         // Restore so the temp-dir teardown can delete it, even if an assertion throws.
         let dirPath: String = tmpDir.path
         addTeardownBlock {
             try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dirPath)
         }
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
 
         let mutation = matcher.mutateDB { stored -> Int in
             stored.append(StoredSpeaker(name: "Bob", embeddings: [[1, 0, 0]]))
@@ -245,17 +210,17 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
         XCTAssertEqual(mutation.value, 42, "callers still get the block's result")
         XCTAssertEqual(mutation.persistence, .dbUnavailable)
         XCTAssertEqual(try Data(contentsOf: dbPath), original)
-        XCTAssertTrue(try quarantinedFiles().isEmpty)
+        XCTAssertTrue(try db.quarantinedFiles().isEmpty)
         XCTAssertEqual(log.problems, [.leftInPlace])
     }
 
     // MARK: - Write failure
 
     func testSaveFailureIsReportedAndLeavesTheDBAsItWas() throws {
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
         matcher.saveDB([StoredSpeaker(name: "Alice", embeddings: [[1, 0, 0]])])
         let original = try Data(contentsOf: dbPath)
-        try blockDBWrites()
+        try db.blockDBWrites()
 
         let outcome = confirm(matcher, name: "Bob")
 
@@ -271,12 +236,12 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     func testSaveFailureAfterQuarantineKeepsTheCorruptCopyAndNamesIt() throws {
         let original = Data("not json".utf8)
         try original.write(to: dbPath)
-        try blockDBWrites()
-        let (matcher, log) = makeMatcher()
+        try db.blockDBWrites()
+        let (matcher, log) = db.makeMatcher()
 
         let outcome = confirm(matcher, name: "Bob")
 
-        let quarantined = try XCTUnwrap(quarantinedFiles().first)
+        let quarantined = try XCTUnwrap(db.quarantinedFiles().first)
         XCTAssertEqual(try Data(contentsOf: quarantined), original)
         let expected = dbPath.deletingLastPathComponent().appendingPathComponent(quarantined.lastPathComponent)
         XCTAssertEqual(log.problems, [.saveFailed(movedAside: expected)])
@@ -287,14 +252,14 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     // MARK: - Reporting
 
     func testUnreadableDBIsReportedOnceUntilTheFileChanges() throws {
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
         matcher.saveDB([StoredSpeaker(name: "Alice", embeddings: [[1, 0, 0]])])
         try makeDBUnreadable()
 
         confirm(matcher, name: "Bob")
         confirm(matcher, name: "Carol")
         // A new matcher, as each pipeline job and RPC call creates one.
-        let (other, otherLog) = makeMatcher()
+        let (other, otherLog) = db.makeMatcher()
         confirm(other, name: "Dave")
 
         XCTAssertEqual(log.problems, [.leftInPlace], "the same unreadable file is reported once")
@@ -302,26 +267,26 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
 
         // The file is replaced (here by a different, still unreadable one):
         // a new state is worth a new report.
-        try setPermissions(0o600, of: dbPath)
+        try db.setPermissions(0o600, of: dbPath)
         try Data("[\n]".utf8).write(to: dbPath)
-        try setPermissions(0o000, of: dbPath)
+        try db.setPermissions(0o000, of: dbPath)
         confirm(matcher, name: "Erin")
 
         XCTAssertEqual(log.problems, [.leftInPlace, .leftInPlace])
     }
 
     func testSuccessfulSaveRearmsTheReport() throws {
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
         matcher.saveDB([StoredSpeaker(name: "Alice", embeddings: [[1, 0, 0]])])
         let blocker = tmpDir.appendingPathComponent("speakers.json.tmp")
-        try blockDBWrites()
+        try db.blockDBWrites()
         confirm(matcher, name: "Bob")
         confirm(matcher, name: "Bob")
         XCTAssertEqual(log.problems, [.saveFailed(movedAside: nil)])
 
         try FileManager.default.removeItem(at: blocker)
         confirm(matcher, name: "Bob")
-        try blockDBWrites()
+        try db.blockDBWrites()
         confirm(matcher, name: "Bob")
 
         XCTAssertEqual(log.problems, [.saveFailed(movedAside: nil), .saveFailed(movedAside: nil)])
@@ -393,21 +358,21 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     func testReadsDoNotMoveUndecodableDB() throws {
         let original = Data("not json".utf8)
         try original.write(to: dbPath)
-        let (matcher, log) = makeMatcher()
+        let (matcher, log) = db.makeMatcher()
 
         XCTAssertTrue(matcher.loadDB().isEmpty)
         XCTAssertTrue(matcher.allSpeakerNames().isEmpty)
         XCTAssertTrue(matcher.match(embeddings: ["SPEAKER_0": [1, 0, 0]]).values.allSatisfy { $0 == "SPEAKER_0" })
 
         XCTAssertEqual(try Data(contentsOf: dbPath), original)
-        XCTAssertTrue(try quarantinedFiles().isEmpty)
+        XCTAssertTrue(try db.quarantinedFiles().isEmpty)
         XCTAssertTrue(log.problems.isEmpty)
     }
 
     // MARK: - Edits on a DB that was not read
 
     func testEditsOnUnreadableDBReportNotSavedRatherThanNotFound() throws {
-        let (matcher, _) = makeMatcher()
+        let (matcher, _) = db.makeMatcher()
         matcher.saveDB([
             StoredSpeaker(name: "Alice", embeddings: [[1, 0, 0]]),
             StoredSpeaker(name: "Bob", embeddings: [[0, 1, 0]]),
@@ -427,7 +392,7 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
             try Data("not json".utf8).write(to: dbPath)
             return "speakers.json.corrupt-"
         }
-        let (matcher, _) = makeMatcher()
+        let (matcher, _) = db.makeMatcher()
 
         let prefix = try quarantine()
         guard case let .replacedCorruptDB(renamedTo) = matcher.renameSpeaker(from: "Alice", to: "Alicia") else {
@@ -462,7 +427,7 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     // MARK: - Non-finite embeddings
 
     func testNonFiniteEmbeddingIsSkippedWithoutLosingTheMutation() throws {
-        let (matcher, _) = makeMatcher()
+        let (matcher, _) = db.makeMatcher()
         matcher.saveDB([StoredSpeaker(name: "Alice", embeddings: [[1, 0, 0]], centroid: [1, 0, 0])])
 
         let outcome = matcher.updateDB(
@@ -493,7 +458,7 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
     }
 
     func testNameTaughtByAnotherLabelIsNotReportedUnusable() {
-        let (matcher, _) = makeMatcher()
+        let (matcher, _) = db.makeMatcher()
 
         let outcome = matcher.updateDB(
             mapping: ["SPEAKER_0": "Alice", "SPEAKER_1": "Alice"],
