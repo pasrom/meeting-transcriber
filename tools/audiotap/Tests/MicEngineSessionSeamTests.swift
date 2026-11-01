@@ -21,6 +21,8 @@ final class MicEngineSessionSeamTests: XCTestCase {
         }
 
         private(set) var calls: [Call] = []
+        /// False like every stand-in; one test opts in to reach the listener.
+        var followsSystemDefaultInput = false
         let notificationObject: AnyObject = NSObject()
         /// Local bookkeeping, not a protocol requirement: nothing in production
         /// asks a session whether its tap is attached.
@@ -70,14 +72,31 @@ final class MicEngineSessionSeamTests: XCTestCase {
         }
     }
 
+    /// Records what the handler registers instead of registering it with
+    /// CoreAudio, so no host device change reaches a test. Counts rather than
+    /// blocks: CoreAudio's block type is imported as a native Swift closure,
+    /// which has no identity a test could compare.
+    private final class ListenerRecorder: @unchecked Sendable {
+        enum Call: Equatable { case add, remove }
+        private(set) var calls: [Call] = []
+
+        var registrar: DefaultInputListenerRegistrar {
+            DefaultInputListenerRegistrar(
+                add: { _ in self.calls.append(.add); return noErr },
+                remove: { _ in self.calls.append(.remove) },
+            )
+        }
+    }
+
     private func makeHandler(
-        _ session: FakeSession, debugLogging: Bool = false,
+        _ session: FakeSession, debugLogging: Bool = false, listeners: ListenerRecorder = ListenerRecorder(),
     ) -> (MicCaptureHandler, URL) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("seam-\(UUID().uuidString).wav")
         let handler = MicCaptureHandler(
-            outputURL: url, debugLogging: debugLogging,
-        ) { session }
+            outputURL: url, debugLogging: debugLogging, sessionFactory: { session },
+            inputListenerRegistrar: listeners.registrar,
+        )
         return (handler, url)
     }
 
@@ -94,6 +113,77 @@ final class MicEngineSessionSeamTests: XCTestCase {
             .start,
         ])
         handler.stop()
+    }
+
+    /// A stood-in session keeps the handler deaf to the host's default-input
+    /// changes, which would otherwise restart it under the test's feet.
+    func testAStoodInHandlerDoesNotListenForInputDeviceChanges() throws {
+        let session = FakeSession()
+        let listeners = ListenerRecorder()
+        let (handler, url) = makeHandler(session, listeners: listeners)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try handler.start()
+        handler.stop()
+
+        XCTAssertEqual(listeners.calls, [], "no listener was registered or removed")
+    }
+
+    /// The listener's own registration and removal, which no stand-in reaches
+    /// any more. Recorded rather than registered with CoreAudio, so the host's
+    /// device changes stay out of this test too.
+    func testAFollowingSessionRegistersTheListenerAndStopRemovesIt() throws {
+        let session = FakeSession()
+        session.followsSystemDefaultInput = true
+        let listeners = ListenerRecorder()
+        let (handler, url) = makeHandler(session, listeners: listeners)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try handler.start()
+        XCTAssertEqual(listeners.calls, [.add], "start() registered one listener")
+        XCTAssertNotNil(handler.deviceChangeListener)
+
+        handler.stop()
+        XCTAssertEqual(listeners.calls, [.add, .remove], "stop() removed it")
+        XCTAssertNil(handler.deviceChangeListener)
+    }
+
+    /// The real registrar reaches CoreAudio. Its listener does nothing, so a
+    /// device change on the host while it is registered reaches no handler.
+    func testTheSystemRegistrarRegistersWithCoreAudio() {
+        let listener: AudioObjectPropertyListenerBlock = { _, _ in }
+        XCTAssertEqual(DefaultInputListenerRegistrar.system.add(listener), noErr)
+        DefaultInputListenerRegistrar.system.remove(listener)
+    }
+
+    /// Both public ways to build a microphone handler must keep listening.
+    ///
+    /// Pinned: the session's public init injects neither a handler factory
+    /// (which `startMicCapture` would prefer over `makeMicCapture`) nor a
+    /// session factory; `makeMicCapture` without a session factory builds a
+    /// handler that listens; so does the handler's own public init.
+    ///
+    /// Not pinned: that `startMicCapture` hands these values to
+    /// `makeMicCapture`, and that `start()` then registers with CoreAudio.
+    /// Both need a real input to reach, so the gate `start()` consults is
+    /// what is asserted.
+    @available(macOS 14.2, *)
+    func testThePublicInitsBuildHandlersThatListenForInputDeviceChanges() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seam-\(UUID().uuidString).wav")
+        let configuration = AudioCaptureConfiguration(
+            pids: [], appOutputURL: nil, micOutputURL: url, sampleRate: 48000, channels: 2,
+        )
+        let session = AudioCaptureSession(configuration)
+        XCTAssertNil(session.micHandlerFactory, "the session's public init injects no handler")
+        XCTAssertNil(session.micSessionFactory, "the session's public init injects no session")
+        let sessionHandler = AudioCaptureSession.makeMicCapture(
+            configuration, outputURL: url, sessionFactory: session.micSessionFactory,
+        )
+        XCTAssertTrue(sessionHandler.listensForInputDeviceChanges, "the session's handler")
+
+        let directHandler = MicCaptureHandler(outputURL: url)
+        XCTAssertTrue(directHandler.listensForInputDeviceChanges, "a handler built through its public init")
     }
 
     func testSelectedDeviceIsPassedToTheSession() throws {

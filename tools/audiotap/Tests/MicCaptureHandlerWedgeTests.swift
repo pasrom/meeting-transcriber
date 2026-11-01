@@ -15,6 +15,7 @@ final class MicCaptureHandlerWedgeTests: XCTestCase {
     /// A session whose `hardwareFormat` can be made to block forever while
     /// holding the "engine mutex".
     private final class WedgingSession: MicEngineSessionProviding {
+        let followsSystemDefaultInput = false
         /// Stands in for AVAudioEngine's internal recursive mutex.
         private let engineMutex = NSLock()
         private let recordLock = NSLock()

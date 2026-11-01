@@ -30,8 +30,8 @@ public class AudioCaptureSession {
 
     /// The two handlers' hardware seams, nil in production. See the internal init.
     let appAttemptBody: (() throws -> AppTapSession?)?
-    private let micSessionFactory: (() -> any MicEngineSessionProviding)?
-    private let micHandlerFactory: ((URL) -> MicCaptureHandler)?
+    let micSessionFactory: (() -> any MicEngineSessionProviding)?
+    let micHandlerFactory: ((URL) -> MicCaptureHandler)?
 
     private var appCapture: AppAudioCapture?
     private var micCapture: MicCaptureHandler?
@@ -228,20 +228,8 @@ public class AudioCaptureSession {
         guard let micURL = config.micOutputURL else { return }
 
         micFileWasAbsentBeforeStart = !FileManager.default.fileExists(atPath: micURL.path)
-        let mic = micHandlerFactory?(micURL) ?? MicCaptureHandler(
-            outputURL: micURL,
-            debugLogging: config.debugLogging,
-            liveSink: config.micLiveSink,
-            debugFault: config.micDebugFault,
-            // `MicCaptureHandler`'s own convenience init builds the same
-            // session, and going through it would mean restating this call's
-            // four arguments in a second branch. The cost of not doing so: its
-            // default is no longer on any production path, so changing the
-            // session it builds would leave this line on the old one. It cannot
-            // be collapsed the other way either, since a public init may not
-            // name an internal protocol.
-            sessionFactory: micSessionFactory ?? { MicEngineSession() },
-        )
+        let mic = micHandlerFactory?(micURL)
+            ?? Self.makeMicCapture(config, outputURL: micURL, sessionFactory: micSessionFactory)
         // Stored before the start rather than after it, so that both ways out of
         // here tear down through `discardMicCapture` instead of one of them
         // repeating what it does. The stop that follows on the failure path is
@@ -311,6 +299,31 @@ public class AudioCaptureSession {
             liveSink: config.appLiveSink,
             attemptBody: attemptBody,
             silentTrackWatchdog: config.silentTrackWatchdog,
+        )
+    }
+
+    /// The microphone handler a configuration describes, with the real engine
+    /// session unless a test stands one in. Split out for the same reason as
+    /// `makeAppCapture`, and so that whether the handler hears the host's
+    /// device changes is assertable without opening an input.
+    static func makeMicCapture(
+        _ config: AudioCaptureConfiguration,
+        outputURL: URL,
+        sessionFactory: (() -> any MicEngineSessionProviding)?,
+    ) -> MicCaptureHandler {
+        MicCaptureHandler(
+            outputURL: outputURL,
+            debugLogging: config.debugLogging,
+            liveSink: config.micLiveSink,
+            debugFault: config.micDebugFault,
+            // `MicCaptureHandler`'s own convenience init builds the same
+            // session, and going through it would mean restating this call's
+            // four arguments in a second branch. The cost of not doing so: its
+            // default is no longer on any production path, so changing the
+            // session it builds would leave this line on the old one. It cannot
+            // be collapsed the other way either, since a public init may not
+            // name an internal protocol.
+            sessionFactory: sessionFactory ?? { MicEngineSession() },
         )
     }
 

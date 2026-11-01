@@ -63,6 +63,7 @@ final class AudioCaptureSessionStartOrderTests: XCTestCase {
     /// first call `MicCaptureHandler.start` makes and the one that reaches the
     /// device, so it is where the microphone's turn is recorded.
     private final class FakeMicSession: MicEngineSessionProviding {
+        let followsSystemDefaultInput = false
         private let log: StartLog
         private let seam: MicSeam
         /// Where the handler writes. Read in `installTap` to pin the ordering the

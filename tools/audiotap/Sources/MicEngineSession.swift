@@ -34,6 +34,17 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// `AVAudioEngine.inputNode` on an input-less host raises an uncatchable
 /// NSException.
 protocol MicEngineSessionProviding: AnyObject {
+    /// Whether the handler driving this session should follow the system's
+    /// default-input-device changes, through a real CoreAudio listener. True
+    /// only for the real session: one a test stands in for must not hear the
+    /// host's device changes, or one would restart it under the test's feet.
+    ///
+    /// A requirement with no default on purpose, so every conformer, a wrapper
+    /// around the real session included, has to answer it. A default, or a
+    /// type check in the handler, would let a new session type silently stop
+    /// a real recording from following a headset being plugged or pulled.
+    var followsSystemDefaultInput: Bool { get }
+
     /// The object `AVAudioEngineConfigurationChange` notifications are keyed on.
     var notificationObject: AnyObject { get }
 
@@ -88,6 +99,7 @@ extension MicEngineSessionProviding {
 
 /// The real implementation, wrapping one `AVAudioEngine`.
 final class MicEngineSession: MicEngineSessionProviding {
+    let followsSystemDefaultInput = true
     private var engine = AVAudioEngine()
     private let removeInputTap: (AVAudioEngine) -> Void
 
