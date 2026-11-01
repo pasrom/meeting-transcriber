@@ -138,8 +138,12 @@
             folder.appendingPathComponent("calls.log").path
         }
 
+        /// On a clock that never moves, so neither the run's limit nor the
+        /// `--help` probe's can pass however slow the runner is: the probe
+        /// running out would turn a yes into an unread answer and change the
+        /// calls these tests count.
         private func generate(claudeBin: String) async throws -> String {
-            try await ClaudeCLIProtocolGenerator(claudeBin: claudeBin, language: "German")
+            try await ClaudeCLIProtocolGenerator(claudeBin: claudeBin, language: "German", clock: ManualClock())
                 .generate(transcript: "Speaker 1: hello", title: "Sync", diarized: false)
         }
 

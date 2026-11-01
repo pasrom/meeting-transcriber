@@ -306,11 +306,11 @@
             """)
         }
 
-        /// A generator for `script` whose `--help` probe has no limit that a
-        /// slow runner could reach: the probe running out would drop the flag
-        /// and fail a correct run.
+        /// A generator for `script` on a clock that never moves, so its
+        /// `--help` probe has no limit that a slow runner could reach: the
+        /// probe running out would drop the flag and fail a correct run.
         private static func makeGenerator(script: String) -> ClaudeCLIProtocolGenerator {
-            ClaudeCLIProtocolGenerator(claudeBin: script, language: "German", helpProbeTimeout: HeldFake.noLimit)
+            ClaudeCLIProtocolGenerator(claudeBin: script, language: "German", clock: ManualClock())
         }
 
         private static func makeScratchFolder() throws -> URL {
