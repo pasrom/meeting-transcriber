@@ -388,6 +388,28 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
         XCTAssertFalse(configuration.silentTrackWatchdog)
     }
 
+    /// A stood-in attempt keeps the rigs above deaf to the host's device
+    /// changes, which would otherwise taint the rebuild a test tracks and
+    /// start a restart of its own. Both public ways to build a capture must
+    /// keep listening: the session's public init, through what it hands
+    /// `makeAppCapture`, and the capture's own public init. Installing the
+    /// listener needs real hardware, so what is pinned here is the gate
+    /// `start()` consults.
+    func testThePublicInitsBuildCapturesThatListenForOutputDeviceChanges() {
+        let configuration = AudioCaptureConfiguration(
+            pids: [], appOutputURL: nil, micOutputURL: nil, sampleRate: 48000, channels: 2,
+        )
+        let session = AudioCaptureSession(configuration)
+        let sessionCapture = AudioCaptureSession.makeAppCapture(
+            configuration, fileDescriptor: FileHandle.nullDevice.fileDescriptor,
+            attemptBody: session.appAttemptBody,
+        )
+        XCTAssertTrue(sessionCapture.listensForOutputDeviceChanges, "the session's capture")
+
+        let directCapture = AppAudioCapture(pids: [], outputFileDescriptor: FileHandle.nullDevice.fileDescriptor)
+        XCTAssertTrue(directCapture.listensForOutputDeviceChanges, "a capture built through its public init")
+    }
+
     // MARK: - The probe's second consumer
 
     func testAProbeOutsideTheSinkStillReachesItsContinuation() {

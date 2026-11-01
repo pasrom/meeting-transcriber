@@ -248,6 +248,7 @@ extension SilentTrackWatchdogWiringTests {
             )
             try rig.capture.start()
             XCTAssertEqual(rig.attempts.starts, 1, "precondition: start() ran one attempt")
+            XCTAssertFalse(rig.capture.outputListenerInstalled, "precondition: deaf to the host's device changes")
             return rig
         }
     }
