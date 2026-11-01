@@ -160,26 +160,21 @@ echo "  RPC up"
 # --- 5. Wait for the async permission check to populate (max 20 s) -------
 
 echo "▸ Waiting for the permission health check to run…"
+# A missed read is retried by poll_state; only a window with no answer at its
+# end is a failure, and it says so instead of reporting empty verdicts.
 SR=""
 MIC=""
 AX=""
-STATE_JSON=""
-for _ in $(seq 1 40); do
-    # Tolerate a transient fetch mid-poll: the loop exists to wait out
-    # not-yet-ready state, so a single failure must retry, not abort under
-    # `set -e` (`|| true` on the assignment, empty-guard before the read).
-    STATE_JSON="$("$MTCLI" state 2>/dev/null || true)"
-    [ -n "$STATE_JSON" ] || {
-        sleep 0.5
-        continue
-    }
+_permissions_known() {
     read -r SR MIC AX < <(
-        echo "$STATE_JSON" | jq -r \
-            '"\(.permissionHealth.screenRecording) \(.permissionHealth.microphone) \(.permissionHealth.accessibility)"'
+        jq -r '"\(.permissionHealth.screenRecording) \(.permissionHealth.microphone) \(.permissionHealth.accessibility)"' <<<"$STATE_BODY"
     ) || true
-    [ "$MIC" != "unknown" ] && break
-    sleep 0.5
-done
+    [ "$MIC" != "unknown" ]
+}
+status=0
+poll_state 20 0.5 _permissions_known || status=$?
+[ "$status" -ne 2 ] || die "$(state_why 2 "what the permission health check reports")"
+STATE_JSON="$STATE_BODY"
 
 echo "▸ permissionHealth: screenRecording=$SR microphone=$MIC accessibility=$AX"
 
@@ -199,16 +194,17 @@ echo "▸ permissionHealth: screenRecording=$SR microphone=$MIC accessibility=$A
 # after. Twelve seconds is that with room, and it is spent only on runs that go
 # on to pass.
 echo "▸ Confirming the launch environment reached the app…"
-for _ in $(seq 1 24); do
-    if "$MTCLI" state 2>/dev/null | jq -e '.watchState == "watching"' >/dev/null 2>&1; then
-        die "the app is watching, so MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH did not reach it — open --env is not delivering the launch environment, and what this lane measured is not what it configured"
-    fi
-    sleep 0.5
-done
 # A negative check cannot tell "it never happened" from "nobody was there to make
-# it happen". Without this, an app that died at second three of the window would
-# be reported as one that stayed politely idle, and the lane would go green on
-# the snapshot taken before the crash.
+# it happen". poll_state's 1 is exactly "the window ran out with the app
+# answering and never watching"; its 2 is an app that stopped answering, wedged
+# or dead, which would otherwise read as one that stayed politely idle.
+status=0
+poll_state 12 0.5 state_is '.watchState == "watching"' || status=$?
+case "$status" in
+    0) die "the app is watching, so MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH did not reach it — open --env is not delivering the launch environment, and what this lane measured is not what it configured" ;;
+    1) ;;
+    *) die "$(state_why "$status" "whether the launch environment reached the app (the app must stay unwatched through the window)")" ;;
+esac
 assert_app_alive "$BIN"
 
 
