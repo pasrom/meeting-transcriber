@@ -36,7 +36,26 @@
 
   <p>I record a lot of work calls, and I never liked that the tools for it (Otter, Fireflies, Granola and the rest) upload the audio to someone else's servers. For me that is a non-starter. So I built one that runs entirely on the Mac, and kept going with it. It is free and the source is on GitHub.</p>
 
-  <img class="shot" src="assets/hero.gif" alt="Meeting Transcriber running in the macOS menu bar: detecting a call, recording, transcribing and writing a summary.">
+  <video class="shot" width="1920" height="1080" autoplay muted loop playsinline poster="assets/hero-poster.jpg" aria-label="Meeting Transcriber running in the macOS menu bar: detecting a call, recording, transcribing and writing a summary.">
+    <source src="assets/hero.mp4" type="video/mp4">
+    <a href="assets/hero.mp4">Watch the demo video</a>
+  </video>
+  <script>
+    // The demo loops for 14 s, so give visitors a way to stop it: no autoplay with
+    // reduced motion, and visible controls when the browser blocks autoplay.
+    (function () {
+      var v = document.querySelector('video.shot');
+      var showControls = function () { v.setAttribute('controls', ''); };
+      if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        v.removeAttribute('autoplay');
+        v.pause();
+        showControls();
+      } else {
+        var p = v.play();
+        if (p && p.catch) p.catch(showControls);
+      }
+    })();
+  </script>
 
   <h2>What it does</h2>
   <p>It sits in the menu bar. When it notices a Teams, Zoom or Webex window it starts recording, and when the call ends it transcribes the audio, separates the speakers, and writes a Markdown summary with the decisions and action items. None of the audio leaves your machine.</p>
