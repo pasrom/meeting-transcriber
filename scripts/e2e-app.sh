@@ -2111,17 +2111,12 @@ trap 'on_exit; exit 143' TERM
 # unrestored.
 if [ "$RECORD_ONLY" = true ]; then _EXPECTED_RECORD_ONLY=true; else _EXPECTED_RECORD_ONLY=false; fi
 # A 200 from /healthz is not proof the app under test is the one answering, and
-# neither is a non-empty /state: `rpc` has no --fail, so an error body would
-# satisfy a bare emptiness test and then read as a null setting, which would get
-# reported as the wrong preference domain. Require the field itself to be
-# present before believing anything about its value.
-_state_snapshot() {
-    _SNAP="$(rpc /state)"
-    [ -n "$_SNAP" ] && jq -e '.settings.recording | has("recordOnly")' <<<"$_SNAP" >/dev/null 2>&1
-}
-_SNAP=""
-poll_until 20 1 _state_snapshot \
-    || fail "/healthz answered but no /state carrying settings.recording.recordOnly arrived within 20s. Either the app came up without serving a state snapshot, or something other than the dev app is holding 127.0.0.1:9876."
+# neither is an answer from /state: one without the field would read as a null
+# setting, which would get reported as the wrong preference domain. Require the
+# field itself to be present before believing anything about its value.
+poll_state 20 1 state_is '.settings.recording | has("recordOnly")' \
+    || fail "$(state_why $? "/healthz answered but no /state carrying settings.recording.recordOnly arrived within 20s. Either the app came up without serving a state snapshot, or something other than the dev app is holding 127.0.0.1:9876.")"
+_SNAP="$STATE_BODY"
 _RESOLVED_RECORD_ONLY="$(jq -r '.settings.recording.recordOnly' <<<"$_SNAP")"
 [ "$_RESOLVED_RECORD_ONLY" = "$_EXPECTED_RECORD_ONLY" ] \
     || fail "the app resolved settings.recording.recordOnly=$_RESOLVED_RECORD_ONLY but this lane needs $_EXPECTED_RECORD_ONLY. Most likely the preference write did not reach the domain the app reads (see write_dev_default in scripts/lib/e2e-helpers.sh); the other possibility is that a different MeetingTranscriber instance is answering on 127.0.0.1:9876."
@@ -2157,9 +2152,15 @@ PRE_LAST_JOB_ID=""
 # job (see the CI reset above) fails the run before the fresh recording even
 # finishes. Poll until `lastJob.jobID` is stable across two reads (bounded
 # ~15 s), then baseline. Read-only — touches no files, safe on any machine.
+# An unanswered read is no reading at all: it used to come out as an empty id,
+# two of which looked stable and baselined "no job".
 _pre_prev="" _pre_stable=0
 for _ in $(seq 1 15); do
-    _pre_cur="$(rpc /state | jq -r '.lastJob.jobID // ""')" || _pre_cur=""
+    if ! _pre_cur="$(state_query '.lastJob.jobID // ""' 2>/dev/null)"; then
+        _pre_stable=0 _pre_prev="(no answer)"
+        sleep 1
+        continue
+    fi
     if [ "$_pre_cur" = "$_pre_prev" ]; then
         _pre_stable=$(( _pre_stable + 1 ))
         [ "$_pre_stable" -ge 2 ] && break
@@ -2169,7 +2170,14 @@ for _ in $(seq 1 15); do
     _pre_prev="$_pre_cur"
     sleep 1
 done
-PRE_LAST_JOB_ID="$(rpc /state | jq -r '.lastJob.jobID // empty')"
+# The value found stable is the baseline; only a loop that ran out without
+# settling needs another read.
+if [ "$_pre_stable" -ge 2 ]; then
+    PRE_LAST_JOB_ID="$_pre_cur"
+else
+    PRE_LAST_JOB_ID="$(state_query '.lastJob.jobID // empty')" \
+        || fail "$(state_why $? "the pre-trigger lastJob baseline")"
+fi
 log "Pre-trigger lastJob.jobID: ${PRE_LAST_JOB_ID:-<none>}"
 
 # Shared poll loop used by every flow that triggers a pipeline job
@@ -2183,9 +2191,26 @@ log "Pre-trigger lastJob.jobID: ${PRE_LAST_JOB_ID:-<none>}"
 # One jq invocation, four fields out via `|`-joined output saves 3 forks
 # per poll. `|` (not `@tsv`) keeps consecutive empty fields as boundaries
 # — bash `IFS=$'\t' read` collapses them and misparses a fully-null
-# lastJob. Trailing `|| true` survives transient curl --max-time hits
-# during model load: jq emits no output → read hits EOF → returns 1 →
-# `set -e` would otherwise kill the script silently.
+# lastJob.
+#
+# The loop is poll_state's: a tick the app does not answer (e.g. a timeout
+# during model load) is skipped and logged rather than read as empty fields,
+# and a deadline reached while it is not answering says so instead of
+# blaming the pipeline. assert_app_alive runs on every tick through --each,
+# answered or not, so a dead app fails at once instead of after the full
+# ${PIPELINE_TIMEOUT_S}s of unanswered reads. --judge-deadline-read: the
+# verdict is in the snapshot itself (a job that is new and terminal), so the
+# read that follows a gap at the deadline counts like any answered tick. That
+# lets a job finishing up to about two read bounds (2 x STATE_READ_BOUND_S)
+# past ${PIPELINE_TIMEOUT_S}s pass, which is accepted: the timeout is a hang
+# guard, not a latency budget, and an answered last tick already overruns it
+# by up to one bound.
+#
+# The poll's last read is the terminal snapshot, left in STATE_BODY, so the
+# callers' post-poll assertions read the same snapshot the verdict came from.
+# Nothing may call state_read (or state_query, poll_state, watch_state)
+# between this function's return and those reads: it would replace
+# STATE_BODY with a later snapshot.
 POLL_LJ_ID=""
 POLL_LJ_STATE=""
 _poll_for_new_lastjob_terminal() {
@@ -2197,67 +2222,67 @@ _poll_for_new_lastjob_terminal() {
     # crash-recovery lane omits the flag; its expected job IS the recovered one.
     local ignore_recovered="${2:-}"
     log "$label: polling /state every 5s for new lastJob (timeout ${PIPELINE_TIMEOUT_S}s)"
-    local deadline=$(( $(date +%s) + PIPELINE_TIMEOUT_S ))
-    local last_state="" last_id="" noted_recovered=""
+    local last_state="" last_id="" noted_recovered="" status=0
     local lj_id="" lj_state="" lj_recovered="" pipe_active="" pipe_processing="" pending_naming=""
 
-    while true; do
-        # Fail fast if the dev .app died — otherwise the loop just sees
-        # the `|| true` swallow rpc/state errors and we'd burn the full
-        # ${PIPELINE_TIMEOUT_S}s before surfacing as "no new pipeline
-        # job reached terminal state", masking the real crash.
-        assert_app_alive
-
-        lj_id=""; lj_state=""; lj_recovered=""; pipe_active=""; pipe_processing=""; pending_naming=""
-        IFS='|' read -r lj_id lj_state lj_recovered pipe_active pipe_processing pending_naming < <(
-            rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", ((.lastJob.meetingTitle // "") | startswith("Recovered Recording")), .pipeline.activeJobCount, .pipeline.isProcessing, .pipeline.pendingNamingJobCount] | join("|")'
-        ) || true
-
-        # Drain speaker-naming dialogs so headless runs don't deadlock on a
-        # UI click. Fire-and-forget; the endpoint is a no-op when nothing
-        # is pending and the next tick picks up the state change.
-        if [ "${pending_naming:-0}" != "0" ] && [ -n "$pending_naming" ]; then
-            # Capture pendingNamingJobs[0].speakerCount the FIRST time we
-            # observe a pending naming job — before /action/skipNaming
-            # clears the queue. Surfaces the speaker-count Phase 1 of
-            # issue #165 promises: Sortformer mode must populate
-            # `result.embeddings` so the naming dialog sees N>0 speakers.
-            # Without this capture there's no production-chain signal that
-            # the embedding-extraction wiring is actually producing output.
-            if [ -z "${OBSERVED_NAMING_SPEAKERS:-}" ]; then
-                OBSERVED_NAMING_SPEAKERS="$(rpc /state | jq -r '.pendingNamingJobs[0].speakerCount // 0')" || OBSERVED_NAMING_SPEAKERS=0
-                log "$label:   First observed pendingNamingJobs[0].speakerCount=$OBSERVED_NAMING_SPEAKERS"
-            fi
-            log "$label:   Auto-skipping ${pending_naming} pending naming job(s) via /action/skipNaming"
-            curl --silent --show-error --max-time 5 -X POST \
-                --header "Authorization: Bearer $RPC_TOKEN" \
-                "$RPC_BASE/action/skipNaming" >/dev/null 2>&1 || true
-        fi
-
-        if [ "$lj_state" != "$last_state" ] || [ "$lj_id" != "$last_id" ]; then
-            log "$label:   pipeline.active=$pipe_active processing=$pipe_processing lastJob=$lj_id state=$lj_state pending_naming=$pending_naming"
-            last_state="$lj_state"
-            last_id="$lj_id"
-        fi
-
-        if [ -n "$ignore_recovered" ] && [ "$lj_recovered" = "true" ] \
-            && [ "$lj_id" != "$PRE_LAST_JOB_ID" ] && [ "$lj_id" != "${noted_recovered:-}" ]; then
-            log "$label:   ignoring launch-recovery job $lj_id (state=$lj_state) — waiting for the simulator-triggered job"
-            noted_recovered="$lj_id"
-        fi
-        if [ -n "$lj_id" ] && [ "$lj_id" != "$PRE_LAST_JOB_ID" ] \
-            && { [ -z "$ignore_recovered" ] || [ "$lj_recovered" != "true" ]; } \
-            && { [ "$lj_state" = "done" ] || [ "$lj_state" = "error" ]; }; then
-            break
-        fi
-
-        [ "$(date +%s)" -lt "$deadline" ] || fail "$label: no new pipeline job reached terminal state within ${PIPELINE_TIMEOUT_S}s (active=$pipe_active processing=$pipe_processing)"
-        sleep 5
-    done
+    poll_state --each assert_app_alive --judge-deadline-read "$PIPELINE_TIMEOUT_S" 5 _lastjob_tick || status=$?
+    case "$status" in
+        0) ;;
+        1) fail "$label: no new pipeline job reached terminal state within ${PIPELINE_TIMEOUT_S}s (active=$pipe_active processing=$pipe_processing)" ;;
+        *) fail "$(state_why "$status" "$label: whether a new pipeline job reached a terminal state within ${PIPELINE_TIMEOUT_S}s (last answered: active=$pipe_active processing=$pipe_processing)")" ;;
+    esac
 
     POLL_LJ_ID="$lj_id"
     POLL_LJ_STATE="$lj_state"
 }
+
+# One tick of _poll_for_new_lastjob_terminal, on an answered STATE_BODY. Reads
+# and writes that function's locals (bash dynamic scoping).
+_lastjob_tick() {
+    lj_id=""; lj_state=""; lj_recovered=""; pipe_active=""; pipe_processing=""; pending_naming=""
+    IFS='|' read -r lj_id lj_state lj_recovered pipe_active pipe_processing pending_naming < <(
+        jq -r '[.lastJob.jobID // "", .lastJob.state // "", ((.lastJob.meetingTitle // "") | startswith("Recovered Recording")), .pipeline.activeJobCount, .pipeline.isProcessing, .pipeline.pendingNamingJobCount] | join("|")' <<<"$STATE_BODY"
+    ) || true
+
+    # Drain speaker-naming dialogs so headless runs don't deadlock on a
+    # UI click. Fire-and-forget; the endpoint is a no-op when nothing
+    # is pending and the next tick picks up the state change.
+    if [ "${pending_naming:-0}" != "0" ] && [ -n "$pending_naming" ]; then
+        # Capture pendingNamingJobs[0].speakerCount the FIRST time we
+        # observe a pending naming job — before /action/skipNaming
+        # clears the queue. Surfaces the speaker-count Phase 1 of
+        # issue #165 promises: Sortformer mode must populate
+        # `result.embeddings` so the naming dialog sees N>0 speakers.
+        # Without this capture there's no production-chain signal that
+        # the embedding-extraction wiring is actually producing output.
+        if [ -z "${OBSERVED_NAMING_SPEAKERS:-}" ]; then
+            OBSERVED_NAMING_SPEAKERS="$(jq -r '.pendingNamingJobs[0].speakerCount // 0' <<<"$STATE_BODY")" || OBSERVED_NAMING_SPEAKERS=0
+            log "$label:   First observed pendingNamingJobs[0].speakerCount=$OBSERVED_NAMING_SPEAKERS"
+        fi
+        log "$label:   Auto-skipping ${pending_naming} pending naming job(s) via /action/skipNaming"
+        curl --silent --show-error --max-time 5 -X POST \
+            --header "Authorization: Bearer $RPC_TOKEN" \
+            "$RPC_BASE/action/skipNaming" >/dev/null 2>&1 || true
+    fi
+
+    if [ "$lj_state" != "$last_state" ] || [ "$lj_id" != "$last_id" ]; then
+        log "$label:   pipeline.active=$pipe_active processing=$pipe_processing lastJob=$lj_id state=$lj_state pending_naming=$pending_naming"
+        last_state="$lj_state"
+        last_id="$lj_id"
+    fi
+
+    if [ -n "$ignore_recovered" ] && [ "$lj_recovered" = "true" ] \
+        && [ "$lj_id" != "$PRE_LAST_JOB_ID" ] && [ "$lj_id" != "${noted_recovered:-}" ]; then
+        log "$label:   ignoring launch-recovery job $lj_id (state=$lj_state) — waiting for the simulator-triggered job"
+        noted_recovered="$lj_id"
+    fi
+    [ -n "$lj_id" ] && [ "$lj_id" != "$PRE_LAST_JOB_ID" ] \
+        && { [ -z "$ignore_recovered" ] || [ "$lj_recovered" != "true" ]; } \
+        && { [ "$lj_state" = "done" ] || [ "$lj_state" = "error" ]; }
+}
+
+# jq filter: whether the speaker-naming window is on screen (the naming lanes).
+_NAMING_WINDOW_VISIBLE='[.windows[] | select(.id == "speaker-naming") | .isVisible] | first // false'
 
 # _read_transcript_size <label> <path> — the transcript's size into
 # TRANSCRIPT_SIZE, read under a bound, failing the lane below 101 bytes. The job's preflight step catches a
@@ -2311,7 +2336,7 @@ run_one_meeting() {
 
     log "$label: final state: $lj_state"
     local final_snapshot
-    final_snapshot="$(rpc /state)"
+    final_snapshot="$STATE_BODY"
     echo "$final_snapshot" | jq '.lastJob'
 
     [ "$lj_state" = "done" ] || fail "$label: lastJob.state == \"$lj_state\", expected \"done\". Error: $(jq -r '.lastJob.error // "<none>"' <<<"$final_snapshot")"
@@ -2444,8 +2469,11 @@ assert_sidecar_track_has_signal() {
 # turns "no finished job and no finished artifact" into "no job at all", which
 # is what record-only actually promises.
 assert_pipeline_did_not_run() {
-    local label="$1" violation
-    violation="$(record_only_violation "$(rpc /state)" "$PRE_LAST_JOB_ID")"
+    local label="$1" violation snap
+    # An unanswered read used to reach record_only_violation as an empty
+    # snapshot, which with no baseline job reads as "nothing ran".
+    snap="$(state_query .)" || fail "$(state_why $? "$label: whether record-only left the pipeline idle")"
+    violation="$(record_only_violation "$snap" "$PRE_LAST_JOB_ID")"
     [ -z "$violation" ] \
         || fail "$label: $violation. Record-only must not enqueue at all, and a job still in flight is invisible to both lastJob and the transcript check, so without this the lane would report success while the pipeline was doing what it must not do."
 }
@@ -2675,7 +2703,7 @@ run_one_reimport() {
 
     log "$label: final state: $lj_state"
     local final_snapshot
-    final_snapshot="$(rpc /state)"
+    final_snapshot="$STATE_BODY"
     echo "$final_snapshot" | jq '.lastJob'
 
     [ "$lj_state" = "done" ] || fail "$label: lastJob.state == \"$lj_state\", expected \"done\". Error: $(jq -r '.lastJob.error // "<none>"' <<<"$final_snapshot")"
@@ -2729,7 +2757,8 @@ run_crash_recovery() {
     # recovered recording gets a fresh job id after relaunch, so this stable
     # baseline can never equal the recovered job — avoids a race where recovery
     # enqueues before we could sample a post-relaunch baseline.
-    PRE_LAST_JOB_ID="$(rpc /state | jq -r '.lastJob.jobID // empty')"
+    PRE_LAST_JOB_ID="$(state_query '.lastJob.jobID // empty')" \
+        || fail "$(state_why $? "$label: the pre-crash lastJob baseline")"
     log "$label: pre-crash baseline lastJob.jobID=${PRE_LAST_JOB_ID:-<none>}"
 
     # 1. Start a meeting so the app begins recording.
@@ -2793,13 +2822,8 @@ run_crash_recovery() {
     #    first, so a non-zero count here is the recovered recording. Pre-fix the
     #    orphan is deleted with no recovery → the queue stays empty (RED).
     log "$label: waiting for the recovered recording to enter the pipeline (timeout 120s)"
-    _crash_recovered_job() {
-        local n
-        n="$(rpc /state | jq -r '(.pipeline.activeJobCount // 0) + (.pipeline.pendingNamingJobCount // 0) + (.pipeline.waitingJobCount // 0)')"
-        [ "${n:-0}" -gt 0 ] 2>/dev/null
-    }
-    poll_until 120 3 _crash_recovered_job \
-        || fail "$label: orphan NOT recovered — no recovered recording entered the pipeline within 120s (recovery missing, or the orphan was deleted by launch cleanup)"
+    poll_state 120 3 state_is '((.pipeline.activeJobCount // 0) + (.pipeline.pendingNamingJobCount // 0) + (.pipeline.waitingJobCount // 0)) > 0' \
+        || fail "$(state_why $? "$label: orphan NOT recovered — no recovered recording entered the pipeline within 120s (recovery missing, or the orphan was deleted by launch cleanup)")"
     log "$label: recovered recording entered the pipeline ✅"
 
     # 8. Full chain: drive the recovered job to a terminal state (the poll loop
@@ -2817,7 +2841,7 @@ run_crash_recovery() {
     #    a recording it never crashed. Recovery titles the job after the stem it
     #    rebuilt, which is the only thing in the snapshot that names ours.
     local want_title="Recovered Recording (${stem})" got_title
-    got_title="$(rpc /state | jq -r '.lastJob.meetingTitle // ""')"
+    got_title="$(jq -r '.lastJob.meetingTitle // ""' <<<"$STATE_BODY")"
     [ "$got_title" = "$want_title" ] \
         || fail "$label: the job that finished is titled '$got_title', not '$want_title'. Something reached a terminal state, but not the recording this lane crashed — most likely an orphan left by an earlier interrupted run, recovered at the same launch."
     log "$label: recovered recording transcribed and it is ours (lastJob done) ✅"
@@ -2964,11 +2988,8 @@ run_naming_escape() {
     poll_until "$PIPELINE_TIMEOUT_S" 5 _naming_escape_parked \
         || fail "$label: job $job_id never parked at speaker-naming within ${PIPELINE_TIMEOUT_S}s"
 
-    _naming_window_visible() {
-        [ "$(rpc /state | jq -r '[.windows[] | select(.id == "speaker-naming") | .isVisible] | first // false')" = "true" ]
-    }
-    poll_until 30 2 _naming_window_visible \
-        || fail "$label: naming window never became visible"
+    poll_state 30 2 state_is "$_NAMING_WINDOW_VISIBLE" \
+        || fail "$(state_why $? "$label: naming window never became visible")"
     log "$label: naming window open, job parked"
 
     # Front the app so the keystroke lands on it, then Escape. No click into the
@@ -2988,11 +3009,10 @@ run_naming_escape() {
         -e 'end timeout' 2>&1)" \
         || fail "$label: could not post Escape (124 = no answer within $((tcc_timeout + 5)) s): ${key_err:-<no output>}. If it was refused or timed out: $(tcc_fix_hint 'Device Control and Data Access, and Automation → System Events')"
 
-    _naming_window_gone() {
-        ! _naming_window_visible
-    }
-    poll_until 15 1 _naming_window_gone \
-        || fail "$label: Escape did not dismiss the naming window (windows=$(rpc /state | jq -c '[.windows[]|{id,isVisible}]'))"
+    # The negative check is where an unanswered read did the most harm: it read
+    # as "not visible", so a wedged app passed as a dismissed window.
+    poll_state 15 1 state_is "($_NAMING_WINDOW_VISIBLE) | not" \
+        || fail "$(state_why $? "$label: Escape did not dismiss the naming window (windows=$(jq -c '[.windows[]|{id,isVisible}]' <<<"$STATE_BODY"))")"
     log "$label: window dismissed"
 
     # The half that separates a dismiss from a Skip: the job must be untouched
@@ -3022,8 +3042,7 @@ run_naming_confirm() {
     # dev bundle's container-plist redirect). Read the DB baseline from the
     # same snapshot.
     local snap diarize num_speakers record_only pre_db_count
-    snap="$(rpc /state)"
-    [ -n "$snap" ] || fail "$label: /state returned empty (RPC down?)"
+    snap="$(state_query .)" || fail "$(state_why $? "$label: the resolved diarization settings")"
     diarize="$(jq -r '.settings.diarization.diarize' <<<"$snap")"
     num_speakers="$(jq -r '.settings.diarization.numSpeakers' <<<"$snap")"
     record_only="$(jq -r '.settings.recording.recordOnly' <<<"$snap")"
@@ -3060,14 +3079,13 @@ run_naming_confirm() {
     # /action/skipNaming here; driving the confirm is the whole point.
     local pending_count=""
     _naming_pending() {
-        assert_app_alive
-        pending_count="$(rpc /state | jq -r --arg id "$job_id" \
-            '[.pendingNamingJobs[] | select(.jobID == $id)] | .[0].speakerCount // empty')"
+        pending_count="$(jq -r --arg id "$job_id" \
+            '[.pendingNamingJobs[] | select(.jobID == $id)] | .[0].speakerCount // empty' <<<"$STATE_BODY")"
         [ -n "$pending_count" ]
     }
     log "$label: waiting for job $job_id to reach speaker-naming (timeout ${PIPELINE_TIMEOUT_S}s)"
-    poll_until "$PIPELINE_TIMEOUT_S" 5 _naming_pending \
-        || fail "$label: job $job_id never reached speaker-naming within ${PIPELINE_TIMEOUT_S}s (diarization produced no naming dialog?)"
+    poll_state --each assert_app_alive "$PIPELINE_TIMEOUT_S" 5 _naming_pending \
+        || fail "$(state_why $? "$label: job $job_id never reached speaker-naming within ${PIPELINE_TIMEOUT_S}s (diarization produced no naming dialog?)")"
     log "$label: job parked at naming with speakerCount=$pending_count"
     [ "${pending_count:-0}" -ge 2 ] 2>/dev/null \
         || fail "$label: naming dialog speakerCount=$pending_count, expected >= 2 (numSpeakers=2 on a 2-speaker fixture)"
@@ -3081,11 +3099,10 @@ run_naming_confirm() {
     # (vacuous). Reverting NamingWindowPolicy flips floating -> false here, which
     # is what turns this lane red.
     local naming_win=""
-    # Capture the speaker-naming window's RPC projection into $naming_win;
-    # non-zero if the window is not present.
+    # Capture the speaker-naming window's projection from the poll's /state
+    # answer into $naming_win; non-zero if the window is not present.
     _naming_window() {
-        assert_app_alive
-        naming_win="$(rpc /state | jq -c '[.windows[] | select(.id == "speaker-naming")] | .[0] // empty')"
+        naming_win="$(jq -c '[.windows[] | select(.id == "speaker-naming")] | .[0] // empty' <<<"$STATE_BODY")"
         [ -n "$naming_win" ]
     }
     # Assert only the environment-STABLE pin properties. `.fullScreenAuxiliary`
@@ -3109,8 +3126,8 @@ run_naming_confirm() {
     # The window opens asynchronously (.showSpeakerNaming -> bringWindowToFront
     # on the next runloop), so poll rather than assert once.
     log "$label: asserting speaker-naming window is pinned (floating + all-Spaces)"
-    poll_until 30 2 _naming_window_pinned \
-        || fail "$label: speaker-naming window not pinned (#504 regression): $(rpc /state | jq -c '[.windows[] | select(.id=="speaker-naming")]')"
+    poll_state --each assert_app_alive 30 2 _naming_window_pinned \
+        || fail "$(state_why $? "$label: speaker-naming window not pinned (#504 regression): $(jq -c '[.windows[] | select(.id=="speaker-naming")]' <<<"$STATE_BODY")")"
     log "$label: naming window pinned OK: $naming_win"
 
     # And it must SURVIVE the app losing focus: bring another app to the front,
@@ -3125,8 +3142,8 @@ run_naming_confirm() {
     # Poll rather than single-shot: a transient localhost RPC hiccup at this one
     # instant would otherwise fail the lane with a misleading "regression"
     # message. A genuine hide-on-deactivate regression stays red the whole window.
-    poll_until 20 2 _naming_window_visible_pinned \
-        || fail "$label: speaker-naming window not visible + pinned after the app was deactivated (#504 regression): $(rpc /state | jq -c '.windows')"
+    poll_state --each assert_app_alive 20 2 _naming_window_visible_pinned \
+        || fail "$(state_why $? "$label: speaker-naming window not visible + pinned after the app was deactivated (#504 regression): $(jq -c '.windows' <<<"$STATE_BODY")")"
     log "$label: naming window still visible + pinned after deactivating the app"
     # -------------------------------------------------------------------------
 
@@ -3219,14 +3236,12 @@ run_naming_confirm() {
     # a local run starts from the dev's real DB (voices may already match, so a
     # confirm updates in place with no count change). Locally, just log.
     # Retry the readback: a single transient RPC hiccup would leave post_db_count
-    # empty and turn the integer comparison into a misleading red.
-    local post_db_count="" _i
-    for _i in 1 2 3 4 5; do
-        post_db_count="$(rpc /state | jq -r '.speakerDB.count // empty' 2>/dev/null || true)"
-        [ -n "$post_db_count" ] && break
-        sleep 1
-    done
-    [ -n "$post_db_count" ] || post_db_count=0
+    # empty and turn the integer comparison into a misleading red. An app that
+    # does not answer at all fails as such.
+    local post_db_count="" db_rc=0
+    poll_state 5 1 state_is '.speakerDB.count != null' || db_rc=$?
+    [ "$db_rc" -ne 2 ] || fail "$(state_why 2 "$label: speakerDB.count after confirm")"
+    post_db_count="$(jq -r '.speakerDB.count // 0' <<<"$STATE_BODY")"
     log "$label: speakerDB.count after confirm: $post_db_count (was $pre_db_count)"
     if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
         [ "$post_db_count" -gt "$pre_db_count" ] 2>/dev/null \
@@ -3242,8 +3257,7 @@ run_naming_confirm() {
     # diagnostic); the exit-trap cleanup separately verifies the persisted
     # UserDefaults + speakers.json are restored to their pre-lane state.
     local end_snap
-    end_snap="$(rpc /state)"
-    if [ -n "$end_snap" ]; then
+    if end_snap="$(state_query . 2>/dev/null)"; then
         local end_diarize end_num end_record
         end_diarize="$(jq -r '.settings.diarization.diarize' <<<"$end_snap")"
         end_num="$(jq -r '.settings.diarization.numSpeakers' <<<"$end_snap")"
@@ -3342,8 +3356,7 @@ run_naming_switch() {
     # The settings the lane depends on, read back from the running process (a
     # blind `defaults read` is unreliable for the dev bundle's container redirect).
     local snap diarize num_speakers record_only
-    snap="$(rpc /state)"
-    [ -n "$snap" ] || fail "$label: /state returned empty (RPC down?)"
+    snap="$(state_query .)" || fail "$(state_why $? "$label: the resolved diarization settings")"
     diarize="$(jq -r '.settings.diarization.diarize' <<<"$snap")"
     num_speakers="$(jq -r '.settings.diarization.numSpeakers' <<<"$snap")"
     record_only="$(jq -r '.settings.recording.recordOnly' <<<"$snap")"
@@ -3432,11 +3445,8 @@ run_naming_switch() {
 
     # The window must be showing the FIRST job, or the switch below is no
     # switch. Its fields are enumerated from outside through AX.
-    _naming_window_visible() {
-        [ "$(rpc /state | jq -r '[.windows[] | select(.id == "speaker-naming") | .isVisible] | first // false')" = "true" ]
-    }
-    poll_until 30 2 _naming_window_visible \
-        || fail "$label: naming window never became visible"
+    poll_state 30 2 state_is "$_NAMING_WINDOW_VISIBLE" \
+        || fail "$(state_why $? "$label: naming window never became visible")"
     # Labels whose name field is currently in the window, sorted, as a JSON array.
     _ns_shown_labels() {
         "$driver" windows 2>/dev/null \
@@ -3464,7 +3474,8 @@ run_naming_switch() {
     _ns_select_job() {
         local job="$1" labels="$2" which="$3" attempt idx count segments out
         for attempt in 1 2 3; do
-            _ns_order="$(rpc /state | jq -c '[.pendingNamingJobs[].jobID]')"
+            _ns_order="$(state_query '[.pendingNamingJobs[].jobID]' -c)" \
+                || fail "$(state_why $? "$label: the pending naming order")"
             idx="$(jq -r --arg id "$job" 'index($id) // -1' <<<"$_ns_order")"
             count="$(jq -r 'length' <<<"$_ns_order")"
             [ "$idx" -ge 0 ] \
@@ -3485,7 +3496,8 @@ run_naming_switch() {
     }
 
     local pending_now pending_count
-    pending_now="$(rpc /state | jq -c '[.pendingNamingJobs[] | {jobID, meetingTitle}]')"
+    pending_now="$(state_query '[.pendingNamingJobs[] | {jobID, meetingTitle}]' -c)" \
+        || fail "$(state_why $? "$label: the pending naming jobs")"
     pending_count="$(jq -r 'length' <<<"$pending_now")"
     log "$label: pending naming jobs now: $pending_now"
     [ "$pending_count" -eq 2 ] \
@@ -3568,12 +3580,10 @@ run_naming_switch() {
     # such grant, which is also what lets this lane be hand-run over SSH. The
     # transcript relabel is already covered end to end by the naming-confirm lane.
     _ns_db_has_typed() {
-        assert_app_alive
-        rpc /state | jq -e --arg n "$typed" \
-            '((.speakerDB.recentNames // []) + (.speakerDB.knownSpeakerNames // [])) | index($n) != null' >/dev/null 2>&1
+        state_is '((.speakerDB.recentNames // []) + (.speakerDB.knownSpeakerNames // [])) | index($n) != null' --arg n "$typed"
     }
-    poll_until 30 2 _ns_db_has_typed \
-        || fail "$label: '$typed' never appeared in /state.speakerDB after Confirm (recent=$(rpc /state | jq -c '.speakerDB.recentNames') known=$(rpc /state | jq -c '.speakerDB.knownSpeakerNames')). The confirmed dialog contents did not enroll the voice."
+    poll_state --each assert_app_alive 30 2 _ns_db_has_typed \
+        || fail "$(state_why $? "$label: '$typed' never appeared in /state.speakerDB after Confirm (recent=$(jq -c '.speakerDB.recentNames' <<<"$STATE_BODY") known=$(jq -c '.speakerDB.knownSpeakerNames' <<<"$STATE_BODY")). The confirmed dialog contents did not enroll the voice.")"
     log "$label: '$typed' enrolled into the speaker DB after Confirm ✅"
 
     # Leave nothing parked: the first job was never resolved (the lane switched
@@ -3604,7 +3614,7 @@ run_title_source() {
     [ "$POLL_LJ_STATE" = "done" ] || fail "$label: lastJob.state == \"$POLL_LJ_STATE\", expected \"done\""
 
     local meeting_title
-    meeting_title="$(rpc /state | jq -r '.lastJob.meetingTitle // empty')"
+    meeting_title="$(jq -r '.lastJob.meetingTitle // empty' <<<"$STATE_BODY")"
     log "$label: lastJob.meetingTitle = \"$meeting_title\""
     [ "$meeting_title" = "MeetingSimulator Call" ] \
         || fail "$label: meetingTitle == \"$meeting_title\", expected \"MeetingSimulator Call\". The window title equalled the app name, so the title lookup should return nil and the detector substitute the placeholder; a leaked assertion name or window title means the title-source fix regressed."
@@ -3667,37 +3677,50 @@ run_mic_stall() {
     "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" --loop --duration "$MIC_STALL_MEETING_S" >/tmp/e2e-app-sim.log 2>&1 &
     SIM_PID=$!
 
-    _ms_recording() { [ "$(watch_state)" = recording ]; }
-    poll_until 60 1 _ms_recording || fail "$label: no recording started within 60s of the meeting"
+    poll_state 60 1 state_is '.watchState == "recording"' \
+        || fail "$(state_why $? "$label: no recording started within 60s of the meeting")"
     local rec_at
     rec_at="$(date +%s)"
     log "$label: recording; watching /state for the microphone stall"
 
     # Until the stall, keep what the microphone did: whether /state ever saw it
     # deliver a buffer. One jq per tick, `|`-joined for the reason given at
-    # _poll_for_new_lastjob_terminal.
-    local snap fault count mic_age app_age watch elapsed saw_mic_buffer=false
-    while true; do
-        assert_app_alive
-        snap="$(rpc /state)"
+    # _poll_for_new_lastjob_terminal. The loop is poll_state's, as there: an
+    # unanswered tick is skipped, not read as empty fields (which used to say
+    # "the recording ended"), and assert_app_alive runs on every tick. The
+    # window ends where the old loop's did, at the first tick more than
+    # MIC_STALL_LATEST_S into the recording. Unlike the lastJob poll, the
+    # deadline read is not judged: MIC_STALL_LATEST_S bounds when the stall
+    # may land, the snapshot does not say when it landed, and that read can
+    # return up to STATE_READ_BOUND_S after the window.
+    local fault="" count="" mic_age="" app_age="" watch="" elapsed=0 saw_mic_buffer=false status=0
+    _ms_stalled() {
         fault=""; count=""; mic_age=""; app_age=""; watch=""
         IFS='|' read -r fault count mic_age app_age watch < <(
-            jq -r '[.channelHealth.micFault // "", (.channelHealth.micStallCount // "" | tostring), (.channelHealth.micSecondsSinceLastBuffer // "" | tostring), (.channelHealth.appSecondsSinceLastBuffer // "" | tostring), .watchState // ""] | join("|")' <<<"$snap"
+            jq -r '[.channelHealth.micFault // "", (.channelHealth.micStallCount // "" | tostring), (.channelHealth.micSecondsSinceLastBuffer // "" | tostring), (.channelHealth.appSecondsSinceLastBuffer // "" | tostring), .watchState // ""] | join("|")' <<<"$STATE_BODY"
         ) || true
         elapsed=$(( $(date +%s) - rec_at ))
         if [ -n "$mic_age" ] && _ms_float_lt "$mic_age" 2; then saw_mic_buffer=true; fi
-        [ "$fault" = stalled ] && break
+        [ "$fault" = stalled ] && return 0
         [ "$watch" = recording ] || fail "$label: the recording ended after ${elapsed}s without the microphone ever being reported stalled (micFault='$fault')"
-        if [ "$elapsed" -gt "$MIC_STALL_LATEST_S" ]; then
+        return 1
+    }
+    poll_state --each assert_app_alive \
+        $(( rec_at + MIC_STALL_LATEST_S + 1 - $(date +%s) )) 1 _ms_stalled || status=$?
+    # On a pass, elapsed is the stalled read's; on a failure, the time now.
+    [ "$status" -eq 0 ] || elapsed=$(( $(date +%s) - rec_at ))
+    case "$status" in
+        0) ;;
+        1)
             # Which half broke: the capture layer releasing the microphone, or
             # the release reaching /state.
             if _ms_capture_log "$log_start" | grep -q "releasing the microphone"; then
                 fail "$label: the capture log shows the microphone released, but /state still reads micFault='$fault' ${elapsed}s into the recording: the stall never reached the app"
             fi
             fail "$label: no stall on /state ${elapsed}s into the recording (micFault='$fault' micSecondsSinceLastBuffer='$mic_age'), and no release in the capture log. The watchdog must release a microphone that went ${MIC_STALL_BUDGET_S}s without a buffer."
-        fi
-        sleep 1
-    done
+            ;;
+        *) fail "$(state_why "$status" "$label: whether the microphone was reported stalled within ${elapsed}s of the recording (last answered micFault='$fault' micSecondsSinceLastBuffer='$mic_age')")" ;;
+    esac
     log "$label: /state micFault=stalled micStallCount=$count after ${elapsed}s (micSecondsSinceLastBuffer='$mic_age')"
     [ "$elapsed" -ge "$MIC_STALL_EARLIEST_S" ] \
         || fail "$label: stalled after ${elapsed}s, before the ${MIC_STALL_BUDGET_S}s budget could have run out"
@@ -3713,8 +3736,8 @@ run_mic_stall() {
     # Released, not just flagged: seconds later the recording goes on, the app
     # channel still delivers, and nothing is reported against it.
     sleep 6
-    snap="$(rpc /state)"
-    local app_fault
+    local snap app_fault
+    snap="$(state_query .)" || fail "$(state_why $? "$label: the channel health 6s after the stall")"
     IFS='|' read -r fault count mic_age app_age watch app_fault < <(
         jq -r '[.channelHealth.micFault // "", (.channelHealth.micStallCount // "" | tostring), (.channelHealth.micSecondsSinceLastBuffer // "" | tostring), (.channelHealth.appSecondsSinceLastBuffer // "" | tostring), .watchState // "", .channelHealth.appFault // ""] | join("|")' <<<"$snap"
     ) || true
@@ -3770,7 +3793,7 @@ run_mic_stall() {
     # the app track.
     _poll_for_new_lastjob_terminal "$label" ignore-recovered
     local final
-    final="$(rpc /state)"
+    final="$STATE_BODY"
     jq '.lastJob' <<<"$final"
     [ "$POLL_LJ_STATE" = "done" ] \
         || fail "$label: lastJob.state == \"$POLL_LJ_STATE\", expected \"done\". Error: $(jq -r '.lastJob.error // "<none>"' <<<"$final")"
@@ -3871,9 +3894,8 @@ _ug_fail() {
 _UG_MODEL_STATE=""
 _UG_MODEL_SEEN=""
 _ug_model_settled() {
-    assert_app_alive
     local state variant
-    read -r state variant < <(rpc /state | jq -r '.engines.whisperKit | "\(.modelState // "") \(.modelVariant // "")"' 2>/dev/null || true) || true
+    read -r state variant < <(jq -r '.engines.whisperKit | "\(.modelState // "") \(.modelVariant // "")"' <<<"$STATE_BODY" 2>/dev/null || true) || true
     [ -n "$state" ] || return 1
     [ "$state" = "$_UG_MODEL_STATE" ] || _UG_MODEL_SEEN="$_UG_MODEL_SEEN $state"
     _UG_MODEL_STATE="$state"
@@ -3887,8 +3909,8 @@ _ug_model_settled() {
 _ug_await_model() {
     local label="$1"
     _UG_MODEL_STATE="" _UG_MODEL_SEEN=""
-    poll_until "$_UG_MODEL_TIMEOUT_S" 1 _ug_model_settled \
-        || _ug_fail "$label: WhisperKit did not load $_UG_VARIANT within ${_UG_MODEL_TIMEOUT_S}s (states seen:${_UG_MODEL_SEEN:- none}). Only 'unloaded' seen usually means a load that failed between two polls: with the network closed, a download attempt fails within milliseconds"
+    poll_state --each assert_app_alive "$_UG_MODEL_TIMEOUT_S" 1 _ug_model_settled \
+        || _ug_fail "$(state_why $? "$label: WhisperKit did not load $_UG_VARIANT within ${_UG_MODEL_TIMEOUT_S}s (states seen:${_UG_MODEL_SEEN:- none}). Only 'unloaded' seen usually means a load that failed between two polls: with the network closed, a download attempt fails within milliseconds")"
     [ "$_UG_MODEL_STATE" = loaded ] \
         || _ug_fail "$label: WhisperKit went '$_UG_MODEL_STATE' (states seen:$_UG_MODEL_SEEN). With the network closed that means it did not find $_UG_VARIANT in its own folder and tried the Hub"
     log "$label: $_UG_VARIANT loaded with the network closed (states seen:$_UG_MODEL_SEEN)"
@@ -3916,7 +3938,7 @@ _ug_single() {
 
 _ug_assert_settings() {
     local label="[upgrade:settings]" snap
-    snap="$(rpc /state)"
+    snap="$(state_query .)" || _ug_fail "$(state_why $? "$label: whether the app took the lane's launch arguments")"
     jq -e --arg v "$_UG_VARIANT" '.settings.transcription.engine == "whisperKit"
         and .settings.transcription.whisperKitModel == $v
         and .settings.diarization.diarize == false and .settings.diarization.vadEnabled == false
@@ -3961,7 +3983,9 @@ _ug_assert_speakers() {
     local label="[upgrade:speakers]" status corrupt
     cmp -s "$_UG_LANE_DIR/speakers.seed" "$_UG_DATA_DIR/speakers.json" \
         || _ug_fail "$label: launching changed the unreadable speakers.json; it must stay as it is until something writes"
-    jq -e '.speakerDB.count == 0' <<<"$(rpc /state)" >/dev/null \
+    local snap
+    snap="$(state_query .)" || _ug_fail "$(state_why $? "$label: how /state reads the unreadable DB")"
+    jq -e '.speakerDB.count == 0' <<<"$snap" >/dev/null \
         || _ug_fail "$label: /state does not read the unreadable DB as empty"
     # Any write runs the read-modify-write that quarantines; deleting a name
     # nobody has is the one that changes nothing else.
@@ -3976,9 +4000,10 @@ _ug_assert_speakers() {
         || _ug_fail "$label: the quarantined file is not owner-only ($(stat -f '%Lp' "$corrupt"))"
     jq -e '. == []' "$_UG_DATA_DIR/speakers.json" >/dev/null 2>&1 \
         || _ug_fail "$label: the replacement speakers.json is not an empty DB"
+    snap="$(state_query .)" || _ug_fail "$(state_why $? "$label: whether the user was told the profiles were set aside")"
     jq -e --arg f "$(basename "$corrupt")" '.speakerDB.count == 0
         and any(.notifications[]; .title == "Voice profiles could not be read" and (.body | contains($f)))' \
-        <<<"$(rpc /state)" >/dev/null \
+        <<<"$snap" >/dev/null \
         || _ug_fail "$label: the user was not told the profiles were set aside as $(basename "$corrupt")"
     assert_app_alive
     log "$label: quarantined unchanged as $(basename "$corrupt"), DB empty, user notified"
@@ -4671,7 +4696,7 @@ run_protocol_lane() {
     # The running app's own resolved view: a write that missed its domain would
     # otherwise send the lane's jobs to the host's real provider.
     local snap
-    snap="$(rpc /state)"
+    snap="$(state_query .)" || fail "$(state_why $? "$label: whether the app resolved the lane's settings")"
     jq -e --arg ep "$_PP_ENDPOINT" --arg model "$_PP_MODEL" --arg lang "$_PP_LANGUAGE" \
         --argjson temp "$_PP_TEMPERATURE" '
         .settings.protocolGeneration as $p | .settings.output as $o
@@ -4700,14 +4725,26 @@ run_protocol_lane() {
     # or recovered has either already called it or is about to.
     # Read fresh and twice in a row, since recovery enqueues off the main actor
     # a beat after launch.
-    local busy="" idle_reads=0
+    # "In a row" must not span a stretch the app did not answer: a job could be
+    # enqueued and finish inside it. The predicate runs only on answered ticks,
+    # so the gap is seen from the --each hook, which runs before every read: a
+    # previous tick that never reached the predicate resets the count. The
+    # verdict, including the deadline retry, is poll_state's.
+    local busy="" idle_reads=0 prev_answered=1 idle_rc=0
+    _pp_gap_resets_idle() {
+        assert_app_alive
+        [ "$prev_answered" -eq 1 ] || idle_reads=0
+        prev_answered=0
+    }
     _pp_idle_twice() {
-        busy="$(rpc /state | jq -r '(.pipeline.activeJobCount // 0) + (.pipeline.pendingNamingJobCount // 0) + (.pipeline.waitingJobCount // 0)' 2>/dev/null)"
+        prev_answered=1
+        busy="$(jq -r '(.pipeline.activeJobCount // 0) + (.pipeline.pendingNamingJobCount // 0) + (.pipeline.waitingJobCount // 0)' <<<"$STATE_BODY" 2>/dev/null)"
         if [ "$busy" = 0 ] && [ "$(_pp_request_count)" = 0 ]; then idle_reads=$(( idle_reads + 1 )); else idle_reads=0; fi
         [ "$idle_reads" -ge 2 ]
     }
-    poll_until 20 1 _pp_idle_twice \
-        || fail "$label: the app is not idle before the lane's first job (pipeline jobs: ${busy:-?}, stub requests so far: $(_pp_request_count)); a job the launch resumed or recovered would be sent to the stub"
+    poll_state --each _pp_gap_resets_idle 20 1 _pp_idle_twice || idle_rc=$?
+    [ "$idle_rc" -eq 0 ] \
+        || fail "$(state_why "$idle_rc" "$label: the app is not idle before the lane's first job (pipeline jobs: ${busy:-?}, stub requests so far: $(_pp_request_count)); a job the launch resumed or recovered would be sent to the stub")"
 
     # --- 1. the stub answers --------------------------------------------------
     printf 'ok' >"$_PP_DIR/mode"
