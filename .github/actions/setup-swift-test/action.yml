@@ -56,6 +56,15 @@ inputs:
     required: false
     default: "true"
 
+outputs:
+  toolchain:
+    description: >
+      The compiler identity used in the cache keys, e.g.
+      `Xcode-27.0-Build-version-27A266a`, for a caller that keys a cache of
+      its own on it. Empty when `cache-spm` is not `true`: the step is skipped
+      then, so a build that uses no cache cannot fail over a key it never reads.
+    value: ${{ steps.toolchain.outputs.id }}
+
 runs:
   using: "composite"
   steps:
@@ -63,24 +72,44 @@ runs:
     # action — GitHub loads `./.github/actions/...` from the workspace, so
     # the repo must already be present.
     #
-    # The key carries the Xcode path the build runs under. A tree built by
-    # another compiler is discarded by SwiftPM, and an exact hit is never saved
-    # again, so without it a toolchain bump would leave every run restoring a
-    # tree it cannot use until `Package.resolved` changes. The path is read in
-    # a shell step, which inherits the caller's DEVELOPER_DIR for certain; the
-    # docs do not say whether the `env` context of a composite action does.
-    - name: Resolve the toolchain for the cache key
+    # The key carries the compiler the build runs under, as its version and
+    # build number (`Xcode-27.0-Build-version-27A266a`), not the Xcode path. A
+    # tree built by another compiler is discarded by SwiftPM, and an exact hit
+    # is never saved again, so without it a toolchain bump would leave every
+    # run restoring a tree it cannot use until `Package.resolved` changes. The
+    # path does not tell compilers apart: a new build installed under the same
+    # path would keep the old key. A shell step inherits the caller's
+    # DEVELOPER_DIR for certain, which `xcodebuild` honours; the docs do not
+    # say whether the `env` context of a composite action does.
+    #
+    # Fails closed. An empty or unreadable answer would otherwise build a key
+    # with no toolchain in it and quietly bring the stale-tree problem back, so
+    # the step stops instead, and so does a failing `xcodebuild` (pipefail).
+    # Skipped when `cache-spm` is off (a published release build), so a key it
+    # never reads cannot fail that build.
+    - name: Identify the toolchain for the cache key
       id: toolchain
+      if: inputs.cache-spm == 'true'
       shell: bash
-      run: echo "dir=${DEVELOPER_DIR:-$(xcode-select -p)}" >> "$GITHUB_OUTPUT"
+      run: |
+        set -euo pipefail
+        # Two lines, "Xcode 27.0" and "Build version 27A266a", joined into one
+        # key-safe word: runs of blanks and newlines become one dash.
+        id=$(xcodebuild -version | tr -s '[:space:]' '-')
+        id=${id%-}
+        if [[ ! $id =~ ^[A-Za-z0-9._-]+$ || $id != *Build-version-* ]]; then
+          echo "::error::Cannot build a cache key from 'xcodebuild -version' (got: '$id')"
+          exit 1
+        fi
+        echo "id=$id" >> "$GITHUB_OUTPUT"
 
     - name: Cache SPM dependencies
       if: inputs.cache-spm == 'true'
       uses: actions/cache@v5
       with:
         path: ${{ inputs.cache-path }}
-        key: spm-${{ runner.os }}-${{ steps.toolchain.outputs.dir }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
-        restore-keys: ${{ inputs.cache-restore-fallback == 'true' && format('spm-{0}-{1}-{2}-', runner.os, steps.toolchain.outputs.dir, inputs.cache-key-suffix) || '' }}
+        key: spm-${{ runner.os }}-${{ steps.toolchain.outputs.id }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
+        restore-keys: ${{ inputs.cache-restore-fallback == 'true' && format('spm-{0}-{1}-{2}-', runner.os, steps.toolchain.outputs.id, inputs.cache-key-suffix) || '' }}
 
     # Cache the WhisperKit (HuggingFace) + FluidAudio model files. The
     # HuggingFace download client races on cold-cache concurrent loads of

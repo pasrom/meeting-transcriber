@@ -272,6 +272,7 @@ jobs:
       # download; well below the 25 min job timeout so a hung download
       # surfaces as a step failure, not a job-timeout.
       - uses: ./.github/actions/setup-swift-test
+        id: setup
         timeout-minutes: 20
         with:
           cache-key-suffix: ${{ matrix.variant }}
@@ -346,7 +347,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: tools/mt-cli/.build
-          key: mt-cli-spm-${{ runner.os }}-${{ env.DEVELOPER_DIR }}-${{ hashFiles('tools/mt-cli/Package.swift', 'tools/mt-cli/Package.resolved') }}-${{ hashFiles('tools/mt-cli/Sources/**', 'tools/mt-cli/Tests/**') }}
+          key: mt-cli-spm-${{ runner.os }}-${{ steps.setup.outputs.toolchain }}-${{ hashFiles('tools/mt-cli/Package.swift', 'tools/mt-cli/Package.resolved') }}-${{ hashFiles('tools/mt-cli/Sources/**', 'tools/mt-cli/Tests/**') }}
       - name: mt-cli tests
         if: matrix.variant == 'homebrew'
         timeout-minutes: 5
