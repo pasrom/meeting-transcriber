@@ -1,5 +1,5 @@
 import Foundation
-import os.log
+import os
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "WhisperKitModelMigration")
 
@@ -68,7 +68,56 @@ enum WhisperKitModelMigration {
         }
     }
 
+    /// Run `body` holding the lock for one variant's old folder. The migration
+    /// holds it while it moves the variant, and `LegacyWhisperModelInventory`
+    /// while it trashes it, so a load never moves a folder that is half in the
+    /// Trash. Per variant, case-folded like the volume, so trashing one model
+    /// never stalls a load of another.
+    static func withLegacyFolderLock<Result>(variant: String, _ body: () throws -> Result) rethrows -> Result {
+        try legacyFolderLock(for: variant).withLock(body)
+    }
+
+    /// The migration's side of that lock, which never waits long: a trash holds
+    /// it across `trashItem`, which file coordination on an iCloud folder can
+    /// block without limit, and a load must not hang behind it. Gives up after
+    /// `wait` and returns false without running `body`. Skipping loses nothing:
+    /// the lock is held only while this variant's old copy goes to the Trash,
+    /// and it is offered for that only when the migration has no use for it
+    /// (not the selected model, or already at the new location, or incomplete).
+    /// The load then goes on as it would with nothing to move.
+    static func withLegacyFolderLockOrSkip(variant: String, wait: TimeInterval, _ body: () -> Void) -> Bool {
+        let lock = legacyFolderLock(for: variant)
+        guard lock.lock(before: Date(timeIntervalSinceNow: wait)) else { return false }
+        defer { lock.unlock() }
+        body()
+        return true
+    }
+
+    private static func legacyFolderLock(for variant: String) -> NSLock {
+        legacyFolderLocks.withLock { locks in
+            let key = variant.lowercased()
+            if let existing = locks[key] { return existing }
+            let created = NSLock()
+            locks[key] = created
+            return created
+        }
+    }
+
+    private static let legacyFolderLocks = OSAllocatedUnfairLock<[String: NSLock]>(initialState: [:])
+
+    /// How long a load waits for a trash of the same variant before it skips.
+    private static let migrationLockWait: TimeInterval = 3
+
     private static func migrateFromLegacyLocation(repoID: String, variant: String) {
+        let ran = withLegacyFolderLockOrSkip(variant: variant, wait: migrationLockWait) {
+            migrateFromLegacyLocationLocked(repoID: repoID, variant: variant)
+        }
+        if !ran {
+            logger.warning("Skipped moving WhisperKit model \(variant, privacy: .public): its old copy is being moved to the Trash")
+        }
+    }
+
+    private static func migrateFromLegacyLocationLocked(repoID: String, variant: String) {
         guard let legacyDownloadBase else { return }
         let legacyRoot = legacyRepoRoot(for: repoID, base: legacyDownloadBase)
         // Read through the prepared accessor: anything moved in lands in a folder
@@ -109,8 +158,11 @@ enum WhisperKitModelMigration {
     ) -> Outcome {
         let source = legacyRepoRoot.appendingPathComponent(variant, isDirectory: true)
         let destination = repoRoot.appendingPathComponent(variant, isDirectory: true)
-        guard !fileManager.fileExists(atPath: destination.path) else { return .keptCurrent }
-        guard isComplete(source, fileManager: fileManager, isEvicted: isEvicted) else { return .nothingToMove }
+        switch decision(variant: variant, from: legacyRepoRoot, to: repoRoot, fileManager: fileManager, isEvicted: isEvicted) {
+        case .keptCurrent: return .keptCurrent
+        case .nothingToMove: return .nothingToMove
+        case .willMove: break
+        }
         do {
             try fileManager.createDirectory(at: repoRoot, withIntermediateDirectories: true)
             // Same volume in every normal setup, so this is a rename and not a copy.
@@ -200,6 +252,35 @@ enum WhisperKitModelMigration {
         WhisperKitLocalSnapshot.requiredPaths().allSatisfy { relative in
             fileManager.fileExists(atPath: folder.appendingPathComponent(relative).path)
         } && !containsEvictedFile(folder, fileManager: fileManager, isEvicted: isEvicted)
+    }
+
+    /// What `migrate` decides before it touches anything.
+    enum Decision: Equatable {
+        /// The new location already has the variant.
+        case keptCurrent
+        /// No complete, fully local copy at the old location.
+        case nothingToMove
+        /// `migrate` moves the old copy over.
+        case willMove
+    }
+
+    /// The one rule for whether `variant` moves from `legacyRepoRoot` to
+    /// `repoRoot`: nothing at the destination, and a complete, fully local copy
+    /// at the old location. `migrate` acts on it, and
+    /// `LegacyWhisperModelInventory` keeps a `.willMove` copy of the selected
+    /// variant out of the Trash, so the two cannot disagree.
+    static func decision(
+        variant: String,
+        from legacyRepoRoot: URL,
+        to repoRoot: URL,
+        fileManager: FileManager = .default,
+        isEvicted: (URL) -> Bool = isEvictedPlaceholder,
+    ) -> Decision {
+        if fileManager.fileExists(atPath: repoRoot.appendingPathComponent(variant, isDirectory: true).path) {
+            return .keptCurrent
+        }
+        let source = legacyRepoRoot.appendingPathComponent(variant, isDirectory: true)
+        return isComplete(source, fileManager: fileManager, isEvicted: isEvicted) ? .willMove : .nothingToMove
     }
 
     /// Whether iCloud has evicted `file`, leaving only a placeholder on disk.
