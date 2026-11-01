@@ -80,12 +80,17 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Transcription progress (0.0–1.0) based on WhisperKit's 30s window processing.
     private(set) var transcriptionProgress: Double = 0
     private var pipe: WhisperKit?
+    /// Whether a model is loaded, for the load loop in `WhisperKitEngine+ModelLoad.swift`.
+    var pipeInstalled: Bool {
+        pipe != nil
+    }
+
     /// Test-only override of the production decoding boundary. It never reaches
     /// app wiring; production always resolves this to `pipe`.
     private var decodingClientOverride: (any WhisperDecodingClient)?
     /// Test-only loader override used to count content reads on cache hits.
     private var vocabularyTermsLoaderOverride: ((String, WhisperVocabularyPrompt.FileRevision) -> WhisperVocabularyPrompt.VocabularyTermsLoadResult)?
-    private let modelLoad = SingleFlight<LoadAttempt>()
+    let modelLoad = SingleFlight<LoadAttempt>()
     /// The model-resolution boundary, per origin. Tests replace it wholesale; nothing
     /// needs to tell an override from the default, so this is a value rather than an
     /// optional beside a computed accessor.
@@ -158,73 +163,13 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         }
     }
 
-    func loadModel() async {
-        // Two decisions recorded here so they are not re-derived. The general form
-        // would be a named `loadedVariant`, with readiness defined as
-        // `loadedVariant == modelVariant`, which states the invariant directly and
-        // needs no outcome at all; it also redefines `modelState` from "some model is
-        // loaded" to "the requested one is", and that is protocol surface, `/state`
-        // surface and awaited by an e2e script. Too expensive for this defect.
-        //
-        // Visible while this runs: between the reconcile dropping the superseded pipe
-        // and the next pass setting `.loading`, the engine reports `.unloaded` and
-        // Settings offers "Load Model" for a few main-actor turns. Harmless today
-        // (nothing waits on "no longer loading"), but a driver written against that
-        // phase would read it as a finished failure.
-        //
-        // And the retry sits here rather than in `ensureModel`, although only that
-        // caller needs a model, so the Settings button and the status line are right
-        // too. The cost: a superseded launch preload holds its slot in the serial
-        // model warm-up queue for the whole chain, delaying the live-caption warm-up
-        // by one load (2.5 to 3.5 s warm). Releasing the gate between passes would
-        // bring back the concurrent CoreML peak that queue exists to prevent.
-        while true {
-            // The chain is unbounded by design, so a cancelled owner has to be able
-            // to stop it. Nothing below checks cancellation: the CoreML init is not
-            // interruptible, so this is the only point where it can take effect.
-            if Task.isCancelled { return }
-
-            let attempt = await modelLoad.run { [self] in await performLoad() }
-
-            // Nothing is loaded. Run again in two cases. Either the attempt built a
-            // pipe that is now gone, which means the reconcile dropped it because the
-            // variant moved on while it ran. Or it failed for a variant that is no
-            // longer the one requested, in which case the current one has not been
-            // tried yet.
-            //
-            // The variant comparison alone would not do, and that is the subtle part:
-            // the variant can change away and back while this caller is suspended, so
-            // a discarded attempt for A can come back to `attempt.variant == "A" ==
-            // modelVariant` and read as a plain failure. `builtPipe` is what tells the
-            // two apart.
-            //
-            // A failure for the variant still requested is deliberately not repeated,
-            // whether this call ran it or joined it. Repeating it would double the
-            // wait and the failed download for every caller that arrives during an
-            // offline load.
-            //
-            // No iteration cap. Each pass is a whole load, so this cannot spin: it
-            // only goes round again when the variant changed during that pass, which
-            // takes a user action per iteration (nothing in the load path writes
-            // `modelVariant`, and the settings observer tracks only `AppSettings`).
-            // A cap of N would restore the reported symptom on the Nth change.
-            guard attempt.needsAnotherAttempt(
-                pipeInstalled: pipe != nil,
-                requestedVariant: modelVariant,
-                requestedOrigin: modelOrigin,
-            ) else {
-                return
-            }
-        }
-    }
-
     /// One load attempt, reporting the variant it was for.
     ///
     /// The variant is returned so a caller can tell a load that failed for what it
     /// asked for from one that was superseded while it ran. `SingleFlight` hands the
     /// same outcome to callers that joined this run rather than starting their own,
     /// which is what they would otherwise have no way to learn (issue #738).
-    private func performLoad() async -> LoadAttempt {
+    func performLoad() async -> LoadAttempt {
         // Snapshot the requested variant once. `modelVariant` is `@MainActor`
         // mutable (the reactive settings sync calls `applyModelVariant`), so
         // reading it separately for the download and the init could tear
@@ -313,7 +258,8 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         downloadProgress = 0
     }
 
-    /// Ensure model is loaded, loading it if necessary.
+    /// Ensure model is loaded, loading it if necessary. A cancelled caller stops
+    /// waiting at once; see `loadModel(untilCancelled:)`.
     private func ensureModel() async throws {
         // Production state is defined by the loaded WhisperKit instance. The
         // test decoder is only a narrow decode-boundary substitute and must not
@@ -328,7 +274,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         case .localFolder:
             logger.info("WhisperKit: model not loaded, loading picked folder \(self.modelVariant, privacy: .private)...")
         }
-        await loadModel()
+        try await loadModel(untilCancelled: true)
         guard pipe != nil else {
             logger.error("WhisperKit: model load FAILED, state=\(String(describing: self.modelState), privacy: .public)")
             throw TranscriptionError.modelNotLoaded(reason: loadFailureReason)

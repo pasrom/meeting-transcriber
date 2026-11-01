@@ -73,6 +73,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
         private var vocabularyPreparationOverride: (([String]) async throws -> Void)?
         private var fileTranscriptionOverride: ((URL) async throws -> ASRResult)?
         private var sampleTranscriptionOverride: (([Float]) async throws -> ASRResult)?
+        private var modelLoadOverride: (@MainActor () async -> Void)?
     #endif
 
     /// The exact vocabulary revision currently being prepared or already
@@ -90,36 +91,47 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
     }
 
     func loadModel() async {
-        await modelLoad.run { [self] in
-            modelState = .downloading
-            downloadProgress = 0
-            do {
-                let models = try await AsrModels.downloadAndLoad { [weak self] progress in
-                    Task { @MainActor in
-                        self?.downloadProgress = progress.fractionCompleted
-                    }
-                }
-                modelState = .loading
-                downloadProgress = 1.0
-                let manager = AsrManager(config: .default)
-                try await manager.loadModels(models)
-                asrManager = manager
-                modelState = .loaded
-            } catch {
-                logger.error("Parakeet model load failed: \(error.localizedDescription, privacy: .public)")
-                modelState = .unloaded
-                downloadProgress = 0
+        await modelLoad.run { [self] in await performLoad() }
+    }
+
+    private func performLoad() async {
+        #if DEBUG
+            if let modelLoadOverride {
+                await modelLoadOverride()
+                return
             }
+        #endif
+        modelState = .downloading
+        downloadProgress = 0
+        do {
+            let models = try await AsrModels.downloadAndLoad { [weak self] progress in
+                Task { @MainActor in
+                    self?.downloadProgress = progress.fractionCompleted
+                }
+            }
+            modelState = .loading
+            downloadProgress = 1.0
+            let manager = AsrManager(config: .default)
+            try await manager.loadModels(models)
+            asrManager = manager
+            modelState = .loaded
+        } catch {
+            logger.error("Parakeet model load failed: \(error.localizedDescription, privacy: .public)")
+            modelState = .unloaded
+            downloadProgress = 0
         }
     }
 
+    /// Ensure model is loaded, loading it if necessary. The load is started
+    /// or joined even by a caller already cancelled, so it is under way for
+    /// the next job, but a cancelled caller stops waiting for it at once.
     private func ensureModel() async throws {
         if asrManager != nil { return }
         #if DEBUG
             if fileTranscriptionOverride != nil, sampleTranscriptionOverride != nil { return }
         #endif
         logger.info("Parakeet: model not loaded, loading…")
-        await loadModel()
+        try await modelLoad.runUnlessCancelled { [self] in await performLoad() }
         guard asrManager != nil else {
             logger.error("Parakeet: model load FAILED, state=\(String(describing: self.modelState), privacy: .public)")
             throw TranscriptionError.modelNotLoaded()
@@ -237,6 +249,12 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
             _ prepare: @escaping ([String]) async throws -> Void,
         ) {
             vocabularyPreparationOverride = prepare
+        }
+
+        /// Replaces the whole model load, so a test can park it without
+        /// downloading or compiling a model.
+        func installModelLoadForTesting(_ load: @escaping @MainActor () async -> Void) {
+            modelLoadOverride = load
         }
 
         /// Installs the final ASR decode boundary for focused lifecycle tests. It
