@@ -77,6 +77,22 @@ final class NotionExportSettingsModelTests: XCTestCase {
         XCTAssertEqual(model.schemaCheckError?.contains("trash"), true)
     }
 
+    func testNoTokenNoticeFollowsTheCommittedKeyNotTheTypedDraft() {
+        let (settings, _, _) = makeModel(databaseID: StubNotionSettingsClient.databaseID)
+        settings.notionAPIKey = ""
+        let unsaved = NotionExportSettingsModel(settings: settings) { _ in StubNotionSettingsClient() }
+        XCTAssertEqual(unsaved.configurationNotice, "No API token. Meetings are not exported until you add one.")
+
+        unsaved.apiKeyDraft = "ntn_typed"
+        XCTAssertNotNil(unsaved.configurationNotice, "typed but not committed: the export still has no usable key")
+
+        unsaved.commitAPIKey()
+        XCTAssertNil(unsaved.configurationNotice)
+
+        unsaved.apiKeyDraft = ""
+        XCTAssertNil(unsaved.configurationNotice, "erased but not committed: the saved key still exports")
+    }
+
     func testCreationRejectsInvalidParentAndReportsFailureWithoutChangingDestination() async {
         let (settings, client, model) = makeModel()
         model.manualParentPageInput = "invalid"

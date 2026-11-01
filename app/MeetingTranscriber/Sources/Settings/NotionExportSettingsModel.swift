@@ -43,7 +43,9 @@ final class NotionExportSettingsModel: ObservableObject {
     private var schemaCheckToken = UUID()
     private var connectedBotName = "Meeting Transcriber"
     private var lastConnectionRefresh: Date?
-    @ObservationIgnored private var committedAPIKey: String
+    /// Observed, unlike the client factory: the notice below follows it, and a
+    /// commit that changes nothing else must still redraw the notice.
+    private var committedAPIKey: String
     @ObservationIgnored private let clientFactory: (String) -> any NotionSettingsClient
 
     init(settings: AppSettings, clientFactory: @escaping (String) -> any NotionSettingsClient = { NotionClient(apiKey: $0) }) {
@@ -63,10 +65,17 @@ final class NotionExportSettingsModel: ObservableObject {
         !apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Export is on but a finished meeting would not reach Notion.
+    /// What an export would use: the key in the settings, not the text being typed.
+    private var hasCommittedAPIKey: Bool {
+        !committedAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Export is on but a finished meeting would not reach Notion. The key is
+    /// the committed one: a draft that was typed or erased but not yet
+    /// committed (Return, focus loss) changes nothing about what exports.
     var configurationNotice: String? {
         guard settings.notionExportEnabled else { return nil }
-        if !hasAPIKey { return "No API token. Meetings are not exported until you add one." }
+        if !hasCommittedAPIKey { return "No API token. Meetings are not exported until you add one." }
         if settings.notionDatabaseID.isEmpty { return "No database selected. Meetings are not exported until you choose one." }
         return nil
     }
