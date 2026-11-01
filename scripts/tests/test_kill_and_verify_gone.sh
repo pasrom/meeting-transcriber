@@ -52,7 +52,9 @@ reap_all() {
 trap reap_all EXIT
 
 # A process whose argv carries a unique marker, so `pgrep -f` cannot match this
-# test's own shell or anything else on a shared runner. `exec -a` renames the
+# test's own shell or anything else on a shared runner. Each marker ends in
+# `-$$-end`: pgrep -f matches by substring, and a bare `-$$` from run 4512
+# would also match run 45123's probes. `exec -a` renames the
 # sleep in place, so nothing is written to disk and the probe costs no CPU.
 #
 # Started through an intermediate subshell that exits at once, so the probe is
@@ -60,17 +62,21 @@ trap reap_all EXIT
 # written into the log by this shell when it is reaped, and that notice cannot
 # be redirected from the job or from the wait, only away from the shell. The pid
 # travels through a file because `$!` of the outer subshell is the wrong one.
+# Where a wait is expected to end (a probe showing up, a kill landing), this is
+# its ceiling: the wait returns the moment it holds, so only a probe that never
+# starts or a kill that never lands runs it out. The cases whose victim is meant
+# to survive keep 1 s, as the timeout always runs out there.
+CEILING_S=20
+# This probe's own pid, not the pattern: a second probe of a shared marker
+# would otherwise count as up while it is still this script, the first one
+# matching, and escape the kill that follows.
+_probe_running() { ps -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
 start_probe() {
     local marker="$1" pidfile="$TMPD/pid.$RANDOM"
     ( ( exec -a "$marker" sleep 300 >/dev/null 2>&1 ) & echo "$!" > "$pidfile" )
     PROBE_PID="$(cat "$pidfile")"
     PIDS="$PIDS $PROBE_PID"
-    local tries=0
-    until pgrep -f -- "$marker" >/dev/null 2>&1; do
-        tries=$(( tries + 1 ))
-        [ "$tries" -lt 100 ] || { echo "probe $marker never became visible" >&2; exit 1; }
-        sleep 0.05
-    done
+    poll_until "$CEILING_S" 0.05 _probe_running "$PROBE_PID" "$marker" || { echo "probe $marker never became visible" >&2; exit 1; }
 }
 
 ok()  { echo "$1 ... PASS"; PASSED=$(( PASSED + 1 )); }
@@ -79,7 +85,7 @@ bad() { echo "$1 ... FAIL: $2"; exit 1; }
 # --- the case the pattern watcher got backwards -----------------------------
 
 ERR="$TMPD/err"
-if kill_and_verify_gone "e2e-probe-never-started-$$" 1 2>"$ERR"; then
+if kill_and_verify_gone "e2e-probe-never-started-$$-end" 1 2>"$ERR"; then
     bad nothing_matched_is_refused "a pattern matching nothing was reported as a successful kill"
 fi
 case "$(cat "$ERR")" in
@@ -89,9 +95,9 @@ esac
 
 # --- the ordinary path ------------------------------------------------------
 
-start_probe "e2e-probe-killed-$$"
+start_probe "e2e-probe-killed-$$-end"
 VICTIM="$PROBE_PID"
-if kill_and_verify_gone "e2e-probe-killed-$$" 5; then
+if kill_and_verify_gone "e2e-probe-killed-$$-end" "$CEILING_S"; then
     kill -0 "$VICTIM" 2>/dev/null \
         && bad live_process_is_killed "reported gone while the process is still alive"
     ok live_process_is_killed
@@ -105,10 +111,10 @@ fi
 # one match is the normal case, not an exotic one. It is also where the quoting
 # has to hold: the pids are carried as separate arguments precisely so a caller
 # with an unusual IFS cannot collapse them into one.
-MARKER_TWO="e2e-probe-pair-$$"
+MARKER_TWO="e2e-probe-pair-$$-end"
 start_probe "$MARKER_TWO"; FIRST="$PROBE_PID"
 start_probe "$MARKER_TWO"; SECOND="$PROBE_PID"
-if kill_and_verify_gone "$MARKER_TWO" 5; then
+if kill_and_verify_gone "$MARKER_TWO" "$CEILING_S"; then
     for p in "$FIRST" "$SECOND"; do
         kill -0 "$p" 2>/dev/null && bad two_victims_are_both_killed "pid $p survived"
     done
@@ -123,12 +129,12 @@ fi
 # reported gone while two probes were still running. The kill got one bogus
 # argument and the check made the same mistake, and the two errors cancelled
 # into a false success. A library function may not depend on its caller's IFS.
-MARKER_IFS="e2e-probe-ifs-$$"
+MARKER_IFS="e2e-probe-ifs-$$-end"
 start_probe "$MARKER_IFS"; IFS_FIRST="$PROBE_PID"
 start_probe "$MARKER_IFS"; IFS_SECOND="$PROBE_PID"
 (
     IFS=$'\n'
-    kill_and_verify_gone "$MARKER_IFS" 5
+    kill_and_verify_gone "$MARKER_IFS" "$CEILING_S"
 ) || bad unusual_ifs_still_works "reported failure under IFS=newline"
 for p in "$IFS_FIRST" "$IFS_SECOND"; do
     kill -0 "$p" 2>/dev/null && bad unusual_ifs_still_works "pid $p survived under IFS=newline"
@@ -147,7 +153,7 @@ ok unusual_ifs_still_works
 # "matched no process" branch, and both failures return 1. Widening the pattern
 # until it matched would have killed this machine's own processes. Hence the
 # override, and hence the message assertion.
-MARKER_SURVIVE="e2e-probe-survivor-$$"
+MARKER_SURVIVE="e2e-probe-survivor-$$-end"
 start_probe "$MARKER_SURVIVE"
 SURVIVOR="$PROBE_PID"
 
@@ -179,7 +185,7 @@ esac
 #
 # Simulated rather than run against a real root process, because a pattern broad
 # enough to match one also matches this machine's own.
-MARKER_EPERM="e2e-probe-eperm-$$"
+MARKER_EPERM="e2e-probe-eperm-$$-end"
 start_probe "$MARKER_EPERM"
 EPERM_PID="$PROBE_PID"
 
@@ -210,7 +216,7 @@ esac
 # else matching the same pattern is running by the time the wait looks. On this
 # host that is not hypothetical, the pattern being a deploy path every lane and
 # the console user share.
-MARKER_REPL="e2e-probe-replaced-$$"
+MARKER_REPL="e2e-probe-replaced-$$-end"
 start_probe "$MARKER_REPL"
 ORIGINAL="$PROBE_PID"
 REPLACEMENT=""
@@ -228,7 +234,9 @@ kill() {
     builtin kill "$@"
 }
 ERR4="$TMPD/err4"
-if kill_and_verify_gone "$MARKER_REPL" 3 2>"$ERR4"; then
+# A short bound: the victim dies at once, and a helper watching the pattern
+# never sees it end, so a longer one would only delay that failure.
+if kill_and_verify_gone "$MARKER_REPL" 5 2>"$ERR4"; then
     unset -f kill
     kill -0 "$ORIGINAL" 2>/dev/null \
         && bad watches_its_target_not_its_pattern "reported gone while the victim lives"
@@ -252,7 +260,7 @@ fi
 # exits 2 for a usage error, which the helper would otherwise report as "matched
 # no process": a confident wrong diagnosis about the one thing it is for.
 ERR5="$TMPD/err5"
-if kill_and_verify_gone "-zzz-no-such-pattern-$$" 1 2>"$ERR5"; then
+if kill_and_verify_gone "-zzz-no-such-pattern-$$-end" 1 2>"$ERR5"; then
     bad option_like_pattern_is_passed_through "an option-like pattern was reported as a successful kill"
 fi
 case "$(cat "$ERR5")" in
@@ -269,7 +277,7 @@ exit 3
 ' > "$STUB/pgrep"
 chmod +x "$STUB/pgrep"
 ERR6="$TMPD/err6"
-if PATH="$STUB:$PATH" kill_and_verify_gone "anything-$$" 1 2>"$ERR6"; then
+if PATH="$STUB:$PATH" kill_and_verify_gone "anything-$$-end" 1 2>"$ERR6"; then
     bad pgrep_failure_is_not_no_match "a broken pgrep was reported as a successful kill"
 fi
 case "$(cat "$ERR6")" in
