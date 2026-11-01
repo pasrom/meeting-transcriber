@@ -332,6 +332,16 @@ final class MarkdownToNotionBlocksTests: XCTestCase {
         XCTAssertTrue(try plainText(of: blocks).contains("i149"))
     }
 
+    func testTableTooLargeToSendFallsBackToText() throws {
+        let cell = String(repeating: "c", count: 1900)
+        let rows = (0 ..< 60).map { _ in "| \(cell) | \(cell) | \(cell) |" }.joined(separator: "\n")
+        let blocks = MarkdownToNotionBlocks.convert(markdown: "| x | y | z |\n| --- | --- | --- |\n\(rows)")
+
+        XCTAssertFalse(blocks.contains { $0.type == "table" })
+        try assertRequestsWithinLimits(blocks)
+        XCTAssertEqual(try plainText(of: blocks).count { $0 == "c" }, 60 * 3 * 1900)
+    }
+
     func testBlockThatCannotBeMadeToFitFailsWithASpecificError() throws {
         let rich = Array(repeating: MarkdownToNotionBlocks.makeRichText("a")[0], count: 101)
         let block = NotionBlock(type: "paragraph", content: ["rich_text": AnyEncodable(rich)])

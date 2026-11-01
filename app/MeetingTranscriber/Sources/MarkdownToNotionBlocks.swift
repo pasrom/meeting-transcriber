@@ -6,8 +6,9 @@ enum MarkdownToNotionBlocks {
     private static let maxTextLength = NotionRequestBatches.maxTextUnits
     private static let maxRichTextElements = NotionRequestBatches.maxArrayCount
     private static let maxChildrenPerBlock = 95
-    /// Size of one transcript paragraph and of one transcript toggle once encoded. A toggle
-    /// stays well under `NotionRequestBatches.maxBytes`, so it always fits a request alone.
+    /// Size of one transcript paragraph (or table) and of one transcript toggle once encoded.
+    /// Both stay well under `NotionRequestBatches.maxBytes`, so they fit a request alone; a
+    /// block that still does not is refused by `NotionRequestBatches.split`.
     private static let maxParagraphBytes = 200_000
     private static let maxToggleBytes = 380_000
 
@@ -263,7 +264,7 @@ enum MarkdownToNotionBlocks {
             ])
         }
 
-        return NotionBlock(
+        let table = NotionBlock(
             type: "table",
             content: [
                 "table_width": AnyEncodable(width),
@@ -272,6 +273,10 @@ enum MarkdownToNotionBlocks {
                 "children": AnyEncodable(rowBlocks),
             ],
         )
+        // Rows cannot be sent apart from their table, so a table too big for one request
+        // stays readable as text instead.
+        guard let size = try? JSONEncoder().encode(table).count, size <= maxParagraphBytes else { return nil }
+        return table
     }
 
     // MARK: - Rich Text Formatting
