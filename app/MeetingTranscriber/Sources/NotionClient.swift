@@ -14,6 +14,7 @@ actor NotionClient: NotionExporting {
     private static let maxSearchPages = 20
     private static let pageSize = 100
     private static let maxRateLimitRetries = 3
+    private static let maxConsecutiveDeleteFailures = 3
 
     private let apiKey: String
     private let configuredDatabaseID: String?
@@ -272,8 +273,11 @@ actor NotionClient: NotionExporting {
 
     /// Replace the job's page with the current protocol, including on a retry
     /// of a partially appended export. Append first: a failed append must not
-    /// erase the previous protocol. A failure can temporarily leave duplicates;
-    /// the next successful retry removes all old and partial root blocks.
+    /// erase the previous protocol. A failure can temporarily leave duplicates,
+    /// but a retry never adds to them: it recognises a complete copy that an
+    /// interrupted replace already wrote (`NotionReplacePlan`), appends nothing
+    /// then, and only removes what precedes it. The old blocks go one request
+    /// at a time and a failed delete does not stop the rest (`deleteBlocks`).
     /// Re-export replaces manual edits on this app-owned page as well.
     private func recoverExistingPage(
         _ pageID: String,
@@ -289,12 +293,12 @@ actor NotionClient: NotionExporting {
         }
         guard !existing.isTrashed else { return nil }
 
-        let oldBlockIDs = try await childBlockIDs(pageID)
+        let plan = try await NotionReplacePlan(existing: childBlocks(pageID), replacement: blocks)
         let page = try await updatePage(pageID, properties: properties)
-        try await appendBlocks(blocks, to: pageID)
-        for blockID in oldBlockIDs {
-            _ = try await performData("DELETE", path: "blocks/\(blockID)")
+        if plan.needsAppend {
+            try await appendBlocks(blocks, to: pageID)
         }
+        try await deleteBlocks(plan.staleBlockIDs)
         return NotionPageResult(
             pageID: pageID,
             url: page.url,
@@ -303,8 +307,8 @@ actor NotionClient: NotionExporting {
         )
     }
 
-    private func childBlockIDs(_ pageID: String) async throws -> [String] {
-        var ids: [String] = []
+    private func childBlocks(_ pageID: String) async throws -> [NotionBlockSummary] {
+        var blocks: [NotionBlockSummary] = []
         var cursor: String?
         repeat {
             var query = [URLQueryItem(name: "page_size", value: String(Self.pageSize))]
@@ -312,14 +316,14 @@ actor NotionClient: NotionExporting {
             let page: NotionBlockListResponse = try await perform(
                 "GET", path: "blocks/\(pageID)/children", query: query,
             )
-            ids += page.results.map(\.id)
+            blocks += page.results
             guard page.hasMore else { break }
             guard let next = page.nextCursor, next != cursor else {
                 throw NotionClientError.invalidResponse
             }
             cursor = next
         } while true
-        return ids
+        return blocks
     }
 
     private func updatePage(
@@ -481,6 +485,32 @@ actor NotionClient: NotionExporting {
             let message = body?.message ?? String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
             throw NotionClientError.httpError(statusCode: httpResponse.statusCode, code: body?.code, message: message)
         }
+    }
+}
+
+extension NotionClient {
+    /// Deletes the stale root blocks in order. A delete that fails (a 429 that
+    /// outlasts the bounded retries, one block Notion refuses) does not abandon
+    /// the rest, so one bad block cannot keep the whole old protocol on the page;
+    /// the first failure is thrown once the loop ends, which marks the export
+    /// failed while the page still holds leftovers. A run of consecutive failures
+    /// means Notion is refusing everything, and ends the loop: each failed
+    /// request can already spend its rate-limit retries.
+    private func deleteBlocks(_ blockIDs: [String]) async throws {
+        var firstFailure: (any Error)?
+        var consecutiveFailures = 0
+        for blockID in blockIDs {
+            do {
+                _ = try await performData("DELETE", path: "blocks/\(blockID)")
+                consecutiveFailures = 0
+            } catch {
+                try Task.checkCancellation()
+                firstFailure = firstFailure ?? error
+                consecutiveFailures += 1
+                if consecutiveFailures >= Self.maxConsecutiveDeleteFailures { break }
+            }
+        }
+        if let firstFailure { throw firstFailure }
     }
 }
 

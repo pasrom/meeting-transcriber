@@ -411,8 +411,44 @@ struct NotionPageResponse: Decodable {
     }
 }
 
+/// One root block as the list endpoint returns it. Only what the replace needs:
+/// the ID to delete, and the block's type and visible text so an interrupted
+/// replace can recognise content it already wrote (`NotionReplacePlan`).
 struct NotionBlockSummary: Decodable {
     let id: String
+    let type: String?
+    let text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, type
+    }
+
+    init(from decoder: any Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        id = try fields.decode(String.self, forKey: .id)
+        let type = try fields.decodeIfPresent(String.self, forKey: .type)
+        self.type = type
+        // The body sits under a key named after the type. One this does not
+        // model (divider, table) simply has no text.
+        let body = try? decoder.container(keyedBy: DynamicKey.self)
+        text = type.flatMap { DynamicKey(stringValue: $0) }
+            .flatMap { try? body?.decodeIfPresent(NotionRichTextBody.self, forKey: $0) }?.text ?? ""
+    }
+}
+
+/// The text of a block body that carries `rich_text`.
+private struct NotionRichTextBody: Decodable {
+    let text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case richText = "rich_text"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let parts = try container.decodeIfPresent([NotionDatabaseResponse.TitleItem].self, forKey: .richText) ?? []
+        text = parts.compactMap(\.plainText).joined()
+    }
 }
 
 struct NotionBlockListResponse: Decodable {
