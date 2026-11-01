@@ -9,6 +9,13 @@ struct NotionExportConfiguration {
     let databaseID: String
     var skipLocalMarkdown = false
     var speakerTagsEnabled = false
+    /// How long one export may run in all. Each request has its own timeout, but
+    /// a replace of a long page issues hundreds of them, so without this a
+    /// Notion that answers slowly instead of failing keeps the job's export in
+    /// progress for hours.
+    var deadline = Self.defaultDeadline
+
+    static let defaultDeadline = Duration.seconds(600)
 
     @MainActor
     static func resolve(settings: AppSettings) -> NotionExportResolution {
@@ -88,10 +95,15 @@ extension PipelineQueue {
     /// naming cannot race an earlier write to the same page.
     func startPendingNotionExport(jobID: UUID) {
         guard let export = pendingNotionExports.removeValue(forKey: jobID) else { return }
+        startNotionExport(export, jobID: jobID)
+    }
+
+    private func startNotionExport(_ export: PendingNotionExport, jobID: UUID) {
         let previous = notionExportTasks[jobID]?.task
         let token = UUID()
         let task = Task { [self] in
-            await previous?.value
+            // Cancelling this export must reach the one it waits behind as well.
+            await withTaskCancellationHandler { await previous?.value } onCancel: { previous?.cancel() }
             let succeeded = await exportToNotion(
                 jobID: jobID, protocolMD: export.protocolMD, transcript: export.transcript,
                 speakerNames: export.speakerNames, configuration: export.configuration,
@@ -100,12 +112,52 @@ extension PipelineQueue {
             if succeeded {
                 if export.configuration.skipLocalMarkdown { removeLocalProtocol(jobID: jobID) }
                 scheduleCompletedJobRemoval(id: jobID)
-            } else if !export.savedLocally {
+            } else if !export.savedLocally, !isRetired {
                 noteNotionBackupMissing(jobID: jobID)
             }
             if notionExportTasks[jobID]?.token == token { notionExportTasks.removeValue(forKey: jobID) }
         }
-        notionExportTasks[jobID] = (token, task)
+        notionExportTasks[jobID] = (token, task, export)
+    }
+
+    /// Whether every export still in progress can move to a replacement queue,
+    /// which is what lets a slow Notion go on without holding this queue in
+    /// place. Only a queue the controller built is adopted from, and a manual
+    /// retry, which its caller awaits, has no input to hand over.
+    func canHandOverNotionExports(builtHere: Bool) -> Bool {
+        jobs.allSatisfy { $0.notionExportStatus != .inProgress || (builtHere && notionExportTasks[$0.id] != nil) }
+    }
+
+    /// Stops the exports running here so a replacement queue can start them
+    /// again with the configuration they were queued with. The restart keeps the
+    /// page a stopped run already created (`recordNotionPageExport` persists it
+    /// as soon as it exists) and writes into it; a page whose creation was still
+    /// in flight is not known yet, the same exposure as quitting mid-export.
+    /// What a stopped run still returns is dropped by `liveJobIndex`, because the
+    /// caller retires this queue straight after `adoptJobs`, with no suspension
+    /// in between that could let a stopped run observe the queue as live.
+    func handOverRunningNotionExports() -> [UUID: PendingNotionExport] {
+        var running: [UUID: PendingNotionExport] = [:]
+        for (jobID, entry) in notionExportTasks {
+            entry.task.cancel()
+            running[jobID] = entry.export
+        }
+        return running
+    }
+
+    /// Starts the exports another queue handed over. The jobs came across as
+    /// still in progress, see `adoptJobs`.
+    func resumeHandedOverNotionExports(_ handedOver: [UUID: PendingNotionExport]) {
+        for (jobID, export) in handedOver where jobs.contains(where: { $0.id == jobID }) {
+            startNotionExport(export, jobID: jobID)
+        }
+    }
+
+    /// The job's index, or nil once a replacement queue owns it: a run stopped by
+    /// the hand-over can still return, and must not report on a job that has
+    /// started over there.
+    private func liveJobIndex(of jobID: UUID) -> Int? {
+        isRetired ? nil : jobs.firstIndex { $0.id == jobID }
     }
 
     func awaitNotionExports() async {
@@ -145,16 +197,22 @@ extension PipelineQueue {
             let pageRecorder: @Sendable (NotionPageResult) async -> Void = { [weak self] page in
                 await self?.recordNotionPageExport(jobID: jobID, databaseID: databaseID, page: page)
             }
-            let pageResult = try await configuration.exporter.exportMeeting(
-                title: ProtocolGenerator.extractTitle(from: protocolMD) ?? job.meetingTitle,
-                date: job.meetingStartTime,
-                tags: configuration.speakerTagsEnabled ? NotionTagFilter.confirmedNames(speakerNames) : [],
-                markdown: protocolMD,
-                transcript: transcript,
-                existingPageID: existingPageID,
-                onPageCreated: pageRecorder,
-            )
-            guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return false }
+            let exporter = configuration.exporter
+            let title = ProtocolGenerator.extractTitle(from: protocolMD) ?? job.meetingTitle
+            let date = job.meetingStartTime
+            let tags = configuration.speakerTagsEnabled ? NotionTagFilter.confirmedNames(speakerNames) : []
+            let pageResult = try await NotionExportDeadline.run(limit: configuration.deadline) {
+                try await exporter.exportMeeting(
+                    title: title,
+                    date: date,
+                    tags: tags,
+                    markdown: protocolMD,
+                    transcript: transcript,
+                    existingPageID: existingPageID,
+                    onPageCreated: pageRecorder,
+                )
+            }
+            guard let index = liveJobIndex(of: jobID) else { return false }
             jobs[index].recordNotionPage(pageResult, databaseID: databaseID)
             jobs[index].finishNotionExport(succeeded: true)
             jobs[index].warnings.removeAll { warning in
@@ -168,7 +226,7 @@ extension PipelineQueue {
             logger.info("[\(job.shortID, privacy: .public)] notion_exported page=\(pageResult.url ?? pageResult.pageID, privacy: .private)")
             return true
         } catch {
-            guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return false }
+            guard let index = liveJobIndex(of: jobID) else { return false }
             jobs[index].finishNotionExport(succeeded: false)
             logger.warning("[\(job.shortID, privacy: .public)] notion_export_failed error=\(error.localizedDescription, privacy: .private)")
             let reason = NotionClientError.exportFailureReason(for: error)
@@ -236,7 +294,7 @@ extension PipelineQueue {
     }
 
     private func recordNotionPageExport(jobID: UUID, databaseID: String, page: NotionPageResult) {
-        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        guard let index = liveJobIndex(of: jobID) else { return }
         jobs[index].recordNotionPage(page, databaseID: databaseID)
         persistNotionExportChange(jobID: jobID)
     }

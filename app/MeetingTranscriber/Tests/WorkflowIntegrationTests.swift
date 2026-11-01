@@ -64,34 +64,6 @@ final class WorkflowIntegrationTests: XCTestCase {
         }
     }
 
-    /// Holds the export open until the test releases it.
-    private actor GatedNotionExporter: NotionExporting {
-        private var continuation: CheckedContinuation<Void, Never>?
-        private var released = false
-
-        func release() {
-            released = true
-            continuation?.resume()
-            continuation = nil
-        }
-
-        // swiftlint:disable:next function_parameter_count
-        func exportMeeting(
-            title _: String,
-            date _: Date?,
-            tags _: [String],
-            markdown _: String,
-            transcript _: String?,
-            existingPageID _: String?,
-            onPageCreated _: @Sendable (NotionPageResult) async -> Void,
-        ) async -> NotionPageResult {
-            if !released {
-                await withCheckedContinuation { continuation = $0 }
-            }
-            return NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1")
-        }
-    }
-
     /// Reports what is on disk at the moment the export starts.
     private actor LocalFileObservingExporter: NotionExporting {
         let directory: URL

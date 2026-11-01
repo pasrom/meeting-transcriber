@@ -41,7 +41,11 @@ extension PipelineQueue {
         // adoption itself writes nothing (see below): a job that had just
         // failed stayed on disk as running and ran again on the next launch.
         var adopted = replaced.jobs
-        let recoveredNotionExports = recoverInterruptedNotionExports(in: &adopted)
+        // An export still running there is not interrupted: it is stopped and
+        // started again below, so a slow Notion never keeps the old queue (and
+        // the settings it captured) alive.
+        let handedOver = replaced.handOverRunningNotionExports()
+        let recoveredNotionExports = recoverInterruptedNotionExports(in: &adopted, keeping: Set(handedOver.keys))
         discardFinishedJobs(from: &adopted)
         discardJobsWithMissingAudio(&adopted, interruptedIn: [:])
         // Discards change the count; interrupted-export normalization is
@@ -56,6 +60,8 @@ extension PipelineQueue {
         // itself, including each watch start, and writing an unchanged (usually
         // empty) list would spend an atomic replace on nothing.
         if changed { saveSnapshot() }
+        // Tasks, so they start after the caller has installed this queue's callbacks.
+        resumeHandedOverNotionExports(handedOver)
     }
 
     /// Drop finished jobs and let their sidecars go with them.
@@ -72,9 +78,11 @@ extension PipelineQueue {
     }
 
     /// A stopped export is retried manually from its complete local backup.
-    private func recoverInterruptedNotionExports(in list: inout [PipelineJob]) -> Bool {
+    private func recoverInterruptedNotionExports(in list: inout [PipelineJob], keeping running: Set<UUID> = []) -> Bool {
         var changed = false
-        for index in list.indices where list[index].state == .done && list[index].notionExportStatus == .inProgress {
+        for index in list.indices
+            where list[index].state == .done && list[index].notionExportStatus == .inProgress
+            && !running.contains(list[index].id) {
             list[index].finishNotionExport(succeeded: false)
             Self.noteNotionExportFailure(
                 on: &list[index], reason: Self.notionExportInterruptedReason,
