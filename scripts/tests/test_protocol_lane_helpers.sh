@@ -218,13 +218,19 @@ MODE="$TMP/mode"
 REPLY=$'# Meeting Protocol - E2E Stub\n\nStub protocol body.'
 python3 "$STUB" --port-file "$PORT_FILE" --log "$LOG" --mode-file "$MODE" --reply "$REPLY" &
 STUB_PID=$!
-for _ in $(seq 1 50); do [ -s "$PORT_FILE" ] && break; sleep 0.1; done
-[ -s "$PORT_FILE" ] || bad stub_starts "no port file after 5 s"
+# The port file is the stub's "listening" marker; the wait ends when it
+# appears, or at once if the stub exits. 20 s is a ceiling for a stub that
+# never comes up (a cold python3 start on a loaded runner can take seconds);
+# curl's --max-time below is a looser ceiling than before for one that stops
+# answering once up.
+_stub_up() { [ -s "$PORT_FILE" ] || ! _pid_is_alive "$STUB_PID"; }
+poll_until 20 0.1 _stub_up || true
+[ -s "$PORT_FILE" ] || bad stub_starts "no port file (stub $(_pid_is_alive "$STUB_PID" && echo 'still starting after 20 s' || echo exited))"
 PORT="$(cat "$PORT_FILE")"
 ok stub_starts
 
 post() {
-    curl --silent --max-time 5 -o "$TMP/response" -w '%{http_code}' -X POST \
+    curl --silent --max-time 10 -o "$TMP/response" -w '%{http_code}' -X POST \
         -H "Content-Type: application/json" -H "Authorization: Bearer secret-key-value" \
         -H "api-key: secret-key-value" \
         --data "$(jq -c '.body' <<<"$GOOD")" "http://127.0.0.1:$PORT/v1/chat/completions"
@@ -246,7 +252,7 @@ printf 'http500' >"$MODE"
 expect http500_mode_answers_500 500 "$(post)"
 expect http500_is_logged "http500/500" "$(tail -1 "$LOG" | jq -r '"\(.mode)/\(.status)"')"
 
-code="$(curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/v1/models")"
+code="$(curl --silent --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/v1/models")"
 expect other_paths_answer_404_and_are_logged "404/GET" "$code/$(tail -1 "$LOG" | jq -r .method)"
 expect every_request_is_logged 3 "$(grep -c . "$LOG")"
 
