@@ -41,17 +41,52 @@ final class PipelineControllerNotionExportTests: XCTestCase {
         return pc
     }
 
+    /// The export has created its page and is stuck appending to it, which is
+    /// the state a queue swap may carry over.
+    private func waitForPage(of jobID: UUID, on queue: PipelineQueue) async {
+        await waitFor { queue.job(withID: jobID)?.notionPageID != nil }
+    }
+
     // MARK: - Queue rebuild
 
     func testStartingToWatchReplacesTheQueueWhileAnExportIsStillRunning() async {
-        let exporter = GatedNotionExporter()
+        let exporter = GatedNotionExporter(pageCreation: .beforeRelease)
         let pc = makeBuiltController()
         let before = pc.queue
-        pc.queue.seedFinishedJobWithRunningExport(exporter: exporter)
+        let jobID = pc.queue.seedFinishedJobWithRunningExport(exporter: exporter)
+        await waitForPage(of: jobID, on: pc.queue)
 
         pc.rebuild()
 
         XCTAssertNotIdentical(pc.queue, before, "a running export kept the old queue and its settings")
+        await exporter.release()
+        await pc.queue.awaitNotionExports()
+    }
+
+    /// A page whose creation is still in flight is not known to a restart, which
+    /// would create a second one without a word, so that window keeps the swap.
+    func testAnExportThatHasNotCreatedItsPageYetHoldsTheQueue() async {
+        await assertSwapIsHeld(forJob: makeStandupJob())
+    }
+
+    /// The page on record belongs to another database than the one the export
+    /// writes to, so the export is still creating its own page.
+    func testAPageOfAnotherDatabaseDoesNotCountAsTheExportsPage() async {
+        var job = makeStandupJob()
+        job.recordNotionPage(NotionPageResult(pageID: "old-page"), databaseID: "database-0")
+        await assertSwapIsHeld(forJob: job)
+    }
+
+    private func assertSwapIsHeld(forJob job: PipelineJob) async {
+        let exporter = GatedNotionExporter(pageCreation: .never)
+        let pc = makeBuiltController()
+        let before = pc.queue
+        pc.queue.seedFinishedJobWithRunningExport(exporter: exporter, job: job)
+        await waitFor { await exporter.startedExports == 1 }
+
+        pc.rebuild()
+
+        XCTAssertIdentical(pc.queue, before, "a swap here would let the restart create a second page")
         await exporter.release()
         await pc.queue.awaitNotionExports()
     }
@@ -72,11 +107,11 @@ final class PipelineControllerNotionExportTests: XCTestCase {
     }
 
     func testTheReplacementQueueKeepsTheRunningExportAndFinishesIt() async throws {
-        let exporter = GatedNotionExporter()
+        let exporter = GatedNotionExporter(pageCreation: .beforeRelease)
         let pc = makeBuiltController()
         let before = pc.queue
         let jobID = pc.queue.seedFinishedJobWithRunningExport(exporter: exporter)
-        await waitFor { await exporter.startedExports == 1 }
+        await waitForPage(of: jobID, on: pc.queue)
 
         pc.rebuild()
 
@@ -90,6 +125,8 @@ final class PipelineControllerNotionExportTests: XCTestCase {
         await before.awaitNotionExports()
 
         XCTAssertEqual(pc.queue.jobs.first { $0.id == jobID }?.notionExportStatus, .completed)
+        let reusedPages = await exporter.existingPageIDs
+        XCTAssertEqual(reusedPages, [nil, "page-1"], "the restart must write into the page the first run created")
         XCTAssertEqual(
             notifier.calls.filter { $0.title == "Saved to Notion" }.count, 1,
             "the replaced queue reported its stopped export as well",
@@ -97,17 +134,17 @@ final class PipelineControllerNotionExportTests: XCTestCase {
         XCTAssertFalse(notifier.calls.contains { $0.title == "Notion Export Failed" })
     }
 
-    func testAnExportTheOldQueueFinishesAfterTheSwapChangesNothingOnTheNewOne() async {
-        let exporter = GatedNotionExporter()
+    /// The stopped run ends in its cancellation; the replaced queue must not
+    /// turn that into a failure for a job the new queue is still exporting.
+    func testAStoppedRunOnTheReplacedQueueRecordsNoFailure() async {
+        let exporter = GatedNotionExporter(pageCreation: .beforeRelease)
         let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_jobs.json"))
         let pc = makeBuiltController(terminalJobStore: store)
         let before = pc.queue
         let jobID = pc.queue.seedFinishedJobWithRunningExport(exporter: exporter)
-        await waitFor { await exporter.startedExports == 1 }
+        await waitForPage(of: jobID, on: pc.queue)
         pc.rebuild()
 
-        // Both calls are released together; what the old queue's call returns
-        // must land nowhere, the new queue's own run is the one that counts.
         await exporter.release()
         await before.awaitNotionExports()
 
@@ -117,6 +154,63 @@ final class PipelineControllerNotionExportTests: XCTestCase {
         )
         await pc.queue.awaitNotionExports()
         XCTAssertEqual(store.lookup(jobID: jobID)?.export?.status, "completed")
+    }
+
+    /// A re-export waits behind the first one. Both are stopped by the swap, and
+    /// the one that was still waiting then continues on the replaced queue, where
+    /// it must touch nothing: its job copy is stale and the shared store would
+    /// take it.
+    func testAnExportWaitingBehindAnotherOneTouchesNothingOnTheReplacedQueue() async throws {
+        let exporter = GatedNotionExporter(pageCreation: .beforeRelease)
+        let pc = makeBuiltController()
+        let before = pc.queue
+        let jobID = pc.queue.seedFinishedJobWithRunningExport(exporter: exporter)
+        await waitForPage(of: jobID, on: pc.queue)
+        pc.queue.queueNotionExport(
+            PendingNotionExport(
+                protocolMD: "# Standup", transcript: nil, speakerNames: ["Alice"],
+                configuration: NotionExportConfiguration(exporter: exporter, databaseID: "database-1"),
+                savedLocally: true,
+            ),
+            jobID: jobID,
+        )
+        pc.queue.startPendingNotionExport(jobID: jobID)
+        pc.rebuild()
+        // Marks the replaced queue's copy of the job; a run that still treats
+        // the queue as live puts it back to in progress when it starts.
+        let index = try XCTUnwrap(before.jobs.firstIndex { $0.id == jobID })
+        before.jobs[index].finishNotionExport(succeeded: false)
+
+        await before.awaitNotionExports()
+
+        XCTAssertEqual(before.jobs.first { $0.id == jobID }?.notionExportStatus, .failed)
+        await exporter.release()
+        await pc.queue.awaitNotionExports()
+    }
+
+    /// A run that returns after its queue was replaced and was not stopped in
+    /// time, which no cancellation can rule out: the success arrives on the
+    /// retired queue. It must not delete the local backup (the skip-local
+    /// setting) or report anything, because the new queue owns the job and its
+    /// export is not finished by this result.
+    func testALateSuccessOnARetiredQueueDeletesNoBackupAndReportsNothing() async throws {
+        let exporter = GatedNotionExporter(pageCreation: .afterRelease)
+        let queue = PipelineQueue(logDir: tmpDir)
+        var reported: [String?] = []
+        queue.onNotionExportFinished = { _, reason in reported.append(reason) }
+        let jobID = queue.seedFinishedJobWithRunningExport(exporter: exporter, skipLocalMarkdown: true)
+        await waitFor { await exporter.startedExports == 1 }
+        queue.retire()
+
+        await exporter.release()
+        await queue.awaitNotionExports()
+
+        let job = try XCTUnwrap(queue.jobs.first { $0.id == jobID })
+        let backup = try XCTUnwrap(job.protocolPath, "the backup was removed on a result nobody owns")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path))
+        XCTAssertEqual(job.notionExportStatus, .inProgress)
+        XCTAssertNil(job.notionPageID, "a page was recorded on a retired queue")
+        XCTAssertTrue(reported.isEmpty)
     }
 
     // MARK: - Overall deadline
@@ -182,6 +276,7 @@ extension PipelineQueue {
         exporter: any NotionExporting,
         job: PipelineJob? = nil,
         deadline: Duration = NotionExportConfiguration.defaultDeadline,
+        skipLocalMarkdown: Bool = false,
     ) -> UUID {
         var job = job ?? makeStandupJob()
         job.state = .done
@@ -192,7 +287,9 @@ extension PipelineQueue {
         queueNotionExport(
             PendingNotionExport(
                 protocolMD: "# Standup", transcript: nil, speakerNames: [],
-                configuration: NotionExportConfiguration(exporter: exporter, databaseID: "database-1", deadline: deadline),
+                configuration: NotionExportConfiguration(
+                    exporter: exporter, databaseID: "database-1", skipLocalMarkdown: skipLocalMarkdown, deadline: deadline,
+                ),
                 savedLocally: true,
             ),
             jobID: job.id,

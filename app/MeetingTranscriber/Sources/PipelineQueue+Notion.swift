@@ -124,18 +124,38 @@ extension PipelineQueue {
     /// which is what lets a slow Notion go on without holding this queue in
     /// place. Only a queue the controller built is adopted from, and a manual
     /// retry, which its caller awaits, has no input to hand over.
+    ///
+    /// An export also has to know its page already. A create request that is
+    /// still in flight when the queue is swapped loses its response, Notion has
+    /// the page, and the restart would create a second one with no warning and
+    /// no retry entry, unlike a quit, which ends the job as failed. That window
+    /// is the create request alone, so the swap waits for that, not for the whole export.
     func canHandOverNotionExports(builtHere: Bool) -> Bool {
-        jobs.allSatisfy { $0.notionExportStatus != .inProgress || (builtHere && notionExportTasks[$0.id] != nil) }
+        jobs.allSatisfy { job in
+            guard job.notionExportStatus == .inProgress else { return true }
+            guard builtHere, let running = notionExportTasks[job.id] else { return false }
+            return Self.notionPageToReuse(for: job, databaseID: Self.normalizedDatabaseID(running.export.configuration.databaseID)) != nil
+        }
+    }
+
+    private static func normalizedDatabaseID(_ id: String) -> String {
+        NotionClient.extractID(from: id) ?? id
+    }
+
+    /// The page an earlier attempt created in the database this export writes
+    /// to (`databaseID`, normalized), which a new attempt updates instead of
+    /// creating another one.
+    private static func notionPageToReuse(for job: PipelineJob, databaseID: String) -> String? {
+        job.notionDatabaseID.map(normalizedDatabaseID) == databaseID ? job.notionPageID : nil
     }
 
     /// Stops the exports running here so a replacement queue can start them
-    /// again with the configuration they were queued with. The restart keeps the
-    /// page a stopped run already created (`recordNotionPageExport` persists it
-    /// as soon as it exists) and writes into it; a page whose creation was still
-    /// in flight is not known yet, the same exposure as quitting mid-export.
-    /// What a stopped run still returns is dropped by `liveJobIndex`, because the
-    /// caller retires this queue straight after `adoptJobs`, with no suspension
-    /// in between that could let a stopped run observe the queue as live.
+    /// again with the configuration they were queued with, writing into the page
+    /// the stopped run created (`canHandOverNotionExports` guarantees there is
+    /// one). What a stopped run still returns is dropped by `liveJobIndex`,
+    /// because the caller retires this queue straight after `adoptJobs`, with no
+    /// suspension in between that could let a stopped run observe the queue as
+    /// live.
     func handOverRunningNotionExports() -> [UUID: PendingNotionExport] {
         var running: [UUID: PendingNotionExport] = [:]
         for (jobID, entry) in notionExportTasks {
@@ -186,13 +206,12 @@ extension PipelineQueue {
         speakerNames: [String], configuration: NotionExportConfiguration?,
         localBackupSaved: Bool = false,
     ) async -> Bool {
-        guard let configuration, let index = jobs.firstIndex(where: { $0.id == jobID }) else { return false }
+        guard let configuration, let index = liveJobIndex(of: jobID) else { return false }
         jobs[index].beginNotionExport(speakerNames: speakerNames, localBackupSaved: localBackupSaved)
         persistNotionExportChange(jobID: jobID)
         let job = jobs[index]
-        let databaseID = NotionClient.extractID(from: configuration.databaseID) ?? configuration.databaseID
-        let previousDatabaseID = job.notionDatabaseID.map { NotionClient.extractID(from: $0) ?? $0 }
-        let existingPageID = previousDatabaseID == databaseID ? job.notionPageID : nil
+        let databaseID = Self.normalizedDatabaseID(configuration.databaseID)
+        let existingPageID = Self.notionPageToReuse(for: job, databaseID: databaseID)
         do {
             let pageRecorder: @Sendable (NotionPageResult) async -> Void = { [weak self] page in
                 await self?.recordNotionPageExport(jobID: jobID, databaseID: databaseID, page: page)
@@ -301,7 +320,8 @@ extension PipelineQueue {
 
     private func persistNotionExportChange(jobID: UUID) {
         saveSnapshot()
-        if let job = jobs.first(where: { $0.id == jobID }), job.state.isTerminal {
+        // Like the snapshot, the shared store is not written from a replaced queue.
+        if !isRetired, let job = jobs.first(where: { $0.id == jobID }), job.state.isTerminal {
             recordTerminalJob(job)
         }
     }
