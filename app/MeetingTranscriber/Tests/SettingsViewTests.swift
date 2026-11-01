@@ -433,7 +433,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.protocolProvider = .none
         let body = try makeOutput(settings: settings).inspect()
         XCTAssertNoThrow(
-            try body.find(text: "No LLM summarization will be generated. Raw transcripts are retained if no protocol is saved."),
+            try body.find(text: "No LLM summarization will be generated. Raw transcripts are retained if no meeting notes are saved."),
         )
     }
 
@@ -446,7 +446,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
 
     func testProtocolLanguagePickerExists() throws {
         let body = try makeOutput().inspect()
-        XCTAssertNoThrow(try body.find(text: "Protocol Language"))
+        XCTAssertNoThrow(try body.find(text: "Notes Language"))
     }
 
     func testOutputFolderSectionExists() throws {

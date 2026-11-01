@@ -413,15 +413,15 @@ enum ProtocolError: LocalizedError {
             case .timeout: "Claude CLI took too long (>10 min)"
         #endif
 
-        case .emptyProtocol: "Protocol is empty. Tip: Test manually: echo Hello | claude --print"
+        case .emptyProtocol: "Meeting notes are empty. Tip: Test manually: echo Hello | claude --print"
 
         case let .httpError(code, body): "HTTP \(code)\(body.isEmpty ? "" : ": \(body)")"
 
         case let .connectionFailed(reason): "Connection failed: \(reason)"
 
-        case let .generationTimedOut(seconds): "Protocol generation timed out after \(seconds)s. The LLM endpoint is stuck or too slow — try a smaller model or shorter context."
+        case let .generationTimedOut(seconds): "Meeting notes generation timed out after \(seconds)s. The LLM endpoint is stuck or too slow — try a smaller model or shorter context."
 
-        case .protocolTruncated: "Protocol was cut off before finishing (model hit its output/context limit). Raise the limit or shorten the transcript."
+        case .protocolTruncated: "Meeting notes were cut off before finishing (model hit its output/context limit). Raise the limit or shorten the transcript."
         }
     }
 }

@@ -159,13 +159,13 @@ final class MenuBarViewTests: XCTestCase {
     func testOpenLastProtocolShownWhenPathPresent() throws {
         let sut = try makeView(status: makeStatus(state: .protocolReady, protocolPath: "/tmp/p.md"))
         let body = try sut.inspect()
-        XCTAssertNoThrow(try body.find(text: "Open Last Protocol"))
+        XCTAssertNoThrow(try body.find(text: "Open Last Notes"))
     }
 
     func testOpenLastProtocolHiddenWhenNoPath() throws {
         let sut = try makeView(status: makeStatus(state: .idle))
         let body = try sut.inspect()
-        XCTAssertThrowsError(try body.find(text: "Open Last Protocol"))
+        XCTAssertThrowsError(try body.find(text: "Open Last Notes"))
     }
 
     // MARK: - Static buttons always present
@@ -179,7 +179,7 @@ final class MenuBarViewTests: XCTestCase {
     func testOpenProtocolsFolderButtonExists() throws {
         let sut = try makeView(status: makeStatus())
         let body = try sut.inspect()
-        XCTAssertNoThrow(try body.find(text: "Open Protocols Folder"))
+        XCTAssertNoThrow(try body.find(text: "Open Notes Folder"))
     }
 
     func testQuitButtonExists() throws {
@@ -348,7 +348,7 @@ final class MenuBarViewTests: XCTestCase {
             onQuit: {},
         )
         let body = try sut.inspect()
-        try body.find(button: "Open Protocols Folder").tap()
+        try body.find(button: "Open Notes Folder").tap()
         XCTAssertTrue(called)
     }
 
@@ -375,7 +375,7 @@ final class MenuBarViewTests: XCTestCase {
             onQuit: {},
         )
         let body = try sut.inspect()
-        try body.find(button: "Open Last Protocol").tap()
+        try body.find(button: "Open Last Notes").tap()
         XCTAssertTrue(called)
     }
 

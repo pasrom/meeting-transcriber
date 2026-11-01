@@ -782,6 +782,7 @@ class PipelineQueue {
         guard !transcriptOutputOptions(forJobID: jobs[index].id).saveRawTranscriptSeparately else { return }
         guard jobs[index].protocolPath != nil else {
             if jobs[index].transcriptPath != nil {
+                // Matched by /v1 clients and persisted jobs; keep the text stable.
                 let warning = "Raw transcript retained because no protocol was saved"
                 if !jobs[index].warnings.contains(warning) {
                     jobs[index].warnings.append(warning)

@@ -35,11 +35,11 @@ enum TranscriberState: String, Codable {
         case .watching: "Watching for Meetings..."
         case .recording: "Recording"
         case .transcribing: "Transcribing..."
-        case .generatingProtocol: "Generating Protocol..."
+        case .generatingProtocol: "Generating Meeting Notes..."
         case .waitingForSpeakerCount: "Speaker Count"
         case .waitingForSpeakerNames: "Name Speakers"
         case .recordingDone: "Transcribing (Native)..."
-        case .protocolReady: "Protocol Ready"
+        case .protocolReady: "Meeting Notes Ready"
         case .error: "Error"
         }
     }

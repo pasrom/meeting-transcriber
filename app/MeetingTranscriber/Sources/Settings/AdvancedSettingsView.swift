@@ -71,7 +71,7 @@ struct AdvancedSettingsView: View {
                 Toggle("Verbose Diagnostic Logging", isOn: $settings.verboseDiagnostics)
                 Text(
                     "Logs detailed diagnostics across recording, transcription,"
-                        + " diarization, and protocol generation. Used to debug"
+                        + " diarization, and meeting notes generation. Used to debug"
                         + " issues. Off by default — toggle on, reproduce the"
                         + " problem, then click \"Export Diagnostics…\" below to"
                         + " attach a redacted log file to a bug report.",

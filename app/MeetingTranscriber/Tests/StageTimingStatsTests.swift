@@ -56,6 +56,12 @@ final class StageTimingStatsTests: XCTestCase {
         XCTAssertEqual(agg.keys.min(by: StageConfig.displayedBefore), echo)
     }
 
+    /// The notes stage reads as an activity like its siblings, not as the
+    /// "Protocol" artifact name the UI no longer uses (issue #802).
+    func testNotesStageLabelUsesMeetingNotesWording() {
+        XCTAssertEqual(StageKind.generatingProtocol.label, "Generating notes")
+    }
+
     // MARK: - Slower-than-usual decision
 
     func testIsSlowerThanUsualNeedsBothRatioAndAbsoluteFloor() {

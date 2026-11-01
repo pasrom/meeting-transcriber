@@ -79,8 +79,8 @@ struct OutputSettingsView: View {
             }
             .accessibilityIdentifier(A11yID.outputFolderSection)
 
-            Section("Protocol Generation") {
-                Toggle("Include full transcript in protocol", isOn: $settings.includeFullTranscriptInProtocol)
+            Section("Meeting Notes") {
+                Toggle("Include full transcript in meeting notes", isOn: $settings.includeFullTranscriptInProtocol)
                     .accessibilityIdentifier(A11yID.includeFullTranscriptToggle)
                 Toggle("Save raw transcript separately", isOn: $settings.saveRawTranscriptSeparately)
                     .accessibilityIdentifier(A11yID.saveRawTranscriptToggle)
@@ -95,7 +95,7 @@ struct OutputSettingsView: View {
 
                 providerConfigView
 
-                Picker("Protocol Language", selection: $settings.protocolLanguage) {
+                Picker("Notes Language", selection: $settings.protocolLanguage) {
                     ForEach(languagePickerOptions, id: \.self) { lang in
                         Text(lang).tag(lang)
                     }
@@ -125,7 +125,7 @@ struct OutputSettingsView: View {
                         Text(bin).tag(bin)
                     }
                 }
-                Text("Binary used for protocol generation")
+                Text("Binary used to generate meeting notes")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -147,7 +147,7 @@ struct OutputSettingsView: View {
             openAIConfigView
 
         case .none:
-            Text("No LLM summarization will be generated. Raw transcripts are retained if no protocol is saved.")
+            Text("No LLM summarization will be generated. Raw transcripts are retained if no meeting notes are saved.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -291,7 +291,7 @@ struct OutputSettingsView: View {
             }
             .disabled(!hasCustomPrompt)
             .confirmationDialog(
-                "Reset protocol prompt to the built-in default?",
+                "Reset meeting notes prompt to the built-in default?",
                 isPresented: $showResetPromptConfirmation,
                 titleVisibility: .visible,
             ) {
@@ -407,7 +407,7 @@ struct OutputSettingsView: View {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "Choose a folder for protocol output"
+        panel.message = "Choose a folder for recordings, transcripts and meeting notes"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         settings.setCustomOutputDir(url)
     }

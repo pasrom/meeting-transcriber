@@ -1098,6 +1098,7 @@ extension PipelineQueue {
             // only ever carried diagnostic text. Safe to log at .public —
             // restores the visibility traded away in PR #692's 4th commit.
             logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .public)")
+            // Matched by /v1 clients and persisted jobs; keep the text stable.
             addWarning(id: jobID, "Protocol generation failed — transcript saved")
             return
         }
@@ -1130,6 +1131,7 @@ extension PipelineQueue {
             // Private, unlike the generation failure above: a file-write
             // CocoaError names the file, and the file name is the meeting title.
             logger.warning("[\(shortID, privacy: .public)] protocol_save_failed error=\(error.localizedDescription, privacy: .private)")
+            // Matched by /v1 clients and persisted jobs; keep the text stable.
             addWarning(id: jobID, "Protocol was generated but could not be saved; the transcript was saved")
         }
     }

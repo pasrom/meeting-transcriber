@@ -4,7 +4,7 @@
     import XCTest
 
     /// `AppSettings.claudeAPIKey`: the user-supplied, explicit-opt-in key for
-    /// the Claude CLI protocol generator (Settings → Protocol Generation). In
+    /// the Claude CLI protocol generator (Settings → Meeting Notes). In
     /// its own file because `AppSettingsTests` sits at the 600-line cap; same
     /// per-test defaults suite and Keychain account convention as
     /// `AppSettingsOutputDirectoryTests` so `--parallel` runs never share
