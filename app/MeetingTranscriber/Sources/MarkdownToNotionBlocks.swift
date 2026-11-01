@@ -2,8 +2,14 @@ import Foundation
 
 /// Converts markdown strings into Notion block structures for API export.
 enum MarkdownToNotionBlocks {
-    private static let maxTextLength = 2000
+    /// Notion's limit for one rich text item, counted here in UTF-16 units.
+    private static let maxTextLength = NotionRequestBatches.maxTextUnits
+    private static let maxRichTextElements = NotionRequestBatches.maxArrayCount
     private static let maxChildrenPerBlock = 95
+    /// Size of one transcript paragraph and of one transcript toggle once encoded. A toggle
+    /// stays well under `NotionRequestBatches.maxBytes`, so it always fits a request alone.
+    private static let maxParagraphBytes = 200_000
+    private static let maxToggleBytes = 380_000
 
     /// Converts markdown text (and optional verbatim transcript) into an array of `NotionBlock`s.
     static func convert(markdown: String, transcript: String? = nil) -> [NotionBlock] { // swiftlint:disable:this cyclomatic_complexity function_body_length
@@ -52,7 +58,7 @@ enum MarkdownToNotionBlocks {
                 if let tableBlock = parseTable(tableLines) {
                     blocks.append(tableBlock)
                 } else {
-                    blocks.append(contentsOf: tableLines.map { makeParagraph(text: $0) })
+                    blocks.append(contentsOf: tableLines.flatMap { makeTextBlocks(type: "paragraph", text: $0) })
                 }
                 continue
             }
@@ -60,26 +66,26 @@ enum MarkdownToNotionBlocks {
             // Headings
             if trimmed.hasPrefix("### ") {
                 let content = String(trimmed.dropFirst(4))
-                blocks.append(makeHeading(level: 3, text: content))
+                blocks.append(contentsOf: makeTextBlocks(type: "heading_3", text: content))
             } else if trimmed.hasPrefix("## ") {
                 let content = String(trimmed.dropFirst(3))
-                blocks.append(makeHeading(level: 2, text: content))
+                blocks.append(contentsOf: makeTextBlocks(type: "heading_2", text: content))
             } else if trimmed.hasPrefix("# ") {
                 let content = String(trimmed.dropFirst(2))
-                blocks.append(makeHeading(level: 1, text: content))
+                blocks.append(contentsOf: makeTextBlocks(type: "heading_1", text: content))
             } else if trimmed == "---" || trimmed == "***" || trimmed == "___" {
                 blocks.append(makeDivider())
             } else if trimmed.hasPrefix("> ") {
                 let content = String(trimmed.dropFirst(2))
-                blocks.append(makeQuote(text: content))
+                blocks.append(contentsOf: makeTextBlocks(type: "quote", text: content))
             } else if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
                 let content = String(trimmed.dropFirst(2))
-                blocks.append(makeListItem(type: "bulleted_list_item", text: content))
+                blocks.append(contentsOf: makeTextBlocks(type: "bulleted_list_item", text: content))
             } else if let match = trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
                 let content = String(trimmed[match.upperBound...])
-                blocks.append(makeListItem(type: "numbered_list_item", text: content))
+                blocks.append(contentsOf: makeTextBlocks(type: "numbered_list_item", text: content))
             } else {
-                blocks.append(makeParagraph(text: trimmed))
+                blocks.append(contentsOf: makeTextBlocks(type: "paragraph", text: trimmed))
             }
 
             lineIndex += 1
@@ -108,40 +114,22 @@ enum MarkdownToNotionBlocks {
 
     // MARK: - Block Builders
 
-    private static func makeHeading(level: Int, text: String) -> NotionBlock {
-        let typeName = "heading_\(level)"
-        return NotionBlock(
-            type: typeName,
-            content: ["rich_text": AnyEncodable(makeRichText(text))],
-        )
-    }
-
     private static func makeDivider() -> NotionBlock {
         NotionBlock(type: "divider", content: [:])
     }
 
-    private static func makeQuote(text: String) -> NotionBlock {
-        NotionBlock(
-            type: "quote",
-            content: ["rich_text": AnyEncodable(makeRichText(text))],
-        )
+    /// One block of `type` for the text, or several in a row when its rich text runs past
+    /// Notion's per-array limit (text beyond about 200,000 UTF-16 units): a heading or list
+    /// item then repeats rather than the export failing on every retry.
+    private static func makeTextBlocks(type: String, text: String) -> [NotionBlock] {
+        let richText = makeRichText(text)
+        return stride(from: 0, to: richText.count, by: maxRichTextElements).map { start in
+            let slice = Array(richText[start ..< min(start + maxRichTextElements, richText.count)])
+            return NotionBlock(type: type, content: ["rich_text": AnyEncodable(slice)])
+        }
     }
 
-    private static func makeListItem(type: String, text: String) -> NotionBlock {
-        NotionBlock(
-            type: type,
-            content: ["rich_text": AnyEncodable(makeRichText(text))],
-        )
-    }
-
-    private static func makeParagraph(text: String) -> NotionBlock {
-        NotionBlock(
-            type: "paragraph",
-            content: ["rich_text": AnyEncodable(makeRichText(text))],
-        )
-    }
-
-    private static let maxTableRows = 100
+    private static let maxTableRows = NotionRequestBatches.maxArrayCount
 
     private static func makeTranscriptToggles(from transcript: String) -> [NotionBlock] {
         let lines = transcript.components(separatedBy: "\n")
@@ -151,12 +139,12 @@ enum MarkdownToNotionBlocks {
         guard !lines.isEmpty else { return [] }
 
         // Chunk lines into paragraph blocks of ~1200 characters each
-        var paragraphBlocks: [NotionBlock] = []
+        var chunkTexts: [String] = []
         var currentChunk = ""
 
         for line in lines {
             if !currentChunk.isEmpty, currentChunk.count + line.count + 1 > 1200 {
-                paragraphBlocks.append(makePlainParagraph(text: currentChunk))
+                chunkTexts.append(currentChunk)
                 currentChunk = line
             } else if currentChunk.isEmpty {
                 currentChunk = line
@@ -165,35 +153,60 @@ enum MarkdownToNotionBlocks {
             }
         }
         if !currentChunk.isEmpty {
-            paragraphBlocks.append(makePlainParagraph(text: currentChunk))
+            chunkTexts.append(currentChunk)
         }
+        let paragraphs = chunkTexts.flatMap { makePlainParagraphs(text: $0) }
 
-        // Split into toggles capped at maxChildrenPerBlock children
+        // Split into toggles capped at maxChildrenPerBlock children and at maxToggleBytes
+        // once encoded, so a few very long speaker lines cannot make one toggle too big to send.
         var toggles: [NotionBlock] = []
-        var chunkIndex = 0
+        var slice: [NotionBlock] = []
+        var sliceBytes = 0
 
-        while chunkIndex < paragraphBlocks.count {
-            let slice = Array(paragraphBlocks[chunkIndex ..< min(chunkIndex + maxChildrenPerBlock, paragraphBlocks.count)])
+        func closeToggle() {
+            guard !slice.isEmpty else { return }
             let title = toggles.isEmpty ? "Full Transcript" : "Full Transcript (Part \(toggles.count + 1))"
-            let toggleBlock = NotionBlock(
+            toggles.append(NotionBlock(
                 type: "toggle",
                 content: [
                     "rich_text": AnyEncodable(makeRichText(title)),
                     "children": AnyEncodable(slice),
                 ],
-            )
-            toggles.append(toggleBlock)
-            chunkIndex += maxChildrenPerBlock
+            ))
+            slice = []
+            sliceBytes = 0
         }
+
+        for (paragraph, bytes) in paragraphs {
+            if slice.count >= maxChildrenPerBlock || sliceBytes + bytes > maxToggleBytes { closeToggle() }
+            slice.append(paragraph)
+            sliceBytes += bytes
+        }
+        closeToggle()
 
         return toggles
     }
 
-    private static func makePlainParagraph(text: String) -> NotionBlock {
-        NotionBlock(type: "paragraph", content: ["rich_text": AnyEncodable(makeRichTextChunks(text))])
+    /// The text as one plain paragraph with its encoded size, or as several when one would
+    /// exceed Notion's rich text array limit or `maxParagraphBytes`: a monologue longer than
+    /// roughly 200,000 characters, or text whose escaping makes it unusually large to send.
+    private static func makePlainParagraphs(text: String) -> [(block: NotionBlock, bytes: Int)] {
+        let richText = makeRichTextChunks(text)
+        let block = NotionBlock(type: "paragraph", content: ["rich_text": AnyEncodable(richText)])
+        let bytes = (try? JSONEncoder().encode(block).count) ?? 0
+        guard richText.count > maxRichTextElements || bytes > maxParagraphBytes, text.count > 1 else {
+            return [(block, bytes)]
+        }
+        let middle = text.index(text.startIndex, offsetBy: text.count / 2)
+        return makePlainParagraphs(text: String(text[..<middle])) + makePlainParagraphs(text: String(text[middle...]))
     }
 
     // MARK: - Table Parsing
+
+    /// A cell is one rich text array, which cannot be split across blocks.
+    private static func cellsFit(_ cells: [[[String: AnyEncodable]]]) -> Bool {
+        cells.allSatisfy { $0.count <= maxRichTextElements }
+    }
 
     private static func parseTable(_ lines: [String]) -> NotionBlock? {
         guard lines.count >= 2 else { return nil }
@@ -223,6 +236,7 @@ enum MarkdownToNotionBlocks {
         let headerRowCells = headerCells.map { cell in
             makeRichText(cell)
         }
+        guard cellsFit(headerRowCells) else { return nil }
         rowBlocks.append([
             "object": AnyEncodable("block"),
             "type": AnyEncodable("table_row"),
@@ -241,6 +255,7 @@ enum MarkdownToNotionBlocks {
             let richCells = cells.map { cell in
                 makeRichText(cell)
             }
+            guard cellsFit(richCells) else { return nil }
             rowBlocks.append([
                 "object": AnyEncodable("block"),
                 "type": AnyEncodable("table_row"),
@@ -266,7 +281,18 @@ enum MarkdownToNotionBlocks {
     /// Text longer than Notion's per-object limit is split into several rich
     /// text items. It used to be truncated, which silently dropped the tail of
     /// a long protocol paragraph or transcript line.
+    ///
+    /// Notion takes at most 100 rich text items per array. Text with more styled spans than
+    /// that is sent as plain text with its markers left in place, so no text is lost; only
+    /// text beyond roughly 200,000 UTF-16 units still exceeds the array, and callers split
+    /// the block for that.
     static func makeRichText(_ text: String) -> [[String: AnyEncodable]] {
+        let styled = makeStyledRichText(text)
+        guard styled.count > maxRichTextElements else { return styled }
+        return makeRichTextChunks(text)
+    }
+
+    private static func makeStyledRichText(_ text: String) -> [[String: AnyEncodable]] {
         guard !text.isEmpty else {
             return [makeEmptyRichText()]
         }
@@ -322,15 +348,7 @@ enum MarkdownToNotionBlocks {
     ) -> [[String: AnyEncodable]] {
         guard !content.isEmpty else { return [] }
 
-        var chunks: [String] = []
-        var start = content.startIndex
-        while start < content.endIndex {
-            let end = content.index(start, offsetBy: maxTextLength, limitedBy: content.endIndex) ?? content.endIndex
-            chunks.append(String(content[start ..< end]))
-            start = end
-        }
-
-        return chunks.map { chunk in
+        return utf16Chunks(content, limit: maxTextLength).map { chunk in
             var object: [String: AnyEncodable] = [
                 "type": AnyEncodable("text"),
                 "text": AnyEncodable(["content": AnyEncodable(chunk)]),
@@ -344,6 +362,38 @@ enum MarkdownToNotionBlocks {
             }
             return object
         }
+    }
+
+    /// Cuts the text into pieces of at most `limit` UTF-16 units, between characters wherever
+    /// it can: Notion may count in UTF-16 units, where one emoji is up to 11. A character
+    /// longer than the limit by itself (a base with thousands of combining marks) is cut
+    /// between its scalars instead.
+    private static func utf16Chunks(_ content: String, limit: Int) -> [String] {
+        guard content.utf16.count > limit else { return [content] }
+        var chunks: [String] = []
+        var current = ""
+        var currentUnits = 0
+        func add(_ piece: String) {
+            let units = piece.utf16.count
+            if currentUnits + units > limit {
+                chunks.append(current)
+                current = ""
+                currentUnits = 0
+            }
+            current += piece
+            currentUnits += units
+        }
+        for character in content {
+            if character.utf16.count <= limit {
+                add(String(character))
+            } else {
+                for scalar in character.unicodeScalars {
+                    add(String(scalar))
+                }
+            }
+        }
+        if !current.isEmpty { chunks.append(current) }
+        return chunks
     }
 
     private static func makeEmptyRichText() -> [String: AnyEncodable] {
