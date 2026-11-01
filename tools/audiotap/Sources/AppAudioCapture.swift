@@ -164,6 +164,13 @@ public class AppAudioCapture: @unchecked Sendable {
     /// nil for the mach clock. Same seam, so a test drives the tick, the
     /// rebuild start and the sensor's window on one clock.
     let clockOverride: (@Sendable () -> TimeInterval)?
+    /// Whether `start()` subscribes to the system's default-output-device
+    /// changes: only when the attempt is the real one. A capture whose
+    /// hardware a test stands in for must not hear the host's real device
+    /// changes either, or one would restart it under the test's feet.
+    var listensForOutputDeviceChanges: Bool {
+        attemptBody == nil
+    }
 
     /// - Parameters:
     ///   - pids: Process IDs to capture audio from. Pass the meeting app's

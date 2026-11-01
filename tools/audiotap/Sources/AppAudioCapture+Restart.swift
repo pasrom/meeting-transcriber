@@ -170,7 +170,7 @@ extension AppAudioCapture {
     }
 
     func installOutputDeviceChangeListener() {
-        guard !outputListenerInstalled else { return }
+        guard listensForOutputDeviceChanges, !outputListenerInstalled else { return }
         let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.handleOutputDeviceChanged()
         }

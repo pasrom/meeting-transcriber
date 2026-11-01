@@ -29,7 +29,7 @@ public class AudioCaptureSession {
     private let config: AudioCaptureConfiguration
 
     /// The two handlers' hardware seams, nil in production. See the internal init.
-    private let appAttemptBody: (() throws -> AppTapSession?)?
+    let appAttemptBody: (() throws -> AppTapSession?)?
     private let micSessionFactory: (() -> any MicEngineSessionProviding)?
     private let micHandlerFactory: ((URL) -> MicCaptureHandler)?
 
