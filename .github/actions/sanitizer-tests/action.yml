@@ -5,8 +5,12 @@ description: >
   of quality-and-safety.yml: the two legs are separate jobs because a
   job-level `if:` applies to a whole matrix and ASan runs on every same-repo
   PR while TSan is gated (issue #688), and one composite keeps them from
-  drifting apart in anything but the flag. The caller runs actions/checkout
-  and verify-xcode first, so DEVELOPER_DIR is already exported here.
+  drifting apart in anything but the flag. The caller runs actions/checkout,
+  verify-xcode, runner-home and sanitizer-prep first, so DEVELOPER_DIR is
+  already exported, the CI keychain unlocked and ffmpeg provided. That preparation
+  is a composite of its own so the caller sees its failure apart from this
+  one: a failure of this step is a sanitizer verdict, and only that cancels
+  the run (see the legs' cancel step).
 
 inputs:
   sanitizer-flag:
@@ -21,36 +25,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    # `mt-ci.keychain-db` is pre-staged by setup-self-hosted-runner.sh, but
-    # macOS occasionally drops it from the per-user search list (seen after
-    # a second runner's `config.sh` ran as the same OS user). When that
-    # happens `SecItemAdd` writes to the default keychain while
-    # `SecItemCopyMatching` searches login.keychain only, and the
-    # KeychainHelper tests silent-fail. Re-assert per job; safe when both
-    # legs run at once because every job writes the same value.
-    #
-    # `set-keychain-settings -lut 36000` raises the auto-lock-on-idle
-    # timeout to 10 h. The default ~5 min fired mid-run on the Mini
-    # (sanitizer compile ~4 min + slower tests pushed read calls past
-    # the threshold), causing `SecItemCopyMatching` to silent-fail with
-    # `errSecAuthFailed` between two consecutive reads in
-    # `testOpenAIAPIKeyViaKeychainHelper`. Without `-l` the keychain
-    # also doesn't lock on system sleep, irrelevant inside a CI job
-    # but defensive.
-    #
-    # The tests' test home does not change this: they keep the account's HOME,
-    # through which the Security framework reads the default and search list
-    # set here (see runner-home for why HOME is not moved).
-    - name: Ensure CI keychain is default + in search list + unlocked + no-autolock
-      shell: bash
-      run: |
-        MT_CI_KEYCHAIN="$HOME/Library/Keychains/mt-ci.keychain-db"
-        security default-keychain -s "$MT_CI_KEYCHAIN"
-        "$GITHUB_WORKSPACE/scripts/keychain-prepend.sh" "$MT_CI_KEYCHAIN"
-        security unlock-keychain -p "" "$MT_CI_KEYCHAIN"
-        security set-keychain-settings -lut 36000 "$MT_CI_KEYCHAIN"
-    # The full suite includes the ffmpeg-tier tests (see the action).
-    - uses: ./.github/actions/setup-ffmpeg
     - name: Swift tests
       shell: bash
       env:

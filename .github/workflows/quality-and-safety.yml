@@ -172,12 +172,13 @@ jobs:
   # change to the TSan job can be exercised before merge only by running
   # it: proving the keyword arm actually started the legs took a throwaway
   # commit with a keyword line. Left out on purpose, so as not to pad the
-  # list: `.github/actions/sanitizer-tests` and `verify-xcode`, which the
-  # unconditional ASan leg executes on every same-repo PR and which carry
-  # nothing TSan-specific; `cancel-on-failure`, which never runs on a
-  # passing test; and the manifests of mt-cli and meeting-simulator, which
-  # the legs do not build. tools/audiotap has no Package.resolved today; the
-  # entry covers its first dependency. In the forty-PR sample the four
+  # list: `.github/actions/sanitizer-tests`, `sanitizer-prep` and
+  # `verify-xcode`, which the unconditional ASan leg executes on every
+  # same-repo PR and which carry nothing TSan-specific;
+  # `cancel-on-failure`, which never runs on a passing test; and the
+  # manifests of mt-cli and meeting-simulator, which the legs do not
+  # build. tools/audiotap has no Package.resolved today; the entry covers
+  # its first dependency. In the forty-PR sample the four
   # manifest-only hits are the 0.15.6 bump (#657) and its three repairs
   # (#658, #659, #662); nothing in the sample touched this workflow.
   #
@@ -387,10 +388,14 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     # Generous next to the 3 min observed, but the same budget as TSan keeps
     # a cold-cache build from being the thing that turns the gate red: the
-    # pre-warm and test steps carry 20 min each, and the job adds room for
-    # checkout and the cancel step. The pre-warm's share is spent only on a
-    # cold runner; a hang in either step ends as that step's `timed_out`.
-    timeout-minutes: 45
+    # pre-warm and test steps carry 20 min each and sanitizer-prep 10, 50 in
+    # all; the job adds 15 min for checkout, the Xcode check and the cancel
+    # step, none of which has a bound of its own. The pre-warm's share is
+    # spent only on a cold runner, prep's only on a stalled ffmpeg download.
+    # The headroom is what keeps a hang ending as that step's timeout rather
+    # than as a job timeout, which reports `cancelled`, a result
+    # sanitizer-gate can only count as a failure of unreported cause.
+    timeout-minutes: 65
     permissions:
       contents: read
       actions: write
@@ -411,6 +416,14 @@ jobs:
         timeout-minutes: 20
         with:
           prewarm: "true"
+      # Right before the tests, not before the pre-warm where it would fail
+      # faster: the keychain re-assert guards against macOS dropping the CI
+      # keychain from the search list, and a cold pre-warm would leave up to
+      # 20 min for that to happen again before the tests run. The timeout
+      # bounds a stalled ffmpeg download (see the job budget) and cuts short
+      # setup-ffmpeg's own curl retries.
+      - uses: ./.github/actions/sanitizer-prep
+        timeout-minutes: 10
       - id: tests
         uses: ./.github/actions/sanitizer-tests
         timeout-minutes: 20
@@ -419,9 +432,8 @@ jobs:
           user-home: ${{ steps.home.outputs.home }}
       # Cancels the run only on a sanitizer verdict, which needs a new push, so
       # stopping the other leg frees a Mini sooner (TSan holds one ~15 min). A
-      # setup failure (toolchain check, model pre-warm) wants a rerun of this
-      # leg, and must not turn the other leg `cancelled`, which the gate counts
-      # as a failure.
+      # failure in a step before it is no sanitizer verdict, and cancelling
+      # there would throw away the other leg's verdict as well.
       - name: Cancel run on failure
         if: failure() && steps.tests.outcome == 'failure'
         uses: ./.github/actions/cancel-on-failure
@@ -459,8 +471,9 @@ jobs:
     # deadlines rather than compiling, and the most recent full leg took
     # 15m13s. The test step's 20 min still leaves room for cold-build
     # variance while surfacing runaways before they cost an hour; the job
-    # budget adds the pre-warm step's own 20 min (see test-asan).
-    timeout-minutes: 45
+    # budget adds the pre-warm step's 20 min, sanitizer-prep's 10 and the
+    # same headroom (see test-asan).
+    timeout-minutes: 65
     permissions:
       contents: read
       actions: write
@@ -476,6 +489,9 @@ jobs:
         timeout-minutes: 20
         with:
           prewarm: "true"
+      # See the same step in test-asan.
+      - uses: ./.github/actions/sanitizer-prep
+        timeout-minutes: 10
       - id: tests
         uses: ./.github/actions/sanitizer-tests
         timeout-minutes: 20
@@ -633,7 +649,7 @@ jobs:
               failure)
                 case "$tests" in
                   failure) cell="FAILED: the sanitizer tests failed" ;;
-                  skipped) cell="FAILED in setup, before the sanitizer tests ran: no sanitizer verdict, rerun the leg" ;;
+                  skipped) cell="FAILED in setup, before the sanitizer tests ran: no sanitizer verdict. Check the leg's log: the model pre-warm also compiles the tests, so a compile error there needs a fix; a download, keychain or toolchain error wants a rerun" ;;
                   *) cell="FAILED (test step outcome: ${tests:-not reported})" ;;
                 esac
                 failed=1
