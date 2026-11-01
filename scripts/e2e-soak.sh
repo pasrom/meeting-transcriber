@@ -277,13 +277,8 @@ log "Starting meeting-simulator for ${MEETING_SECONDS}s (${SOAK_MINUTES}min meas
 "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" --silent --duration "$MEETING_SECONDS" >/dev/null 2>&1 &
 SIM_PID=$!
 
-_is_recording() {
-    local state
-    state="$(rpc /state)"
-    [ -n "$state" ] && jq -e '.watchState == "recording"' <<<"$state" >/dev/null 2>&1
-}
-poll_until "$RECORDING_DEADLINE_S" 2 _is_recording \
-    || fail "app did not reach watchState=recording within ${RECORDING_DEADLINE_S}s"
+poll_state "$RECORDING_DEADLINE_S" 2 state_is '.watchState == "recording"' \
+    || fail "$(state_why $? "app did not reach watchState=recording within ${RECORDING_DEADLINE_S}s")"
 log "Recording started; letting the allocation ramp settle for ${RECORDING_SETTLE_S}s"
 sleep "$RECORDING_SETTLE_S"
 

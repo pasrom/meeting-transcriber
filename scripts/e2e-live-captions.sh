@@ -91,12 +91,6 @@ require_command() {
 }
 
 RPC_TOKEN=""
-rpc() {
-    local path="$1"
-    curl --silent --show-error --max-time 10 \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        "$RPC_BASE$path" 2>/dev/null || true
-}
 
 # --- preflight ------------------------------------------------------------
 
@@ -189,9 +183,9 @@ log "Launching $DEV_BUNDLE_DEPLOY"
 open "$DEV_BUNDLE_DEPLOY"
 
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
-# Assigns RPC_TOKEN in caller scope on success so subsequent `rpc` calls
-# carry the bearer token.
-# See the shared note in e2e-app.sh: `rpc` ends in `|| true`, so probing
+# Assigns RPC_TOKEN in caller scope on success so the /state reads below
+# (state_read in scripts/lib/e2e-helpers.sh) carry the bearer token.
+# See the shared note in e2e-app.sh: its `rpc` ends in `|| true`, so probing
 # through it reports success for a refused connection and leaves the token
 # file, which outlives every run on the host, as the only real condition.
 # Ask curl directly and let its exit status decide.
@@ -233,29 +227,24 @@ log "Starting meeting-simulator → $SIMULATOR_FIXTURE"
 SIM_PID=$!
 
 log "Polling /state for liveCaptions.recentFinals (timeout ${CAPTION_DEADLINE_S}s)"
-deadline=$(( $(date +%s) + CAPTION_DEADLINE_S ))
+# poll_state keeps an app that stopped answering apart from one that answers
+# with no captions; before, both read as zero finals.
 finals_count=0
 finals_json="[]"
 last_log_count=-1
-while true; do
-    assert_app_alive
+_finals_arrived() {
     IFS='|' read -r finals_count finals_json < <(
-        rpc /state | jq -r '[(.liveCaptions.recentFinals | length), (.liveCaptions.recentFinals | tojson)] | join("|")'
+        jq -r '[(.liveCaptions.recentFinals | length), (.liveCaptions.recentFinals | tojson)] | join("|")' <<<"$STATE_BODY"
     ) || true
     finals_count="${finals_count:-0}"
-
     if [ "$finals_count" != "$last_log_count" ]; then
         log "  recentFinals.count = $finals_count"
         last_log_count="$finals_count"
     fi
-
-    if [ "$finals_count" -gt 0 ]; then
-        break
-    fi
-
-    [ "$(date +%s)" -lt "$deadline" ] || fail "no liveCaptions.recentFinals appeared within ${CAPTION_DEADLINE_S}s — wiring broken or model didn't produce text"
-    sleep 5
-done
+    [ "$finals_count" -gt 0 ]
+}
+poll_state --each assert_app_alive "$CAPTION_DEADLINE_S" 5 _finals_arrived \
+    || fail "$(state_why $? "no liveCaptions.recentFinals appeared within ${CAPTION_DEADLINE_S}s — wiring broken or model didn't produce text")"
 
 log "Got $finals_count finalised caption(s):"
 echo "$finals_json" | jq . | sed 's/^/    /'
