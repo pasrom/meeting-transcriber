@@ -5,10 +5,18 @@ description: >
   superseded runs of the same ref — it doesn't react to a single job
   failing inside a run, so this composite fills the gap.
 
-  Caller must wrap the step in `if: failure()` so the cancellation is
-  scoped to actual failure (composite actions cannot have a top-level
-  step-level `if`). The inner step swallows errors via continue-on-error
-  so a transient gh CLI hiccup doesn't mask the original failure.
+  The caller owns the condition (composite actions cannot have a
+  top-level step-level `if`). Cancelling throws away every sibling job's
+  work, so it should fire only when a step whose failure makes that work
+  pointless failed, typically the build or tests:
+  `if: failure() && steps.<id>.outcome == 'failure'`. Setup, download
+  and upload failures should fail only their own job. The inner step
+  swallows errors via continue-on-error so a transient gh CLI hiccup
+  doesn't mask the original failure. A job whose failure already blocks
+  the merge as a required check, and says nothing about the other jobs
+  (lint, analyze), should not call this at all.
+  Every caller needs `actions: write`; fork pull_request tokens are
+  read-only, so there the cancel step fails and is tolerated.
 
   The run-level cancellation races the calling job's own conclusion:
   the culprit job usually ends up marked `cancelled` like its victims,
