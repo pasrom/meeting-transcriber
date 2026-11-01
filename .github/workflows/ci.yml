@@ -187,7 +187,31 @@ jobs:
         run: bash scripts/ci/install-lint-tool.sh swiftlint
       - name: Verify pinned SwiftLint
         run: bash scripts/ci/install-lint-tool.sh swiftlint --verify
+      # Dependency half of the build only: package checkouts (~60 s of git
+      # clones), compiled WhisperKit / FluidAudio / ViewInspector / SnapshotTesting
+      # and the SDK module caches. Nothing of this repository's own is restored or
+      # saved: the build must compile AudioTapLib, the app and the tests from
+      # scratch, or `swiftlint analyze` silently skips what the log lacks. The
+      # prune script removes own output before the entry is saved, and
+      # check-compiler-log-coverage.sh proves the log complete on every run
+      # (both explain why).
+      #
+      # Exact key, no restore-keys: a cache from a different dependency set or
+      # toolchain would hand xcodebuild stale modules. Bump -v1 when the build
+      # flags below change in a way that affects dependency compilation. All of
+      # SourcePackages is kept: dropping `repositories/` (515 MB) makes xcodebuild
+      # re-fetch and re-check-out the packages, which recompiles the dependencies.
+      - name: Identify the toolchain
+        id: toolchain
+        run: echo "id=$(xcodebuild -version | tr -s ' \n' '--')" >> "$GITHUB_OUTPUT"
+      - name: Dependency build cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/analyze-derived-data
+          key: analyze-deps-${{ runner.os }}-${{ steps.toolchain.outputs.id }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Package.swift', 'tools/audiotap/Package.swift', 'scripts/ci/prune-analyze-derived-data.sh') }}-v1
       - name: Build & Analyze
+        env:
+          DERIVED_DATA: ${{ runner.temp }}/analyze-derived-data
         run: |
           # pipefail: without it `xcodebuild ... | tee` masks an xcodebuild
           # failure, leaving swiftlint analyze to pass against an empty log.
@@ -206,17 +230,35 @@ jobs:
           # The compiler prints one line per body, some 33,000 across app and
           # dependencies, so the file keeps them and the console stream does
           # not. Clean build time was unchanged within noise.
+          #
           # shellcheck disable=SC2016  # $(inherited) is an Xcode setting reference, not a shell expansion
-          xcodebuild -scheme MeetingTranscriber -destination 'platform=macOS' SWIFT_SUPPRESS_WARNINGS=NO \
+          xcodebuild -scheme MeetingTranscriber -destination 'platform=macOS' -derivedDataPath "$DERIVED_DATA" SWIFT_SUPPRESS_WARNINGS=NO \
             OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -debug-time-function-bodies' build-for-testing 2>&1 \
             | tee /tmp/xcodebuild.log | bash "$GITHUB_WORKSPACE/scripts/ci/type-check-timings.sh" strip
           cd "$GITHUB_WORKSPACE"
+          # Before the ~7 minute analysis, not after it: a log that lacks a file
+          # makes swiftlint skip that file without a finding.
+          bash scripts/ci/check-compiler-log-coverage.sh /tmp/xcodebuild.log
           # swiftlint analyze re-runs the compiler with the arguments it finds
           # in the log, timing flag included, so SourceKit prints the same lines
           # into swiftlint's output; stripped the same way. Its findings do not
           # change: output identical after the strip, +14 s on a 212 s run.
           swiftlint analyze --strict --compiler-log-path /tmp/xcodebuild.log --reporter github-actions-logging 2>&1 \
-            | bash scripts/ci/type-check-timings.sh strip
+            | tee /tmp/swiftlint.log | bash scripts/ci/type-check-timings.sh strip
+          # The analysis reports how many files it covered; that must be every
+          # file the check above found in the log.
+          bash scripts/ci/check-compiler-log-coverage.sh --analyzed /tmp/swiftlint.log
+      # The cache step saves in its post step, after this one, and only on a miss
+      # of an otherwise green job. Pruned first so the entry holds nothing of
+      # this repository's own: a restored entry therefore never carries own
+      # output into the build, which is why there is no prune before the build
+      # (the script's hash is in the key, so a changed list is a new entry, and
+      # the coverage check above fails the job if anything slipped through).
+      - name: Prune before the cache is saved
+        if: success()
+        env:
+          DERIVED_DATA: ${{ runner.temp }}/analyze-derived-data
+        run: bash scripts/ci/prune-analyze-derived-data.sh "$DERIVED_DATA"
       # Non-gating by construction: the 300 ms limit in Package.swift stays the
       # only enforcement. `continue-on-error` keeps any report problem from
       # failing the job, including the script's own exit 1 when it found no
