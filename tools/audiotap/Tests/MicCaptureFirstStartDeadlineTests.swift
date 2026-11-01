@@ -20,6 +20,7 @@ final class MicCaptureFirstStartDeadlineTests: XCTestCase {
     /// itself after `safetyRelease`, so a regression that waits forever fails
     /// the test rather than hanging the suite.
     private final class FirstStartSession: MicEngineSessionProviding, @unchecked Sendable {
+        let followsSystemDefaultInput = false
         // swiftlint:disable:next force_unwrapping
         let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
         let notificationObject: AnyObject = NSObject()

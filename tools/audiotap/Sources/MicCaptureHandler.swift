@@ -8,6 +8,8 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// Records microphone audio to a WAV file via AVAudioEngine.
 /// Monitors for device changes via CoreAudio property listener (default input device)
 /// and AVAudioEngine configuration change notification (format/route changes).
+/// A handler a test builds on a stand-in session does not follow the system
+/// default input, so the host's device changes cannot restart it.
 /// Automatically restarts the engine on device switch, preserving the selected device
 /// when still available or falling back to system default with a warning.
 ///
@@ -122,7 +124,17 @@ public class MicCaptureHandler: @unchecked Sendable {
     let bridgeGate = TimelineBridgeGate()
     /// Whether the capture is getting anywhere. Main queue only.
     var progress = MicProgressState()
-    private var deviceChangeListener: AudioObjectPropertyListenerBlock?
+    private(set) var deviceChangeListener: AudioObjectPropertyListenerBlock?
+    /// Registers `deviceChangeListener` with CoreAudio; see the registrar.
+    let inputListenerRegistrar: DefaultInputListenerRegistrar
+    /// Whether `start()` subscribes to the system's default-input-device
+    /// changes. The session decides, see `followsSystemDefaultInput`. Read off
+    /// the session rather than passed in, so no caller can hand in the real
+    /// engine and forget to ask for the listener.
+    var listensForInputDeviceChanges: Bool {
+        session.followsSystemDefaultInput
+    }
+
     var configChangeObserver: (any NSObjectProtocol)?
     var selectedDeviceUID: String?
     /// Wall-clock anchoring so a device-restart gap becomes silence in the WAV
@@ -167,12 +179,6 @@ public class MicCaptureHandler: @unchecked Sendable {
         levelPublisher.currentSignalAges
     }
 
-    private var defaultInputAddress = AudioObjectPropertyAddress(
-        mSelector: kAudioHardwarePropertyDefaultInputDevice,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    )
-
     public convenience init(
         outputURL: URL,
         debugLogging: Bool = false,
@@ -209,7 +215,9 @@ public class MicCaptureHandler: @unchecked Sendable {
         clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         awaitFirstStart: @escaping @Sendable (DispatchGroup, TimeInterval) -> Bool
             = { done, timeout in done.wait(timeout: .now() + timeout) == .success },
+        inputListenerRegistrar: DefaultInputListenerRegistrar = .system,
     ) {
+        self.inputListenerRegistrar = inputListenerRegistrar
         self.clock = clock
         self.awaitFirstStart = awaitFirstStart
         self.decideRetry = decideRetry
@@ -401,16 +409,11 @@ public class MicCaptureHandler: @unchecked Sendable {
     // swiftlint:enable function_body_length
 
     private func installDeviceChangeListener() {
-        guard deviceChangeListener == nil else { return }
+        guard listensForInputDeviceChanges, deviceChangeListener == nil else { return }
         let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.handleDefaultInputDeviceChanged()
         }
-        let status = AudioObjectAddPropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject),
-            &defaultInputAddress,
-            DispatchQueue.main,
-            listener,
-        )
+        let status = inputListenerRegistrar.add(listener)
         if status == noErr {
             deviceChangeListener = listener
             logger.info("Mic: listening for default input device changes")
@@ -446,12 +449,7 @@ public class MicCaptureHandler: @unchecked Sendable {
         // caller (issue #588).
         let decision = arbiter.withLock { $0.handle(.stopRequested) }
         if let listener = deviceChangeListener {
-            AudioObjectRemovePropertyListenerBlock(
-                AudioObjectID(kAudioObjectSystemObject),
-                &defaultInputAddress,
-                DispatchQueue.main,
-                listener,
-            )
+            inputListenerRegistrar.remove(listener)
             deviceChangeListener = nil
         }
         if let observer = configChangeObserver {

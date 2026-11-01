@@ -18,6 +18,7 @@ import XCTest
 /// coordination is wall-clock sleep, which orders nothing.
 final class MicOutputFileHandoffTests: XCTestCase {
     private final class Fake: MicEngineSessionProviding {
+        let followsSystemDefaultInput = false
         let notificationObject: AnyObject = NSObject()
         // swiftlint:disable:next force_unwrapping
         private let fmt = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!

@@ -6,6 +6,7 @@ import XCTest
 /// test: it can throw on start, wedge inside the call that brings the engine
 /// up, and deliver buffers only when told.
 final class ScriptedMicSession: MicEngineSessionProviding, @unchecked Sendable {
+    let followsSystemDefaultInput = false
     // swiftlint:disable:next force_unwrapping
     let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
     private let object = NSObject()
