@@ -189,17 +189,29 @@ fail_on_host_skips() {
     return 1
 }
 
-# --- Reading /state: an answer, or no answer ---------------------------------
+# --- Reading the RPC server: an answer, or no answer -------------------------
 #
-# A driver that pipes `/state` into jq cannot tell an app that answered `false`
-# from one that did not answer at all: a refused connection, a timeout, an app
-# blocked behind a TCC consent prompt all come out as empty input, jq turns
-# that into empty or `null`, and the caller reads it as the real value. A poll
-# then waits out its whole window on "not yet" and blames the feature, and a
-# negative check ("the window is gone", "the prompt was cleared") passes on an
+# A driver that pipes an RPC read into jq cannot tell an app that answered
+# `false` from one that did not answer at all: a refused connection, a timeout,
+# an app blocked behind a TCC consent prompt all come out as empty input, jq
+# turns that into empty or `null`, and the caller reads it as the real value. A
+# poll then waits out its whole window on "not yet" and blames the feature, and
+# a negative check ("the window is gone", "the prompt was cleared") passes on an
 # app that said nothing. These helpers keep the two apart by status:
 #
-#   state_read            one read into STATE_BODY; 0 answered, 2 no answer
+#   rpc_read <path>       one GET into RPC_STATUS + RPC_BODY; 0 answered, 2 no
+#                         usable answer (reason in RPC_ERR)
+#   poll_rpc <path> [--not-yet <code>]... [opts] <t> <i> <pred...>
+#                         poll_state's loop over fresh rpc_read's of <path>,
+#                         plus 5: answered a code that cannot turn into a 200
+#   rpc_is <f> [a]        a poll_rpc predicate: HTTP 200 and jq -e <f> [a]
+#   rpc_field <f> [a]     jq -r <f> [a] on the last answer, only if it was a 200
+#   metrics_snapshot      one usable /metrics snapshot into RPC_BODY
+#   rpc_why <rc> <path> <msg>
+#                         the failure message for an rpc_read / poll_rpc status
+#
+#   state_read            one read of /state into STATE_BODY; 0 answered, 2 no
+#                         usable answer
 #   state_query <f> [a]   jq -r <f> [a] over one read; 0 + output, 2 no answer,
 #                         3 the filter failed on an answer
 #   poll_state [--each <cmd>] [--judge-deadline-read] <t> <i> <pred...>
@@ -209,51 +221,211 @@ fail_on_host_skips() {
 #   state_is <f> [a]      a poll_state predicate: jq -e <f> [a] on STATE_BODY
 #   state_why <rc> <msg>  the failure message for one of those statuses
 #
-# No answer means no usable answer: no reply within the bound, a transport
-# error (an HTTP error status included: a 401 says nothing about the field
-# either), or a body that is not a JSON object.
+# What counts as an answer, the same for every reader:
+# - No reply within the bound, or a transport error: no answer.
+# - 401 or 403: the app refused the driver's token. That says nothing about
+#   the path, so it is no usable answer (status 2) for every reader, with
+#   RPC_REFUSED=1 and the reason saying so; and since a token does not start
+#   working by waiting, a poll stops on it at once instead of sitting out its
+#   window.
+# - Any other HTTP status is an answer, and the caller judges the code: the
+#   /v1 routes answer 404 or 409 on purpose. A poll judges it for the caller:
+#   poll_rpc stops with status 5 on a code outside 200, 409 and its --not-yet
+#   list, since such a code (an unknown job, a bad request, a server error)
+#   does not turn into a 200 by waiting. Only /state is narrower, because it
+#   only ever means one thing: there an answer is a 200 whose body is a JSON
+#   object, and anything else is no usable answer.
 
-# Per-read bound, enforced by run_bounded whichever transport is used (mt-cli's
-# own 5 s request timeout does not cover everything it can block on), and also
-# handed to curl as --max-time.
-: "${STATE_READ_BOUND_S:=15}"
+# The per-read bound, enforced by run_bounded whichever transport is used
+# (mt-cli's own 5 s request timeout does not cover everything it can block on),
+# and also handed to curl as --max-time: RPC_READ_BOUND_S, or the older name
+# STATE_READ_BOUND_S, or 15 s. Read at each call, so either can be set for one
+# read (`RPC_READ_BOUND_S=5 rpc_read /healthz`).
 
-# One GET /state to stdout, non-zero when the app did not answer. curl with the
-# driver's RPC_TOKEN when it holds one, since its token file can sit in a lane's
-# own home where mt-cli does not look; mt-cli (which exits non-zero on any
-# transport failure) for the drivers that only ever talk through $MTCLI.
-_state_transport() {
-    if [ -n "${RPC_TOKEN:-}" ]; then
-        curl --silent --show-error --fail --max-time "$STATE_READ_BOUND_S" \
-            --header "Authorization: Bearer $RPC_TOKEN" \
-            "${RPC_BASE:-http://127.0.0.1:9876}/state"
-    elif [ -n "${MTCLI:-}" ]; then
-        "$MTCLI" state
-    else
-        echo "neither RPC_TOKEN nor MTCLI is set, so there is no way to ask the app" >&2
-        return 1
+# _rpc_fetch <path> — one bounded GET <path> with the driver's RPC_TOKEN. Leaves
+# the HTTP status in _RPC_FETCH_CODE, the body in _RPC_FETCH_BODY and, when it
+# fails, the reason in _RPC_FETCH_WHY; the readers copy what they keep, so a
+# /state read does not overwrite a caller's RPC_BODY. 0: an HTTP status came
+# back. 3: it was 401 or 403. 2: none came back.
+_rpc_fetch() {
+    local dir rc=0 bound="${RPC_READ_BOUND_S:-${STATE_READ_BOUND_S:-15}}"
+    _RPC_FETCH_CODE="" _RPC_FETCH_BODY="" _RPC_FETCH_WHY=""
+    if [ -z "${RPC_TOKEN:-}" ]; then
+        _RPC_FETCH_WHY="RPC_TOKEN is not set, so there is no way to ask the app"
+        return 2
     fi
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/rpc-read.XXXXXX")" || { _RPC_FETCH_WHY="mktemp failed"; return 2; }
+    _RPC_FETCH_CODE="$(run_bounded "$bound" curl --silent --show-error --max-time "$bound" \
+        --output "$dir/body" --write-out '%{http_code}' \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        "${RPC_BASE:-http://127.0.0.1:9876}$1" 2>"$dir/err")" || rc=$?
+    _RPC_FETCH_BODY="$(cat "$dir/body" 2>/dev/null || true)"
+    case "$rc:$_RPC_FETCH_CODE" in
+        0:401 | 0:403)
+            _RPC_FETCH_WHY="the app refused the request with HTTP $_RPC_FETCH_CODE (a wrong or rotated token)"
+            rm -rf "$dir"
+            return 3 ;;
+        0:[1-5][0-9][0-9]) rm -rf "$dir"; return 0 ;;
+        # 28: curl's own --max-time, which usually fires just before
+        # run_bounded's; the same condition either way.
+        124:* | 28:*) _RPC_FETCH_WHY="no reply within ${bound}s" ;;
+        0:*) _RPC_FETCH_WHY="no HTTP status came back ('$_RPC_FETCH_CODE')" ;;
+        *) _RPC_FETCH_WHY="the request failed (exit $rc): $(tr '\n' ' ' <"$dir/err" | head -c 300)" ;;
+    esac
+    rm -rf "$dir"
+    return 2
+}
+
+# rpc_read <path> — one bounded GET of <path>. Answered: the HTTP status in
+# RPC_STATUS, the body in RPC_BODY and the path in RPC_PATH, status 0. Not
+# answered (a refusal included, see above): those three keep the last answer,
+# the reason goes to RPC_ERR and to stderr, RPC_REFUSED says whether it was a
+# refusal, status 2. Runs in the current shell so all of them survive; call it
+# bare or in a condition. Meant for
+# `rpc_read "$p" || fail "$(rpc_why $? "$p" ...)"`, then a check of RPC_STATUS.
+rpc_read() {
+    local rc=0
+    _rpc_fetch "$1" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        RPC_STATUS="$_RPC_FETCH_CODE" RPC_BODY="$_RPC_FETCH_BODY" RPC_PATH="$1" RPC_REFUSED=0
+        return 0
+    fi
+    RPC_ERR="$_RPC_FETCH_WHY"
+    RPC_REFUSED=0
+    [ "$rc" -ne 3 ] || RPC_REFUSED=1
+    echo "rpc_read: no usable answer from the app on $1 ($RPC_ERR)" >&2
+    return 2
+}
+
+# rpc_is <filter> [jq-args...] — true when the last rpc_read answered 200 and
+# `jq -e <filter>` holds on its body. Any other code is false, so a 404 cannot
+# satisfy a negative filter; a filter that errors is false too.
+rpc_is() {
+    local filter="$1"
+    shift
+    [ "${RPC_STATUS:-}" = 200 ] && [ -n "${RPC_BODY:-}" ] \
+        && jq -e "$@" "$filter" <<<"$RPC_BODY" >/dev/null 2>&1
+}
+
+# rpc_field <filter> [jq-args...] — `jq -r <filter>` over the last rpc_read's
+# body when it answered 200; prints nothing and returns 1 for any other code
+# or a filter that fails. For reading a field (`.state`) out of an answer
+# whose code the caller has not checked.
+rpc_field() {
+    local filter="$1"
+    shift
+    [ "${RPC_STATUS:-}" = 200 ] && jq -r "$@" "$filter" <<<"$RPC_BODY" 2>/dev/null
+}
+
+# poll_rpc <path> [--not-yet <code>]... [--each <cmd>] [--judge-deadline-read]
+#          <timeout_s> <interval_s> <predicate> [args...]   (options in any order)
+# poll_state over fresh rpc_read's of <path>: same options, same statuses,
+# same logging and deadline rule (see poll_state). The predicate runs only on
+# an answer and reads RPC_STATUS and RPC_BODY (rpc_is, or a function that also
+# stashes fields).
+#
+# A 200 and a 409 are answers the predicate judges; so is each --not-yet code,
+# for a route that answers it while the awaited thing is still on its way (a
+# 404 on GET .../naming before the job parks, on GET /v1/jobs/<id> before a
+# restore). Any other code cannot turn into a 200 by waiting (a 404 for an
+# unknown job, a 400, a 5xx), so the poll stops at once with status 5 rather
+# than sit out the window and read as a feature timeout. A route whose 503
+# means "not ready yet" (the /ui endpoints, while their window is not open)
+# needs --not-yet 503. A refusal (401/403)
+# stops it at once too, as no usable answer (status 2).
+poll_rpc() {
+    local _p_path="$1"
+    shift
+    local _p_read=_poll_rpc_read _p_err=RPC_ERR _p_what="$_p_path" _p_name=poll_rpc
+    local _p_settles=_poll_rpc_settles _p_not_yet="200 409"
+    local -a _p_keep=(RPC_STATUS RPC_BODY RPC_PATH)
+    _poll_answers "$@"
+}
+
+# poll_rpc's reader: quiet, since the poll logs the first and last gap itself.
+_poll_rpc_read() { rpc_read "$_p_path" 2>/dev/null; }
+
+# poll_rpc's check on an answer: true when its code is one the wait may get past.
+_poll_rpc_settles() {
+    case " $_p_not_yet " in
+        *" $RPC_STATUS "*) return 0 ;;
+    esac
+    return 1
+}
+
+# rpc_why <status> <path> <message> — the failure message for an rpc_read,
+# poll_rpc or metrics_snapshot status. 1 (answered, never held): <message>, and
+# the last answer to <path>, code and body, when this shell holds one (not
+# when the read ran in a $(...) subshell). 2: that the app gave no usable
+# answer (or refused the token), so the check never ran. 5: the code the app
+# answered, which the wait could not get past.
+rpc_why() {
+    local last=""
+    [ "${RPC_PATH:-}" != "$2" ] || last=" (last answer: HTTP $RPC_STATUS ${RPC_BODY:-<empty body>})"
+    case "$1" in
+        1) echo "$3$last" ;;
+        2)
+            if [ "${RPC_REFUSED:-0}" = 1 ]; then
+                echo "the app refused the driver's token on $2 (reason logged above), so this went unchecked: $3"
+            else
+                echo "no answer from the app on $2 (reason logged above), so this went unchecked: $3"
+            fi ;;
+        4) echo "the per-tick check handed to poll_rpc failed (its output is above), so this went unchecked: $3" ;;
+        5) echo "the app answered $2 with a code this wait cannot get past (an unknown id, a bad request or a server error): $3$last" ;;
+        *) echo "$3" ;;
+    esac
+}
+
+# metrics_snapshot — one GET /metrics into RPC_BODY. 0: a usable snapshot. 1:
+# an answer that is not one. 2: no usable answer (rpc_read logged why). Call it
+# bare, not in $(...), so rpc_why sees the read:
+# `metrics_snapshot || fail "$(rpc_why $? /metrics ...)"; snap="$RPC_BODY"`.
+metrics_snapshot() {
+    rpc_read /metrics || return 2
+    rpc_is '.monotonicTimeSeconds > 0'
 }
 
 # state_read — one bounded read of /state. Answered: the body in STATE_BODY,
 # status 0. Not answered: STATE_BODY keeps the last answer (what a timed-out
-# poll wants to show), the reason goes to STATE_ERR, status 2. Runs in the
-# current shell so both survive; call it bare or in a condition, not in $(...).
+# poll wants to show), the reason goes to STATE_ERR, status 2, and
+# RPC_REFUSED says whether it was a refusal. Runs in the current shell so all
+# of them survive; call it bare or in a condition, not in $(...).
+# curl with the driver's RPC_TOKEN when it holds one, since its token file can
+# sit in a lane's own home where mt-cli does not look; mt-cli (which exits
+# non-zero on any transport failure) for the drivers that only ever talk
+# through $MTCLI.
 state_read() {
-    local body err status=0
-    err="$(mktemp "${TMPDIR:-/tmp}/state-read.XXXXXX")" || { STATE_ERR="mktemp failed"; return 2; }
-    body="$(run_bounded "$STATE_READ_BOUND_S" _state_transport 2>"$err")" || status=$?
-    if [ "$status" -eq 0 ] && [ -n "$body" ] && jq -e 'type == "object"' <<<"$body" >/dev/null 2>&1; then
-        STATE_BODY="$body"
+    local body err rc=0 bound
+    RPC_REFUSED=0
+    if [ -n "${RPC_TOKEN:-}" ]; then
+        _rpc_fetch /state || rc=$?
+        [ "$rc" -ne 3 ] || RPC_REFUSED=1
+        [ "$rc" -eq 0 ] || { STATE_ERR="$_RPC_FETCH_WHY"; return 2; }
+        body="$_RPC_FETCH_BODY"
+        if [ "$_RPC_FETCH_CODE" != 200 ]; then
+            STATE_ERR="the app answered HTTP $_RPC_FETCH_CODE instead of the state: '$(head -c 200 <<<"$body")'"
+            return 2
+        fi
+    elif [ -n "${MTCLI:-}" ]; then
+        bound="${RPC_READ_BOUND_S:-${STATE_READ_BOUND_S:-15}}"
+        err="$(mktemp "${TMPDIR:-/tmp}/state-read.XXXXXX")" || { STATE_ERR="mktemp failed"; return 2; }
+        body="$(run_bounded "$bound" "$MTCLI" state 2>"$err")" || rc=$?
+        case "$rc" in
+            0) ;;
+            124) STATE_ERR="no reply within ${bound}s" ;;
+            *) STATE_ERR="the request failed (exit $rc): $(tr '\n' ' ' <"$err" | head -c 300)" ;;
+        esac
         rm -f "$err"
+        [ "$rc" -eq 0 ] || return 2
+    else
+        STATE_ERR="neither RPC_TOKEN nor MTCLI is set, so there is no way to ask the app"
+        return 2
+    fi
+    if [ -n "$body" ] && jq -e 'type == "object"' <<<"$body" >/dev/null 2>&1; then
+        STATE_BODY="$body"
         return 0
     fi
-    case "$status" in
-        0) STATE_ERR="the reply was not a JSON object: '$(head -c 200 <<<"$body")'" ;;
-        124) STATE_ERR="no reply within ${STATE_READ_BOUND_S}s" ;;
-        *) STATE_ERR="the request failed (exit $status): $(tr '\n' ' ' <"$err" | head -c 300)" ;;
-    esac
-    rm -f "$err"
+    STATE_ERR="the reply was not a JSON object: '$(head -c 200 <<<"$body")'"
     return 2
 }
 
@@ -299,7 +471,7 @@ state_is() {
 #   as "a job that is new and terminal": seen on that read after a gap, it
 #   proves as much as it would on any answered tick, the last of which can
 #   land past the deadline as well. Not for a predicate with a time bound: the
-#   deadline read can return up to STATE_READ_BOUND_S after the window. It
+#   deadline read can return up to RPC_READ_BOUND_S after the window. It
 #   passes only when the app also answered inside the window. Without it, a
 #   condition first seen on the deadline read is not a pass.
 #
@@ -307,37 +479,64 @@ state_is() {
 # end, so the condition was false on every answer (gaps inside the window are
 # logged, not held against the verdict). 2: the app was not answering: no
 # answer in the whole window, or none at its end and none to one more read, so
-# a single dropped read at the deadline is not taken for a dead app. 4: the
-# --each command returned non-zero. 1 and 2 are what keep "never happened"
-# apart from "nobody there to ask"; state_why words them.
+# a single dropped read at the deadline is not taken for a dead app; also, at
+# once, the app refusing the driver's token (RPC_REFUSED=1). 4: the --each
+# command returned non-zero. 1 and 2 are what keep "never happened" apart
+# from "nobody there to ask"; state_why words them.
 poll_state() {
+    # _p_settles and _p_not_yet empty: a poll_state nested in a poll_rpc
+    # predicate must not see the outer poll's through dynamic scoping.
+    local _p_read=state_read _p_err=STATE_ERR _p_what=/state _p_name=poll_state
+    local _p_settles="" _p_not_yet=""
+    local -a _p_keep=(STATE_BODY)
+    _poll_answers "$@"
+}
+
+# The loop behind poll_state and poll_rpc. The wrapper sets, as locals this
+# sees through dynamic scoping: _p_read (the reader, 0 answered / non-zero
+# not, RPC_REFUSED=1 for a refusal), _p_err (the variable it leaves the reason
+# in), _p_keep (the variables that hold its answer, put back to the window's
+# last answer when the deadline read is not judged), _p_what / _p_name for the
+# log lines, and optionally _p_settles (a check on each answer; false stops the
+# poll with status 5).
+_poll_answers() {
     local each="" judge_late=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --each) each="$2"; shift 2 ;;
             --judge-deadline-read) judge_late=1; shift ;;
+            --not-yet) _p_not_yet="$_p_not_yet $2"; shift 2 ;;
             *) break ;;
         esac
     done
-    local timeout="$1" interval="$2" answered=0 last=0 quiet_since="" each_rc=0
+    local timeout="$1" interval="$2" answered=0 last=0 quiet_since="" stop_rc=0
     shift 2
-    if poll_until "$timeout" "$interval" _poll_state_tick "$@"; then
-        return "$each_rc"
+    if poll_until "$timeout" "$interval" _poll_answers_tick "$@"; then
+        return "$stop_rc"
     fi
     if [ "$last" -eq 1 ]; then
         return 1
     fi
     # The extra read asks whether the app still answers. Without
     # --judge-deadline-read the predicate is not run on it, since a condition
-    # first true after the window is not one that held inside it, and
-    # STATE_BODY stays the window's last answer, for the caller's diagnostics.
-    local window_body="${STATE_BODY:-}"
+    # first true after the window is not one that held inside it, and the
+    # answer variables stay the window's last answer, for the caller's
+    # diagnostics.
+    local -a _p_window=()
+    local _p_v _p_i=0
+    for _p_v in "${_p_keep[@]}"; do
+        _p_window+=("${!_p_v:-}")
+    done
     if [ -n "$each" ]; then
         "$each" || return 4
     fi
-    if ! state_read; then
-        echo "poll_state: no answer from the app on /state at the end of the ${timeout}s window${quiet_since:+, none for the last $(( SECONDS - quiet_since ))s} ($STATE_ERR)" >&2
+    if ! "$_p_read"; then
+        echo "$_p_name: no answer from the app on $_p_what at the end of the ${timeout}s window${quiet_since:+, none for the last $(( SECONDS - quiet_since ))s} (${!_p_err})" >&2
         return 2
+    fi
+    if [ -n "${_p_settles:-}" ] && ! "$_p_settles"; then
+        _poll_answers_unsettled
+        return 5
     fi
     # Judged only after answers inside the window: a pass needs the window to
     # have been observed at all, or what a caller collected per tick (a value
@@ -345,38 +544,57 @@ poll_state() {
     if [ "$judge_late" -eq 1 ] && [ "$answered" -eq 1 ]; then
         "$@" && return 0
     elif [ "$judge_late" -eq 0 ]; then
-        STATE_BODY="$window_body"
+        for _p_v in "${_p_keep[@]}"; do
+            printf -v "$_p_v" '%s' "${_p_window[$_p_i]}"
+            _p_i=$(( _p_i + 1 ))
+        done
     fi
     if [ "$answered" -eq 0 ]; then
-        echo "poll_state: the app answered /state only after the ${timeout}s window, never inside it" >&2
+        echo "$_p_name: the app answered $_p_what only after the ${timeout}s window, never inside it" >&2
         return 2
     fi
     return 1
 }
 
-# One poll_state tick: the --each command, a read, then the predicate if the
-# app answered. It updates poll_state's answered / last / quiet_since /
-# each_rc, which bash's dynamic scoping makes visible here. A failed --each
-# command ends poll_until (by returning 0) with each_rc set.
-_poll_state_tick() {
+# One _poll_answers tick: the --each command, a read, then the predicate if
+# the app answered. It updates _poll_answers' answered / last / quiet_since /
+# stop_rc, which bash's dynamic scoping makes visible here. Whatever has to
+# stop the poll before its window ends (a failed --each command, a refused
+# token, an answer _p_settles rejects) ends poll_until by returning 0, with
+# stop_rc set.
+_poll_answers_tick() {
     if [ -n "$each" ] && ! "$each"; then
-        each_rc=4
+        stop_rc=4
         return 0
     fi
-    if ! state_read; then
+    if ! "$_p_read"; then
+        if [ "${RPC_REFUSED:-0}" = 1 ]; then
+            echo "$_p_name: ${!_p_err} on $_p_what; a token does not start working by waiting, so the poll stops" >&2
+            stop_rc=2
+            return 0
+        fi
         last=0
         if [ -z "$quiet_since" ]; then
             quiet_since="$SECONDS"
-            echo "poll_state: no answer from the app on /state ($STATE_ERR); still polling" >&2
+            echo "$_p_name: no answer from the app on $_p_what (${!_p_err}); still polling" >&2
         fi
         return 1
     fi
     if [ -n "$quiet_since" ]; then
-        echo "poll_state: the app answers /state again, after $(( SECONDS - quiet_since ))s without an answer" >&2
+        echo "$_p_name: the app answers $_p_what again, after $(( SECONDS - quiet_since ))s without an answer" >&2
         quiet_since=""
     fi
     answered=1 last=1
+    if [ -n "${_p_settles:-}" ] && ! "$_p_settles"; then
+        _poll_answers_unsettled
+        stop_rc=5
+        return 0
+    fi
     "$@"
+}
+
+_poll_answers_unsettled() {
+    echo "$_p_name: the app answered $_p_what with HTTP ${RPC_STATUS:-?}, which waiting cannot turn into a 200, so the poll stops" >&2
 }
 
 # state_why <status> <message> — the failure message for a state_query or
@@ -384,7 +602,12 @@ _poll_state_tick() {
 # that the app did not, so the check never ran, when it did not.
 state_why() {
     case "$1" in
-        2) echo "no answer from the app on /state (reason logged above), so this went unchecked: $2" ;;
+        2)
+            if [ "${RPC_REFUSED:-0}" = 1 ]; then
+                echo "the app refused the driver's token on /state (reason logged above), so this went unchecked: $2"
+            else
+                echo "no answer from the app on /state (reason logged above), so this went unchecked: $2"
+            fi ;;
         3) echo "the jq filter failed on the app's /state answer (jq's error is above): $2" ;;
         4) echo "the per-tick check handed to poll_state failed (its output is above), so this went unchecked: $2" ;;
         *) echo "$2" ;;
