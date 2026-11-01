@@ -13,7 +13,9 @@ struct NotionExportConfiguration {
     @MainActor
     static func resolve(settings: AppSettings) -> NotionExportResolution {
         guard settings.notionExportEnabled else { return .disabled }
-        let key = settings.notionAPIKey
+        // Trimmed like the client and the Settings notice do: a key of only
+        // whitespace is no key, and would otherwise fail every export as a bad token.
+        let key = settings.notionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let databaseID = settings.notionDatabaseID
         guard !key.isEmpty, !databaseID.isEmpty else { return .unconfigured }
         return .ready(Self(
