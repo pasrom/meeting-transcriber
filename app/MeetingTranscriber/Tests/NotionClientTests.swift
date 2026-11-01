@@ -499,8 +499,8 @@ final class NotionClientTests: XCTestCase {
                 }
                 let secondPage = request.url?.query?.contains("start_cursor") == true
                 let json = secondPage
-                    ? #"{"results":[{"id":"block-2"}],"has_more":false}"#
-                    : #"{"results":[{"id":"block-1"}],"has_more":true,"next_cursor":"next"}"#
+                    ? #"{"results":[{"id":"block-2","type":"paragraph"}],"has_more":false}"#
+                    : #"{"results":[{"id":"block-1","type":"paragraph"}],"has_more":true,"next_cursor":"next"}"#
                 return (Self.okResponse(for: request), Data(json.utf8))
             }
             if request.httpMethod == "DELETE" {

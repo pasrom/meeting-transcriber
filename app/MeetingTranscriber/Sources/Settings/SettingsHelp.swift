@@ -91,7 +91,8 @@ enum SettingsHelp {
 
         Speaker names are only added to Tags when "Include speaker names \
         as tags" is enabled. Re-exporting after speaker naming replaces \
-        the exported page content, including edits made in Notion.
+        the exported page content, including text edited in Notion. \
+        Sub-pages, databases, images and embeds added under the page are kept.
         """
 
     static let asymmetricSilenceWarning =
