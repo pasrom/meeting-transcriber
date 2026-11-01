@@ -319,11 +319,14 @@ struct KnownVoicesView: View {
         /// Nothing to do (name not found, same name). The DB is unchanged.
         case unchanged
         /// Could not be saved; the matcher notifies the user. The list is not
-        /// reloaded, since an unusable DB would read as empty: it keeps
-        /// showing the names the user knows, and the selection stays valid.
+        /// reloaded: an unreadable DB reads as empty and a damaged one as only
+        /// its salvaged entries, so the list keeps showing the names the user
+        /// knows, and the selection stays valid.
         case notSaved
-        /// The DB was undecodable and was replaced by an empty one, set aside
-        /// by the matcher (which notifies the user). The list is now empty.
+        /// The DB was damaged and was replaced by the entries that could be
+        /// salvaged (none, if it did not decode at all), set aside by the
+        /// matcher (which notifies the user). The edited name was not among
+        /// them, and the list now holds only what was salvaged.
         case dbReset
     }
 
