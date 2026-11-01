@@ -136,13 +136,9 @@ source "$SCRIPT_DIR/lib/signing.sh"
 
 require_command() { command -v "$1" >/dev/null || fail "missing command: $1"; }
 
+# Read by the /state helpers (state_read in scripts/lib/e2e-helpers.sh) once
+# the token file appears.
 RPC_TOKEN=""
-# Transient-tolerant GET so poll loops under `set -e` keep going on a hiccup.
-rpc() {
-    curl --silent --show-error --max-time 15 \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        "$RPC_BASE$1" 2>/dev/null || true
-}
 
 # Quit only the fixture Chrome instance (its argv carries our profile dir) —
 # never the user's own Chrome windows.
@@ -298,17 +294,12 @@ log "RPC up"
 # app resolves is silent, and this lane's whole proof rests on record-only being
 # on. Assert the app's own resolved view instead of discovering it as a missing
 # sidecar several minutes later.
-# `rpc` has no --fail, so a bare emptiness test would accept an error body and
-# then read the setting as null, which would be reported as the wrong
-# preference domain. Require the field itself before believing its value.
-_state_snapshot() {
-    _SNAP="$(rpc /state)"
-    [ -n "$_SNAP" ] && jq -e '.settings.recording | has("recordOnly")' <<<"$_SNAP" >/dev/null 2>&1
-}
-_SNAP=""
-poll_until 20 1 _state_snapshot \
-    || fail "/healthz answered but no /state carrying settings.recording.recordOnly arrived within 20s. Either the app came up without serving a state snapshot, or something other than the dev app is holding 127.0.0.1:9876."
-_RESOLVED_RECORD_ONLY="$(jq -r '.settings.recording.recordOnly' <<<"$_SNAP")"
+# An answer without the field would read the setting as null, which would be
+# reported as the wrong preference domain. Require the field itself before
+# believing its value.
+poll_state 20 1 state_is '.settings.recording | has("recordOnly")' \
+    || fail "$(state_why $? "/healthz answered but no /state carrying settings.recording.recordOnly arrived within 20s. Either the app came up without serving a state snapshot, or something other than the dev app is holding 127.0.0.1:9876.")"
+_RESOLVED_RECORD_ONLY="$(jq -r '.settings.recording.recordOnly' <<<"$STATE_BODY")"
 [ "$_RESOLVED_RECORD_ONLY" = "true" ] \
     || fail "the app resolved settings.recording.recordOnly=$_RESOLVED_RECORD_ONLY, this lane needs true. Most likely the preference write did not reach the domain the app reads (see write_dev_default in scripts/lib/e2e-helpers.sh); the other possibility is that a different MeetingTranscriber instance is answering on 127.0.0.1:9876."
 log "app resolved recordOnly=true (as configured)"
@@ -326,14 +317,10 @@ log "Checking notification authorization (the consent prompt is a notification)"
 # snapshot — so an empty reply here means "not ready yet", NOT "no permission".
 # Treating empty as a known value made this abort in 17 ms and report a blank
 # status; the poll has to keep waiting until a real one appears.
-_notification_auth() { rpc /state | jq -r '.permissionHealth.notifications // empty' 2>/dev/null; }
-_notification_auth_known() {
-    local value
-    value="$(_notification_auth)"
-    [ -n "$value" ] && [ "$value" != "unknown" ]
-}
-poll_until 30 1 _notification_auth_known || true
-NOTIFICATION_AUTH="$(_notification_auth)"
+status=0
+poll_state 30 1 state_is '(.permissionHealth.notifications // "") | . != "" and . != "unknown"' || status=$?
+[ "$status" -ne 2 ] || fail "$(state_why 2 "which notification authorization the app has")"
+NOTIFICATION_AUTH="$(jq -r '.permissionHealth.notifications // empty' <<<"$STATE_BODY")"
 case "$NOTIFICATION_AUTH" in
     authorized)
         log "Notification authorization: $NOTIFICATION_AUTH"
@@ -359,8 +346,12 @@ esac
 # Center, showed no banner and expired on its timer. Same silent death as a
 # denial, and the check above cannot see it.
 log "Checking the prompt would actually be shown (banner + Focus breakthrough)"
-NOTIFICATION_ALERT_STYLE="$(rpc /state | jq -r '.permissionHealth.notificationsAlertStyle // "unknown"')"
-NOTIFICATION_TIME_SENSITIVE="$(rpc /state | jq -r '.permissionHealth.notificationsTimeSensitive // "unknown"')"
+# Read from the answer the authorization poll ended on: the app reports the
+# whole visibility together. A fresh unanswered read used to come out as
+# "unknown", which passes both checks below.
+read -r NOTIFICATION_ALERT_STYLE NOTIFICATION_TIME_SENSITIVE < <(
+    jq -r '"\(.permissionHealth.notificationsAlertStyle // "unknown") \(.permissionHealth.notificationsTimeSensitive // "unknown")"' <<<"$STATE_BODY"
+)
 log "Alert style: $NOTIFICATION_ALERT_STYLE, time-sensitive: $NOTIFICATION_TIME_SENSITIVE"
 if [ "$NOTIFICATION_ALERT_STYLE" = "none" ]; then
     fail "the dev app's alert style is None, so the consent prompt shows no banner and
@@ -385,7 +376,7 @@ fi
 # and whether the WebRTC assertion was actually present. Never fails the script.
 _dump_detection_diag() {
     log "DIAG: watchState=$(watch_state)"
-    log "DIAG: /state.settings.detection = $(rpc /state | jq -c '.settings.detection // {}' 2>/dev/null)"
+    log "DIAG: /state.settings.detection = $(state_query '.settings.detection // {}' -c 2>/dev/null || echo '<no answer>')"
     log "DIAG: effective watchBrowserMeetings std=$(snapshot_default "$_STANDARD_PLIST" watchBrowserMeetings) ctr=$([ -f "$_CONTAINER_PLIST" ] && snapshot_default "$_CONTAINER_PLIST" watchBrowserMeetings)"
     log "DIAG: effective autoWatch std=$(snapshot_default "$_STANDARD_PLIST" autoWatch)"
     log "DIAG: pmset WebRTC assertions:"
@@ -435,13 +426,11 @@ log "Waiting up to ${DETECT_TIMEOUT_S}s for the consent prompt to park"
 # meeting is carried under the process that held the assertion. That is what
 # keeps a decline in one fork from silencing the others, so asserting the
 # concrete name here is what would catch a regression back to shared keying.
-_consent_parked() {
-    assert_app_alive
-    [ "$(rpc /state | jq -r '.pendingConsentApp // ""')" = "$BROWSER_LABEL" ]
-}
-poll_until "$DETECT_TIMEOUT_S" 2 _consent_parked || {
+poll_state --each assert_app_alive "$DETECT_TIMEOUT_S" 2 \
+    state_is '.pendingConsentApp == $label' --arg label "$BROWSER_LABEL" || {
+    status=$?
     _dump_detection_diag
-    fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — $BROWSER_LABEL detection or the assertion never fired"
+    fail "$(state_why "$status" "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — $BROWSER_LABEL detection or the assertion never fired")"
 }
 log "Consent prompt parked (identity $BROWSER_LABEL)"
 
@@ -484,26 +473,20 @@ fi
 # one, and that it went out flagged deliverable rather than recorded-but-dropped.
 # Without both, a regression that stopped posting the prompt entirely would keep
 # this lane green.
-_consent_notification_posted() {
-    rpc /state | jq -e \
-        '[.notifications[]? | select(.title == "Record browser meeting?" and .posted == true)] | length > 0' \
-        >/dev/null 2>&1
-}
-_consent_cleared() { [ "$(rpc /state | jq -r '.pendingConsentApp // ""')" = "" ]; }
-poll_until 10 1 _consent_cleared \
-    || fail "consent was answered but /state still reports a parked prompt for
-       $(rpc /state | jq -r '.pendingConsentApp // "?"') — the gate never took the answer"
+# Cleared is a negative check: an unanswered read used to count as cleared.
+poll_state 10 1 state_is '(.pendingConsentApp // "") == ""' \
+    || fail "$(state_why $? "consent was answered but /state still reports a parked prompt for
+       $(jq -r '.pendingConsentApp // "?"' <<<"$STATE_BODY") — the gate never took the answer")"
 
-poll_until 10 1 _consent_notification_posted \
-    || fail "consent was answered over RPC, but the app never posted a deliverable
+poll_state 10 1 state_is '[.notifications[]? | select(.title == "Record browser meeting?" and .posted == true)] | length > 0' \
+    || fail "$(state_why $? "consent was answered over RPC, but the app never posted a deliverable
        consent notification — a real user would have seen nothing. Check
-       NotificationManager.askToRecord and its ring-buffer record."
+       NotificationManager.askToRecord and its ring-buffer record.")"
 log "Consent notification was posted and flagged deliverable"
 
 log "Waiting for recording to start (watchState == recording)"
-_is_recording() { [ "$(watch_state)" = "recording" ]; }
-poll_until "$DETECT_TIMEOUT_S" 2 _is_recording \
-    || fail "watchState never reached 'recording' after consent"
+poll_state "$DETECT_TIMEOUT_S" 2 state_is '.watchState == "recording"' \
+    || fail "$(state_why $? "watchState never reached 'recording' after consent")"
 log "Recording started; capturing ${RECORD_SECONDS}s of tone"
 sleep "$RECORD_SECONDS"
 
@@ -512,16 +495,13 @@ quit_chrome
 
 log "Waiting up to ${STOP_TIMEOUT_S}s for recording to stop"
 # Not recording, and the app answered: an unanswered /state is not a stop.
-_not_recording() {
-    local state
-    state="$(watch_state)"
-    [ "$state" != "recording" ] && [ "$state" != "unreadable" ]
-}
-if ! poll_until "$STOP_TIMEOUT_S" 2 _not_recording; then
-    [ "$(watch_state)" != unreadable ] \
-        || fail "the app stopped answering /state after Chrome quit (crashed or hung?), so whether the meeting end was detected is unknown"
-    fail "watchState stayed 'recording' after Chrome quit — meeting-end not detected"
-fi
+status=0
+poll_state "$STOP_TIMEOUT_S" 2 state_is '.watchState != "recording"' || status=$?
+case "$status" in
+    0) ;;
+    1) fail "watchState stayed 'recording' after Chrome quit — meeting-end not detected" ;;
+    *) fail "$(state_why "$status" "whether the meeting end was detected after Chrome quit (the app crashed or hung?)")" ;;
+esac
 
 # --- assert: a non-silent app track was captured --------------------------
 
