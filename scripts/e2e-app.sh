@@ -46,6 +46,8 @@ ECHO_CANCEL=false        # same two pairs with the canceller ON: assert the far 
 QUIT_FLUSH=false         # quit with a manual recording running + assert the recording survives as a job (issue #745, see run_quit_flush)
 MIC_STALL=""             # stall | stall-after-delivery: withhold the mic's buffers and assert the progress watchdog (see run_mic_stall)
 UPGRADE=false            # start the build on the data v0.8.1 leaves behind, in an isolated home (see run_upgrade)
+PROTOCOL_LANE=false      # generate the protocol through a local OpenAI-compatible stub and assert request + file (see run_protocol_lane)
+PROTOCOL_REPAIR=false    # only finish what a killed --protocol run left on the host, then exit (see _pp_repair)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -73,12 +75,15 @@ while [ $# -gt 0 ]; do
         --mic-stall)        MIC_STALL=stall ;;
         --mic-stall-late)   MIC_STALL=stall-after-delivery ;;
         --upgrade)          UPGRADE=true ;;
+        --protocol)         PROTOCOL_LANE=true ;;
+        --protocol-repair)  PROTOCOL_REPAIR=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                   [--reimport-recorded | --reimport-latest] [--keep-recordings]
                   [--naming-escape] [--naming-switch] [--echo-bleed] [--echo-cancel]
-                  [--naming-confirm] [--quit-flush] [--upgrade] [--fixture path/to.wav]
+                  [--naming-confirm] [--quit-flush] [--upgrade] [--protocol]
+                  [--fixture path/to.wav]
 
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app           Leave the dev app running on exit. Default: quit it.
@@ -261,6 +266,39 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        tokenizer), by default the account's app model folder,
                        which it only reads. Records nothing, so needs no TCC
                        grant and no audio device. Standalone lane.
+  --protocol           Run the protocol stage against a local OpenAI-compatible
+                       stub (scripts/fixtures/openai-chat-stub.py on a free
+                       127.0.0.1 port) instead of a real model. Imports a short
+                       fixture twice via POST /v1/jobs. First with the stub
+                       answering: asserts the one chat-completions request it got
+                       (model, stream, max_tokens, temperature set and top_p
+                       absent, the protocol language in the system prompt, the
+                       transcript file as the user message), then the job done with
+                       no protocol warning and protocolPath naming a file in the
+                       output folder that is the stub's reply plus the
+                       transcript. Then with the stub answering HTTP 500:
+                       asserts the job done with the "transcript saved" warning,
+                       no protocolPath and no protocol file. Changes the host's
+                       protocol, OpenAI and diarize/output settings and restores
+                       them on exit, or on the next run of this script (or
+                       --protocol-repair) when one was killed. Leaves the API
+                       key alone: the request carries whatever key the host has,
+                       and the stub never logs it. Quits the app on every exit,
+                       since it holds those settings in memory, and removes the
+                       jobs' transcripts, protocols and sidecars.
+                       Outside CI it refuses, changing nothing, while the
+                       pipeline queue or the staging folder holds work the
+                       launch would send to the stub. Needs python3. Standalone
+                       lane; incompatible with --keep-app.
+  --protocol-repair    Finish what a killed --protocol run left: quit a running
+                       dev app (it may hold the lane's settings), stop a leftover
+                       stub, restore the recorded settings, drop the lane's
+                       unfinished jobs from the queue snapshot and remove its
+                       output files. Exits non-zero when a setting did not come
+                       back. A no-op when nothing is left. CI runs it as an
+                       always() step after the lane. Outside CI a running dev
+                       app is quit only with --quit-foreign-app. Runs nothing
+                       else; incompatible with the lane flags.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
   --quit-foreign-app   Outside CI the driver refuses to start while a dev app it did
                        not launch is running (someone may be using it). Pass this
@@ -278,6 +316,33 @@ done
 # through to whichever branch the dispatch chain checks first.
 if [ "$REIMPORT_RECORDED" = true ] && [ "$REIMPORT_LATEST" = true ]; then
     echo "Error: --reimport-recorded and --reimport-latest are mutually exclusive" >&2
+    exit 2
+fi
+# --protocol points the host's protocol provider at a stub for the whole run, so
+# any other lane in the same run would send its transcript there, and its own
+# settings (diarize off among them) would change what that lane asserts.
+if [ "$PROTOCOL_LANE" = true ] && { [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] \
+    || [ "$NAMING_SWITCH" = true ] || [ "$RECORD_ONLY" = true ] || [ "$REIMPORT_RECORDED" = true ] \
+    || [ "$REIMPORT_LATEST" = true ] || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] \
+    || [ "$REDEPLOY_ONLY" = true ] || [ "$TWO_MEETINGS" = true ] || [ "$MIC_ONLY" = true ] \
+    || [ "$TITLE_SOURCE" = true ] || [ "$ECHO_BLEED" = true ] || [ "$ECHO_CANCEL" = true ] \
+    || [ "$QUIT_FLUSH" = true ] || [ -n "$MIC_STALL" ] || [ "$UPGRADE" = true ] \
+    || [ -n "$SIMULATOR_FIXTURE" ]; }; then
+    echo "Error: --protocol is a standalone lane; incompatible with the other lane flags and --fixture" >&2
+    exit 2
+fi
+if [ "$PROTOCOL_REPAIR" = true ] && { [ "$PROTOCOL_LANE" = true ] || [ "$NAMING_CONFIRM" = true ] \
+    || [ "$NAMING_ESCAPE" = true ] || [ "$NAMING_SWITCH" = true ] || [ "$RECORD_ONLY" = true ] \
+    || [ "$REIMPORT_RECORDED" = true ] || [ "$REIMPORT_LATEST" = true ] || [ "$MIC_DEVICE_CHANGE" = true ] \
+    || [ "$CRASH_RECOVERY" = true ] || [ "$REDEPLOY_ONLY" = true ] || [ "$TWO_MEETINGS" = true ] \
+    || [ "$MIC_ONLY" = true ] || [ "$TITLE_SOURCE" = true ] || [ "$ECHO_BLEED" = true ] \
+    || [ "$ECHO_CANCEL" = true ] || [ "$QUIT_FLUSH" = true ] || [ -n "$MIC_STALL" ] \
+    || [ "$UPGRADE" = true ] || [ -n "$SIMULATOR_FIXTURE" ]; }; then
+    echo "Error: --protocol-repair runs nothing but the repair; incompatible with the lane flags and --fixture" >&2
+    exit 2
+fi
+if [ "$PROTOCOL_LANE" = true ] && [ "$APP_AFTER" = leave ]; then
+    echo "Error: --protocol quits the app on exit, which holds the lane's settings in memory; incompatible with --keep-app" >&2
     exit 2
 fi
 
@@ -522,6 +587,127 @@ if [ "$UPGRADE" = true ]; then
     trap '_ug_cleanup' EXIT
     mkdir -p "$APP_HOME/Library/Application Support" "$APP_HOME/Documents" "$APP_HOME/Downloads"
 fi
+# The protocol lane's state. What has to outlive a killed run sits in the same
+# directory as the mic-stall lane's records, so the repair at the start of every
+# later run (and the workflow's always-run step, --protocol-repair) can finish
+# what a killed run left: the settings it overrides as they were before, the ids
+# of the jobs it enqueued, and the files those jobs wrote into the host's output
+# folder.
+#
+# The lane does not touch the API key. The app reads it from the Keychain, and
+# a lane-owned item would mean editing the user keychain search list, which is
+# shared with the second runner and with an installed app on the same host. So
+# the request carries whatever key the host has configured, the stub never logs
+# it, and where the key goes is covered by OpenAIProtocolGeneratorTests.
+# The deployed dev app's process, for every pgrep in this script (here because
+# the protocol helpers below need it before the preflight runs).
+_DEV_APP_PATTERN="MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber"
+_PP_RECORD="$_MS_STATE_DIR/protocol-lane-defaults"
+_PP_JOBS_RECORD="$_MS_STATE_DIR/protocol-lane-jobs"
+_PP_OUTPUTS_RECORD="$_MS_STATE_DIR/protocol-lane-outputs"
+# The host's own data and output folders, not $APP_HOME's: the lane never runs
+# in an isolated home, and the repair runs from every lane, --mic-stall and
+# --upgrade (whose $APP_HOME is a temp dir) included.
+_PP_HOST_SNAPSHOT="$HOME/Library/Application Support/MeetingTranscriber/ipc/pipeline_queue.json"
+_PP_HOST_OUTPUT_DIR="$HOME/Downloads/MeetingTranscriber"
+_PP_KEYS=(protocolProvider protocolLanguage openAIEndpoint openAIModel openAITemperature openAITopP
+    diarize saveRawTranscriptSeparately includeFullTranscriptInProtocol useAITitleForFilenames)
+_PP_MODEL="e2e-stub-model"
+_PP_LANGUAGE="French"
+_PP_TEMPERATURE=0.5   # exactly representable, so the JSON number compares exactly
+_PP_REPLY=$'# Meeting Protocol - E2E Stub Reply\n\n## Summary\nCanned protocol from the e2e chat-completions stub.'
+_PP_DIR=""
+_PP_STUB_PID=""
+
+# Finish what the lane left on the host: its settings, its unfinished jobs in
+# the queue snapshot, its output files. Idempotent, and every step keeps its own
+# record until it is done, so a later run retries only what is left. Returns 1
+# when a setting did not come back.
+#
+# The jobs are dropped by id, and only while no MeetingTranscriber runs at all
+# (the installed app shares the snapshot and could save it between the read and
+# the rename): a quit saves a job still in flight into the snapshot, and the
+# host's next launch would resume it under the host's own settings from a
+# fixture copy that no longer exists. Finished ones are left; the app discards
+# them at load. While any MeetingTranscriber runs they cannot be dropped, and
+# the next dev launch would resume them, so that is a failure too. The output
+# files are removed only inside the output folder. A killed run's stub is
+# matched by the lane's own temp-dir argument, which no other stub (the helper
+# test's, for one) carries.
+_pp_repair() {
+    local status=0 snapshot="$_PP_HOST_SNAPSHOT" ids f
+    pkill -f "openai-chat-stub.py --port-file /tmp/e2e-protocol\." 2>/dev/null || true
+    if [ -f "$_PP_RECORD" ]; then
+        if defaults_restore_record "$_PP_RECORD"; then
+            printf '[e2e-app] [protocol] protocol settings restored to the values before the lane\n'
+        else
+            printf '[e2e-app] WARNING: [protocol] some protocol settings were not restored; %s keeps them for the next run\n' "$_PP_RECORD" >&2
+            status=1
+        fi
+    fi
+    if [ -f "$_PP_JOBS_RECORD" ] && { pgrep -f "$_DEV_APP_PATTERN" >/dev/null 2>&1 || [ -n "$(non_dev_meetingtranscriber_pids)" ]; }; then
+        printf '[e2e-app] WARNING: [protocol] a MeetingTranscriber is running, so the lane jobs a killed run left (%s) cannot be dropped from the queue snapshot; quit it and rerun\n' "$_PP_JOBS_RECORD" >&2
+        status=1
+    elif [ -f "$_PP_JOBS_RECORD" ]; then
+        ids="$(jq -R 'ascii_downcase' "$_PP_JOBS_RECORD" | jq -s -c .)"
+        if [ ! -f "$snapshot" ]; then
+            rm -f "$_PP_JOBS_RECORD"
+        elif jq --argjson ids "$ids" \
+            'if type == "array" then map(select(((.id // "") | ascii_downcase) as $id
+                | ($ids | index($id)) == null or .state == "done" or .state == "error")) else . end' \
+            "$snapshot" >"$snapshot.e2e-tmp" 2>/dev/null && mv "$snapshot.e2e-tmp" "$snapshot"; then
+            rm -f "$_PP_JOBS_RECORD"
+        else
+            rm -f "$snapshot.e2e-tmp"
+            printf '[e2e-app] WARNING: [protocol] could not drop the lane jobs from %s; kept %s\n' "$snapshot" "$_PP_JOBS_RECORD" >&2
+        fi
+    fi
+    if [ -f "$_PP_OUTPUTS_RECORD" ]; then
+        while IFS= read -r f; do
+            case "$f" in
+                "$_PP_HOST_OUTPUT_DIR"/*) [ -f "$f" ] && rm -f "$f" && printf '[e2e-app] [protocol] removed %s\n' "$f" ;;
+            esac
+        done <"$_PP_OUTPUTS_RECORD"
+        rm -f "$_PP_OUTPUTS_RECORD"
+    fi
+    return "$status"
+}
+
+# Undo everything the protocol lane changed; idempotent, so the early trap and
+# on_exit can both run it. Returns 1 when the host's settings could not be put
+# back, which on_exit turns into a red run.
+#
+# The fast steps first and with INT/TERM ignored: a second signal during the
+# slow quit would otherwise end on_exit early (it runs once) with nothing
+# restored. Then any dev app that is still running: every other one was quit
+# before this lane launched, and it holds the lane's settings in memory (a stub
+# endpoint, diarize off), so left running after a failure it would process the
+# host's next meeting with them, after the restore on disk had already read back
+# clean. Stopping it also means no lane job can write a file after the removal.
+_pp_cleanup() {
+    local status=0
+    trap '' INT TERM
+    if [ -n "$_PP_STUB_PID" ]; then
+        kill "$_PP_STUB_PID" 2>/dev/null || true
+        wait "$_PP_STUB_PID" 2>/dev/null || true
+        _PP_STUB_PID=""
+    fi
+    rm -f "$_PP_RECORD.tmp"
+    if [ -f "$_PP_RECORD" ]; then
+        defaults_restore_record "$_PP_RECORD" || status=1
+    fi
+    if pgrep -f "$_DEV_APP_PATTERN" >/dev/null 2>&1; then
+        quit_running_app \
+            || printf '[e2e-app] WARNING: [protocol] the dev app could not be stopped; it still holds the lane settings in memory\n' >&2
+    fi
+    _pp_repair || status=1
+    if [ -n "$_PP_DIR" ] && [ -d "$_PP_DIR" ]; then
+        rm -rf "$_PP_DIR"
+        _PP_DIR=""
+    fi
+    return "$status"
+}
+
 RPC_TOKEN_FILE="$APP_HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 RPC_BASE="http://127.0.0.1:9876"
 
@@ -609,6 +795,23 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/localvqe-resources.sh"
 # compares with.
 # shellcheck source=lib/upgrade-seed.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/upgrade-seed.sh"
+
+# --protocol-repair: nothing else of this script runs. The dev app goes first,
+# since a running one holds the lane's settings and is what would keep a job in
+# flight; any dev app here is a leftover (CI runs this right after the lane).
+if [ "$PROTOCOL_REPAIR" = true ]; then
+    if pgrep -f "$_DEV_APP_PATTERN" >/dev/null 2>&1; then
+        # In CI it is the lane's own leftover; anywhere else it may be someone's
+        # session, so the same rule as the start-up guard: only when told.
+        [ "${GITHUB_ACTIONS:-}" = "true" ] || [ "$QUIT_FOREIGN_APP" = true ] \
+            || fail "[protocol-repair] the dev app is running and may be in use. Quit it yourself, or pass --quit-foreign-app if it is the lane's leftover."
+        log "[protocol-repair] quitting the running dev app"
+        quit_running_app || fail "[protocol-repair] the dev app could not be stopped"
+    fi
+    _pp_repair || fail "[protocol-repair] not everything could be undone (see the warning above; records in $_MS_STATE_DIR)"
+    log "[protocol-repair] nothing of a --protocol run is left"
+    exit 0
+fi
 
 require_command() {
     command -v "$1" >/dev/null || fail "missing command: $1"
@@ -1123,7 +1326,6 @@ if [ -n "$MIC_STALL" ]; then
         || fail "--mic-stall: a MeetingTranscriber that is not the dev app is running (pid(s): ${_installed% }). It would record the lane's synthetic meeting into the host's real folders. Quit it first; this lane does not quit it for you."
 fi
 
-_DEV_APP_PATTERN="MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber"
 # The marker a driver running the app in the host's own home leaves.
 _E2E_HOST_MARKER="$HOME/Library/Application Support/MeetingTranscriber/.e2e-app-launched"
 # The one a lane with an isolated home (--mic-stall, --upgrade) leaves. Outside that home,
@@ -1161,6 +1363,16 @@ fi
 # Always — even with --no-build, since UserDefaults below take effect
 # only on launch and the running RPC server would shadow the new one.
 quit_running_app
+
+# Whatever lane this is: finish what a killed --protocol run left, its
+# settings, its jobs and its files. Now, with the dev app stopped, and before
+# --quit-flush checks and backs up the shared queue, which would otherwise
+# count a lane job the repair is about to drop, or restore it at exit. Hard
+# failure when a setting does not come back: the lane that runs next would
+# launch with the stub endpoint and diarize off and report verdicts about a
+# configuration nobody chose.
+_pp_repair \
+    || fail "a killed --protocol run left something this run could not undo (see the warning above; records in $_MS_STATE_DIR). Fix what it names, then rerun."
 
 # --quit-flush: the dev app just quit may have been recording, and its quit
 # writes that recording into the shared state. So the queue check and the
@@ -1416,6 +1628,74 @@ if [ -n "$MIC_STALL" ]; then
     fi
     log "[mic-stall] protocol generation off for this run (was '$(cat "$_MS_PROTOCOL_RECORD")')"
     _set_dev_default protocolProvider none
+fi
+
+# The protocol lane: record the host's values, start the stub, then write, and
+# the app reads all of it at launch. The cleanup is armed before the record, as
+# the mic-stall lane does, because on_exit is installed only after the launch;
+# on_exit runs it again.
+if [ "$PROTOCOL_LANE" = true ]; then
+    require_command python3
+    # Any job the app resumes or recovers at launch would be sent to the stub
+    # and saved with its canned reply as that meeting's protocol. In CI the
+    # queue snapshot is reset before the launch (below) and the lane requires
+    # an idle app before its first job; on any other host, refuse before the
+    # lane changes any protocol setting while the queue holds an unfinished job
+    # or the staging folder holds a recording a launch could recover. Finished
+    # jobs do not count: the app drops them when it loads the snapshot.
+    if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+        _pp_data="$APP_HOME/Library/Application Support/MeetingTranscriber"
+        _pp_snapshot="$_pp_data/ipc/pipeline_queue.json"
+        if [ -f "$_pp_snapshot" ] && ! jq -e 'type == "array" and all(.[]; .state == "done" or .state == "error")' "$_pp_snapshot" >/dev/null 2>&1; then
+            fail "[protocol] the pipeline queue snapshot holds unfinished jobs (or does not parse); the app would resume them against the stub. Let them finish first. No protocol setting was changed."
+        fi
+        _pp_staged="$(find "$_pp_data/recordings" -maxdepth 1 -type f \( -name '*.wav' -o -name '*.tmp' \) 2>/dev/null | head -3)"
+        [ -z "$_pp_staged" ] \
+            || fail "[protocol] the staging folder holds recordings a launch could recover and send to the stub: $_pp_staged. Process or move them first. No protocol setting was changed."
+    fi
+    trap '_pp_cleanup' EXIT
+    mkdir -p "$_MS_STATE_DIR"
+    rm -f "$_PP_RECORD.tmp"
+    # Both domains write_dev_default writes; the container only if it exists.
+    for _pp_plist in "$_STANDARD_PLIST" "$_CONTAINER_PLIST"; do
+        [ "$_pp_plist" = "$_STANDARD_PLIST" ] || [ -f "$_pp_plist" ] || continue
+        defaults_record_keys "$_PP_RECORD.tmp" "$_pp_plist" "${_PP_KEYS[@]}" \
+            || fail "[protocol] could not record the host's protocol settings; no protocol setting was changed"
+    done
+    mv "$_PP_RECORD.tmp" "$_PP_RECORD"
+    # The count, not the values: an endpoint can name a host, and this log is
+    # public on CI.
+    log "[protocol] recorded $(grep -c . "$_PP_RECORD") host setting(s) in $_PP_RECORD (restored on exit)"
+
+    _PP_DIR="$(mktemp -d /tmp/e2e-protocol.XXXXXX)"
+    python3 "$ROOT/scripts/fixtures/openai-chat-stub.py" \
+        --port-file "$_PP_DIR/port" --log "$_PP_DIR/requests.jsonl" --mode-file "$_PP_DIR/mode" \
+        --reply "$_PP_REPLY" >"$_PP_DIR/stub.log" 2>&1 &
+    _PP_STUB_PID=$!
+    _pp_stub_listening() { [ -s "$_PP_DIR/port" ]; }
+    poll_until 10 0.2 _pp_stub_listening \
+        || fail "[protocol] the stub did not start listening within 10s: $(cat "$_PP_DIR/stub.log")"
+    _PP_PORT="$(cat "$_PP_DIR/port")"
+    _PP_ENDPOINT="http://127.0.0.1:$_PP_PORT/v1"
+    log "[protocol] stub (pid $_PP_STUB_PID) listening on $_PP_ENDPOINT"
+
+    _set_dev_default protocolProvider openAICompatible
+    _set_dev_default protocolLanguage "$_PP_LANGUAGE"
+    _set_dev_default openAIEndpoint "$_PP_ENDPOINT"
+    _set_dev_default openAIModel "$_PP_MODEL"
+    _set_dev_default openAITemperature "$_PP_TEMPERATURE" float
+    _delete_dev_default openAITopP
+    # Diarize off, so the job never parks at speaker naming and the protocol is
+    # generated in the pipeline's own stage rather than on a naming skip. The
+    # output options pin the protocol file's exact contents and name, and keep
+    # the transcript file the user message is compared with: an AI-title rename
+    # would move every artifact to a stem taken from the stub's heading.
+    _set_dev_default diarize false bool
+    _set_dev_default saveRawTranscriptSeparately true bool
+    _set_dev_default includeFullTranscriptInProtocol true bool
+    _set_dev_default useAITitleForFilenames false bool
+    defaults_mark_lane_values "$_PP_RECORD" \
+        || fail "[protocol] could not read back the lane's own settings to mark them; restoring"
 fi
 
 if [ -n "${MTT_DIARIZER_MODE:-}" ]; then
@@ -1707,6 +1987,12 @@ on_exit() {
     # Upgrade: stop the app this lane started and remove its home, before the
     # provenance below, which then finds the app gone. A no-op for other lanes.
     _ug_cleanup
+    # Protocol lane: stop the stub, put the host's settings back, stop the app,
+    # drop the lane's unfinished jobs and its outputs (see `_pp_cleanup`).
+    # Before the provenance below, which then finds the app gone.
+    if [ "$PROTOCOL_LANE" = true ]; then
+        _pp_cleanup || _PP_RESTORE_FAILED=1
+    fi
     # Leave the app's provenance for the next driver: still running means this
     # run kept it (--keep-app) or failed before the quit; gone means we quit it.
     if [ -n "${_launched_app:-}" ]; then
@@ -1799,6 +2085,7 @@ on_exit() {
     _qf_release_lock
     # A restore that did not match turns any run red, a passing one included.
     [ -z "${_QF_RESTORE_FAILED:-}" ] || exit 1
+    [ -z "${_PP_RESTORE_FAILED:-}" ] || exit 1
 }
 # Single cleanup hook, but the signal paths must EXIT after cleaning up: a
 # trapped INT/TERM otherwise returns into the interrupted command and execution
@@ -4282,6 +4569,193 @@ run_echo_cancel() {
     log "$label: PASS"
 }
 
+# --- protocol lane ------------------------------------------------------------
+#
+# No other lane asserts that the protocol stage produces a protocol. The runner
+# leaves the provider at its default, the Claude CLI, which is installed there
+# but not logged in for the runner account, so every live lane logs "Protocol
+# generation failed — transcript saved" and passes on the transcript alone. This
+# lane points the OpenAI-compatible provider at a local stub (set up before the
+# launch, see the PROTOCOL_LANE block there) and asserts both outcomes of the
+# stage. It imports through POST /v1/jobs rather than recording: an import runs
+# the same PipelineQueue stages, protocol generation included, and needs no
+# audio device, so the lane takes seconds.
+#
+# Two jobs, the stub's answer switched between them through its mode file:
+#   1. it answers: the one request it got is the expected one, the job is done
+#      with no protocol warning, and protocolPath names a file in the output
+#      folder holding exactly the reply followed by the transcript;
+#   2. it answers HTTP 500: the job is still done, with the "transcript saved"
+#      warning, no protocolPath and no protocol file beside the transcript.
+# The second is what shows the first phase's checks tell the two outcomes apart.
+
+_PP_STATUS=""
+_PP_NEW_REQUESTS=""
+_PP_TRANSCRIPT=""
+_PP_PROTOCOL=""
+
+_pp_request_count() {
+    if [ -f "$_PP_DIR/requests.jsonl" ]; then wc -l <"$_PP_DIR/requests.jsonl" | tr -d ' '; else echo 0; fi
+}
+
+# Register a job's outputs for removal, in the on-disk record `_pp_repair`
+# reads, so a killed run's files go too: its transcript and protocol and the
+# per-stem sidecars SpeakerNamingStore keeps in recordings/ (its
+# sidecarSuffixes and namingJSONSuffix, restated here by value). Only when the
+# paths changed since the last tick; a duplicate is harmless.
+_PP_REGISTERED=""
+_pp_register_outputs() {
+    local f stem suffix paths
+    paths="$(jq -r '.transcriptPath, .protocolPath | select(. != null)' <<<"$_PP_STATUS" 2>/dev/null)"
+    [ -n "$paths" ] && [ "$paths" != "$_PP_REGISTERED" ] || return 0
+    _PP_REGISTERED="$paths"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        printf '%s\n' "$f" >>"$_PP_OUTPUTS_RECORD"
+        if [ "${f%.txt}" != "$f" ]; then
+            stem="$(basename "${f%.txt}")"
+            for suffix in _16k.wav _app_16k.wav _mic_16k.wav _segments.json _naming.json; do
+                printf '%s\n' "$RECORDINGS_DIR/$stem$suffix" >>"$_PP_OUTPUTS_RECORD"
+            done
+        fi
+    done <<<"$paths"
+}
+
+# Writes `_PP_STATUS` (dynamic scoping, as the echo lanes' poll does), and
+# registers the outputs on every tick, so a job that times out after saving its
+# transcript still has it removed.
+_pp_terminal() {
+    assert_app_alive
+    _PP_STATUS="$(rpc "/v1/jobs/$1")"
+    _pp_register_outputs
+    jq -e '.state == "done" or .state == "error"' <<<"$_PP_STATUS" >/dev/null 2>&1
+}
+
+# Import one fixture copy and wait for the job to settle. Leaves the final
+# GET /v1/jobs/<id> body in `_PP_STATUS` and the stub's log lines for this job
+# in `_PP_NEW_REQUESTS` (its outputs are registered for removal while it is
+# polled). Also leaves the job's two paths in `_PP_TRANSCRIPT` and
+# `_PP_PROTOCOL` (empty when null).
+_pp_run_job() {
+    local label="$1" fixture="$2" before enq job
+    before="$(_pp_request_count)"
+    enq="$(rpc_post /v1/jobs "$(jq -nc --arg p "$fixture" '{paths: [$p]}')")"
+    job="$(jq -er 'select(.jobIDs | length == 1) | .jobIDs[0]' <<<"$enq" 2>/dev/null || true)"
+    [ -n "$job" ] || fail "$label: POST /v1/jobs did not create exactly one job (response: $enq)"
+    log "$label: enqueued job $job"
+    printf '%s\n' "$job" >>"$_PP_JOBS_RECORD"
+    _PP_STATUS=""
+    poll_until "$PIPELINE_TIMEOUT_S" 2 _pp_terminal "$job" \
+        || fail "$label: job $job did not settle within ${PIPELINE_TIMEOUT_S}s (last: $_PP_STATUS)"
+    _PP_NEW_REQUESTS="$(tail -n +"$(( before + 1 ))" "$_PP_DIR/requests.jsonl" 2>/dev/null || true)"
+    _PP_TRANSCRIPT="$(jq -r '.transcriptPath // empty' <<<"$_PP_STATUS")"
+    _PP_PROTOCOL="$(jq -r '.protocolPath // empty' <<<"$_PP_STATUS")"
+    log "$label: job settled: $(jq -c '{state, warnings, transcriptPath, protocolPath, error}' <<<"$_PP_STATUS")"
+    [ "$(jq -r '.state' <<<"$_PP_STATUS")" = "done" ] \
+        || fail "$label: job $job settled as '$(jq -r '.state' <<<"$_PP_STATUS")', expected done. error=$(jq -r '.error // "<none>"' <<<"$_PP_STATUS")"
+}
+
+# Exactly one request per job: the generator retries only on a 400 that names
+# max_completion_tokens, so a second request would mean something else asked.
+_pp_assert_one_request() {
+    local label="$1" n
+    n="$(grep -c . <<<"$_PP_NEW_REQUESTS" || true)"
+    [ "$n" = 1 ] || fail "$label: the stub got $n request(s) for this job, expected exactly 1: $(jq -c 'del(.body)' <<<"$_PP_NEW_REQUESTS" 2>/dev/null)"
+}
+
+run_protocol_lane() {
+    local label="[protocol]"
+    local fixture="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_en.wav"
+    [ -f "$fixture" ] || fail "$label: fixture missing: $fixture"
+
+    # The running app's own resolved view: a write that missed its domain would
+    # otherwise send the lane's jobs to the host's real provider.
+    local snap
+    snap="$(rpc /state)"
+    jq -e --arg ep "$_PP_ENDPOINT" --arg model "$_PP_MODEL" --arg lang "$_PP_LANGUAGE" \
+        --argjson temp "$_PP_TEMPERATURE" '
+        .settings.protocolGeneration as $p | .settings.output as $o
+        | $p.provider == "openAICompatible" and $p.openAIEndpoint == $ep and $p.openAIModel == $model
+          and $p.language == $lang and $p.openAITemperature == $temp and $p.openAITopP == null
+          and .settings.diarization.diarize == false
+          and $o.saveRawTranscriptSeparately == true and $o.includeFullTranscriptInProtocol == true
+          and $o.useAITitleForFilenames == false' \
+        <<<"$snap" >/dev/null \
+        || fail "$label: the app did not resolve the lane's settings: $(jq -c '{protocol: .settings.protocolGeneration, diarize: .settings.diarization.diarize, output: (.settings.output | {saveRawTranscriptSeparately, includeFullTranscriptInProtocol, useAITitleForFilenames})}' <<<"$snap")"
+    # A custom prompt need not mention the language, so only the built-in one
+    # is held to naming it; the placeholder check applies either way.
+    local language_in_prompt=true
+    if [ "$(jq -r '.settings.output.hasCustomPrompt' <<<"$snap")" = "true" ]; then
+        language_in_prompt=false
+        log "$label: a custom protocol prompt is installed; not requiring it to name the language"
+    fi
+    log "$label: app resolved provider=openAICompatible endpoint=$_PP_ENDPOINT model=$_PP_MODEL language=$_PP_LANGUAGE"
+
+    # Copies, one per job, so neither job shares a path with the other or with
+    # the shared fixture (same reasoning as the naming-confirm lane).
+    cp "$fixture" "$_PP_DIR/protocol-ok.wav"
+    cp "$fixture" "$_PP_DIR/protocol-500.wav"
+
+    # Nothing but this lane's jobs may reach the stub: a job the launch resumed
+    # or recovered has either already called it or is about to.
+    # Read fresh and twice in a row, since recovery enqueues off the main actor
+    # a beat after launch.
+    local busy="" idle_reads=0
+    _pp_idle_twice() {
+        busy="$(rpc /state | jq -r '(.pipeline.activeJobCount // 0) + (.pipeline.pendingNamingJobCount // 0) + (.pipeline.waitingJobCount // 0)' 2>/dev/null)"
+        if [ "$busy" = 0 ] && [ "$(_pp_request_count)" = 0 ]; then idle_reads=$(( idle_reads + 1 )); else idle_reads=0; fi
+        [ "$idle_reads" -ge 2 ]
+    }
+    poll_until 20 1 _pp_idle_twice \
+        || fail "$label: the app is not idle before the lane's first job (pipeline jobs: ${busy:-?}, stub requests so far: $(_pp_request_count)); a job the launch resumed or recovered would be sent to the stub"
+
+    # --- 1. the stub answers --------------------------------------------------
+    printf 'ok' >"$_PP_DIR/mode"
+    _pp_run_job "$label [ok]" "$_PP_DIR/protocol-ok.wav"
+    local transcript="$_PP_TRANSCRIPT" protocol="$_PP_PROTOCOL" warned problems
+    warned="$(jq -r '.warnings[]? | select(test("protocol"; "i"))' <<<"$_PP_STATUS")"
+    [ -z "$warned" ] || fail "$label [ok]: the job carries a protocol warning: $warned"
+    [ -n "$transcript" ] && [ -f "$transcript" ] \
+        || fail "$label [ok]: no transcript file (transcriptPath='$transcript'), so the user message cannot be checked"
+    _pp_assert_one_request "$label [ok]"
+    problems="$(openai_stub_request_violations "$_PP_NEW_REQUESTS" "$(jq -nc --rawfile t "$transcript" \
+        --arg model "$_PP_MODEL" --arg lang "$_PP_LANGUAGE" --argjson temp "$_PP_TEMPERATURE" \
+        --argjson lip "$language_in_prompt" \
+        '{path: "/v1/chat/completions", model: $model, language: $lang, transcript: $t,
+          temperature: $temp, topP: null, languageInPrompt: $lip}')")" \
+        || fail "$label [ok]: could not check the stub's request: $(jq -c 'del(.body)' <<<"$_PP_NEW_REQUESTS" 2>/dev/null)"
+    [ -z "$problems" ] || fail "$label [ok]: the chat-completions request is not the expected one:"$'\n'"$problems"
+    log "$label [ok]: the request carried the model, the sampling override, the language and the transcript ✅"
+    [ -n "$protocol" ] || fail "$label [ok]: protocolPath is null although the stub answered"
+    [ "$(dirname "$protocol")" = "$OUTPUT_DIR/protocols" ] && [ "${protocol%.md}" != "$protocol" ] \
+        || fail "$label [ok]: protocolPath '$protocol' is not a .md file in $OUTPUT_DIR/protocols"
+    [ -f "$protocol" ] || fail "$label [ok]: protocolPath names a file that does not exist: $protocol"
+    # What generateProtocol saves with includeFullTranscriptInProtocol on: the
+    # reply, a rule, and the transcript the request carried.
+    { printf '%s' "$_PP_REPLY"; printf '\n\n---\n\n## Full Transcript\n\n'; cat "$transcript"; } >"$_PP_DIR/expected.md"
+    cmp -s "$_PP_DIR/expected.md" "$protocol" \
+        || fail "$label [ok]: the protocol file is not the stub's reply followed by the transcript. diff:"$'\n'"$(diff "$_PP_DIR/expected.md" "$protocol" | head -20)"
+    log "$label [ok]: $protocol holds the stub's reply and the transcript ✅"
+
+    # --- 2. the stub fails ----------------------------------------------------
+    printf 'http500' >"$_PP_DIR/mode"
+    _pp_run_job "$label [500]" "$_PP_DIR/protocol-500.wav"
+    transcript="$_PP_TRANSCRIPT" protocol="$_PP_PROTOCOL"
+    _pp_assert_one_request "$label [500]"
+    # That the stub really served this job a 500, so the warning below is the
+    # app's answer to a failed call and not to something else going wrong.
+    [ "$(jq -r '"\(.mode)/\(.status)"' <<<"$_PP_NEW_REQUESTS")" = "http500/500" ] \
+        || fail "$label [500]: the stub did not answer this job's request with a 500: $(jq -c 'del(.body)' <<<"$_PP_NEW_REQUESTS")"
+    jq -e 'any(.warnings[]?; . == "Protocol generation failed — transcript saved")' <<<"$_PP_STATUS" >/dev/null \
+        || fail "$label [500]: the job lacks the 'Protocol generation failed — transcript saved' warning: $(jq -c '.warnings' <<<"$_PP_STATUS")"
+    [ -z "$protocol" ] || fail "$label [500]: protocolPath is '$protocol' although the stub answered 500"
+    [ -n "$transcript" ] && [ -f "$transcript" ] \
+        || fail "$label [500]: the transcript was not kept (transcriptPath='$transcript')"
+    [ ! -e "${transcript%.txt}.md" ] || fail "$label [500]: a protocol file exists beside the transcript: ${transcript%.txt}.md"
+    log "$label [500]: done with the 'transcript saved' warning, transcript kept, no protocol file ✅"
+    log "$label: PASS"
+}
+
 # --- quit-flush lane (issue #745) -------------------------------------------
 #
 # NOT wired into CI; run by hand. On macOS 26 the non-admin runner user can
@@ -4736,6 +5210,8 @@ elif [ -n "$MIC_STALL" ]; then
     run_mic_stall
 elif [ "$UPGRADE" = true ]; then
     run_upgrade
+elif [ "$PROTOCOL_LANE" = true ]; then
+    run_protocol_lane
 elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
