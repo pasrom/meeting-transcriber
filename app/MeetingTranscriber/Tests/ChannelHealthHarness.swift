@@ -32,7 +32,7 @@ enum ChannelHealthHarness {
         let suite = "ChannelHealthHarness-\(getpid())-\(UUID().uuidString)"
         test.addTeardownBlock { DefaultsSuite.remove(suite) }
         // swiftlint:disable:next force_unwrapping
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = DefaultsSuite.open(suite)!
         let settings = AppSettings(defaults: defaults)
         settings.perChannelIndicatorEnabled = true
         settings.asymmetricSilenceWarningSeconds = 30

@@ -259,7 +259,7 @@ final class UpdateCheckerTests: XCTestCase {
         // real `UserDefaults` domain.
         let suite = "UpdateCheckerTests-\(getpid())-\(UUID().uuidString)"
         defer { DefaultsSuite.remove(suite) }
-        let settings = try AppSettings(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
+        let settings = try AppSettings(defaults: XCTUnwrap(DefaultsSuite.open(suite)))
         settings.checkForUpdates = false
 
         checker.startPeriodicChecks(settings: settings)

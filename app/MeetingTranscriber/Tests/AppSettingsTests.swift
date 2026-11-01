@@ -13,7 +13,7 @@ final class AppSettingsTests: XCTestCase {
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var apiKeyAccount: String!
 
-    /// Each test gets its own volatile `UserDefaults(suiteName:)` so
+    /// Each test gets its own scratch suite (`DefaultsSuite.open`) so
     /// `swift test --parallel` doesn't race on the shared on-disk plist.
     /// AppSettings receives the suite via constructor injection.
     ///
@@ -29,7 +29,7 @@ final class AppSettingsTests: XCTestCase {
         super.setUp()
         testSuiteName = "AppSettingsTests-\(getpid())-\(UUID().uuidString)"
         apiKeyAccount = "AppSettingsTests-openAIAPIKey-\(getpid())-\(UUID().uuidString)"
-        guard let suite = UserDefaults(suiteName: testSuiteName) else {
+        guard let suite = DefaultsSuite.open(testSuiteName) else {
             XCTFail("Could not create test UserDefaults suite")
             return
         }
@@ -449,7 +449,7 @@ final class AppSettingsTests: XCTestCase {
 
     func test_verboseDiagnostics_migratesFromLegacyAudioDebugLoggingKey() {
         let suiteName = "AppSettingsTests-migration-\(UUID().uuidString)"
-        guard let suite = UserDefaults(suiteName: suiteName) else {
+        guard let suite = DefaultsSuite.open(suiteName) else {
             XCTFail("Could not create suite")
             return
         }
@@ -464,7 +464,7 @@ final class AppSettingsTests: XCTestCase {
 
     func test_verboseDiagnostics_newKeyTakesPrecedenceOverLegacy() {
         let suiteName = "AppSettingsTests-precedence-\(UUID().uuidString)"
-        guard let suite = UserDefaults(suiteName: suiteName) else {
+        guard let suite = DefaultsSuite.open(suiteName) else {
             XCTFail("Could not create suite")
             return
         }
@@ -479,7 +479,7 @@ final class AppSettingsTests: XCTestCase {
 
     func test_verboseDiagnostics_migrationRemovesLegacyKey() {
         let suiteName = "AppSettingsTests-cleanup-\(UUID().uuidString)"
-        guard let suite = UserDefaults(suiteName: suiteName) else {
+        guard let suite = DefaultsSuite.open(suiteName) else {
             XCTFail("Could not create suite")
             return
         }

@@ -6,7 +6,7 @@ final class NotionSettingsTests: XCTestCase {
     func testNotionSettingsPersistence() {
         let suite = "NotionSettingsTests-\(getpid())-\(UUID().uuidString)"
         addTeardownBlock { DefaultsSuite.remove(suite) }
-        guard let defaults = UserDefaults(suiteName: suite) else {
+        guard let defaults = DefaultsSuite.open(suite) else {
             fatalError("Could not create test UserDefaults suite")
         }
         let notionKeyAccount = "notionKey.\(UUID().uuidString)"

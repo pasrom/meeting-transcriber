@@ -20,7 +20,7 @@ final class SettingsInteractionTests: XCTestCase {
         // Isolated per-test suite (pid+uuid) so a killed test never leaks into the
         // dev app's `.standard` plist — mirrors SettingsViewTests.
         suiteName = "SettingsInteractionTests-\(getpid())-\(UUID().uuidString)"
-        guard let suite = UserDefaults(suiteName: suiteName) else {
+        guard let suite = DefaultsSuite.open(suiteName) else {
             XCTFail("could not create test UserDefaults suite")
             return
         }

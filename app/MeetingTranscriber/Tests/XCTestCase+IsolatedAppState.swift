@@ -12,7 +12,7 @@ extension XCTestCase {
     /// Settings over a per-test defaults suite, removed again at teardown.
     func makeIsolatedSettings() throws -> AppSettings {
         let suite = "\(type(of: self))-\(getpid())-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = try XCTUnwrap(DefaultsSuite.open(suite))
         addTeardownBlock { DefaultsSuite.remove(suite) }
         return try AppSettings(
             defaults: defaults,

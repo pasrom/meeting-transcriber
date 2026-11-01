@@ -31,7 +31,7 @@ final class NotionExportUnconfiguredTests: XCTestCase {
             KeychainHelper.delete(key: keyAccount)
         }
         let settings = try AppSettings(
-            defaults: XCTUnwrap(UserDefaults(suiteName: suite)),
+            defaults: XCTUnwrap(DefaultsSuite.open(suite)),
             notionAPIKeyAccount: keyAccount,
             defaultOutputDir: tmpDir.appendingPathComponent("output", isDirectory: true),
         )

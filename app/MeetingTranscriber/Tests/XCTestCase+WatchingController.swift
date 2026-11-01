@@ -14,40 +14,6 @@ import XCTest
 /// the test-case lifecycle; the defaults suite it needs is handled below.
 @MainActor
 extension XCTestCase {
-    /// Whether this process already swept. The sweep scans a directory with
-    /// hundreds of entries, and doing that per call cost 16 s across the suite
-    /// against 2.8 s; once per process is enough, since nothing creates these
-    /// files but the factory itself.
-    nonisolated(unsafe) private static var didSweepFactoryDefaults = false
-
-    /// Remove the preference files of test processes that are gone.
-    ///
-    /// **This exists only to drain files created before `DefaultsSuite` did.**
-    /// The suite this factory makes now goes through `DefaultsSuite.remove`, so
-    /// everything from here on is recorded in a manifest and swept from there,
-    /// without reading the preferences directory at all. Once the backlog this
-    /// drains is gone, so is the reason for this function.
-    ///
-    /// Exact prefix, and only when the owning pid no longer exists, so a run in
-    /// flight keeps its own file, including a `--parallel` sibling, which is its
-    /// own process. The pid is the first component after the prefix, which also
-    /// matches the older `<pid>-<uuid>` names an earlier per-call version of
-    /// this factory left behind.
-    static func sweepDeadFactoryDefaults() {
-        guard !didSweepFactoryDefaults else { return }
-        didSweepFactoryDefaults = true
-        let prefix = "WatchingControllerFactory-"
-        let dir = DefaultsSuite.preferencesDirectory
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        for name in names where name.hasPrefix(prefix) && name.hasSuffix(".plist") {
-            let stem = name.dropFirst(prefix.count).dropLast(".plist".count)
-            guard let owner = pid_t(stem.split(separator: "-").first ?? ""), owner > 0,
-                  DefaultsSuite.processHasExited(owner)
-            else { continue }
-            DefaultsSuite.removeSettled(String(name.dropLast(".plist".count)))
-        }
-    }
-
     /// - Parameter permissionHealth: seeds the health the controller hands to
     ///   each loop it builds. Pass one whenever a test asserts that a start
     ///   *succeeds*: nil leaves it unprobed, and the loop then runs a live TCC
@@ -90,21 +56,10 @@ extension XCTestCase {
         // `performManualRecording` reads `recordOnly` and the output directory
         // back out of that same domain — a value left behind by another test
         // would send these down the record-only path and into a user folder.
-        // One suite per test PROCESS, not per call, and a sweep of the ones
-        // dead processes left behind.
-        //
-        // Isolation is not optional here: this factory writes `noMic` and
-        // `watchTeams`, and `performManualRecording` reads `recordOnly` and the
-        // output directory back out of the same domain, so a value stranded in
-        // `.standard` could send a test into a real user folder. But a suite
-        // cannot be un-created: the preferences daemon owns the file's
-        // lifecycle and flushes its cached copy back after any removal the test
-        // performs. Measured across three attempts (remove domain, then also
-        // delete the file, then the full deregistration dance): 39 files
-        // survived each time. So the file is treated as reusable and the
-        // leftovers are swept by owner instead.
+        // One suite per test PROCESS, not per call, reset on every call; its
+        // file lives in the process's `DefaultsSuite` folder, which a later run
+        // deletes.
         let suite = "WatchingControllerFactory-\(getpid())"
-        Self.sweepDeadFactoryDefaults()
         // Start from a clean domain so one test never reads what another wrote.
         // Note for a future caller: this resets the whole process-wide suite, so
         // two controllers built inside ONE test method would have the second
@@ -112,8 +67,12 @@ extension XCTestCase {
         // survive, since it snapshots at init, but do not build two and expect
         // both to persist.
         DefaultsSuite.remove(suite)
+        // Never fall back to `.standard`: that is the host's real domain.
+        guard let defaults = DefaultsSuite.open(suite) else {
+            fatalError("Could not create test UserDefaults suite")
+        }
         let settings = AppSettings(
-            defaults: UserDefaults(suiteName: suite) ?? .standard,
+            defaults: defaults,
             // The default output folder is the one path from this factory into a
             // real user folder that the suite above does not close: output goes
             // to `~/Downloads/MeetingTranscriber` whenever no folder is chosen

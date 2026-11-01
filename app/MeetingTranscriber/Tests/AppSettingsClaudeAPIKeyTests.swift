@@ -23,7 +23,7 @@
             testSuiteName = "AppSettingsClaudeAPIKeyTests-\(getpid())-\(UUID().uuidString)"
             apiKeyAccount = "AppSettingsClaudeAPIKeyTests-openAIAPIKey-\(getpid())-\(UUID().uuidString)"
             claudeAPIKeyAccount = "AppSettingsClaudeAPIKeyTests-claudeAPIKey-\(getpid())-\(UUID().uuidString)"
-            guard let suite = UserDefaults(suiteName: testSuiteName) else {
+            guard let suite = DefaultsSuite.open(testSuiteName) else {
                 XCTFail("Could not create test UserDefaults suite")
                 return
             }

@@ -146,7 +146,7 @@
         func testStateExposesPostedNotifications() async throws {
             let manager = NotificationManager()
             let suite = "DebugRPCServerIntegrationTests-\(getpid())-\(UUID().uuidString)"
-            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let defaults = try XCTUnwrap(DefaultsSuite.open(suite))
             defer { DefaultsSuite.remove(suite) }
             let state = try AppState(pipelineEnvironment: makeIsolatedPipelineEnvironment(), settings: AppSettings(defaults: defaults), notifier: manager)
             defer { state.liveCaptions.clear() }
@@ -181,7 +181,7 @@
         /// dev bundle's container-plist redirect).
         func testStateExposesEffectiveSettings() async throws {
             let suite = "DebugRPCServerIntegrationTests-\(getpid())-\(UUID().uuidString)"
-            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let defaults = try XCTUnwrap(DefaultsSuite.open(suite))
             defer { DefaultsSuite.remove(suite) }
             let settings = AppSettings(defaults: defaults)
             settings.recordOnly = true

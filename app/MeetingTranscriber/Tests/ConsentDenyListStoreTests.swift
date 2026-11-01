@@ -11,7 +11,7 @@ final class ConsentDenyListStoreTests: XCTestCase {
     /// cannot see each other's writes and none of them touch the real domain.
     private func withDefaults(_ body: (UserDefaults) -> Void) {
         let suiteName = "ConsentDenyListStoreTests.\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suiteName) else {
+        guard let defaults = DefaultsSuite.open(suiteName) else {
             XCTFail("could not create defaults suite")
             return
         }

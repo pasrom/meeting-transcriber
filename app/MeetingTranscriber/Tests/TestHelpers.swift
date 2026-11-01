@@ -564,7 +564,7 @@ extension XCTestCase {
     @MainActor
     func makeRPCTestState() throws -> AppState {
         let suite = "RPCTestState-\(getpid())-\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suite) else {
+        guard let defaults = DefaultsSuite.open(suite) else {
             fatalError("Could not create test UserDefaults suite")
         }
         addTeardownBlock { DefaultsSuite.remove(suite) }

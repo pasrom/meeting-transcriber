@@ -13,7 +13,7 @@ final class AppSettingsOpenAISamplingTests: XCTestCase {
     override func setUp() {
         super.setUp()
         suiteName = "AppSettingsOpenAISamplingTests-\(getpid())-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = DefaultsSuite.open(suiteName)
         settings = AppSettings(defaults: defaults)
     }
 

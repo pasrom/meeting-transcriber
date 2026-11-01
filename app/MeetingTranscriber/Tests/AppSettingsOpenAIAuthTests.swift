@@ -10,7 +10,7 @@ final class AppSettingsOpenAIAuthTests: XCTestCase {
     override func setUp() {
         super.setUp()
         suiteName = "AppSettingsOpenAIAuthTests-\(getpid())-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = DefaultsSuite.open(suiteName)
     }
 
     override func tearDown() {

@@ -181,7 +181,7 @@ enum OpenAISamplingParameter: String {
 @Observable
 final class AppSettings { // swiftlint:disable:this type_body_length
     /// Backing store. Production callers pass nothing → `.standard`. Tests
-    /// inject their own `UserDefaults(suiteName:)` so parallel test
+    /// inject a scratch suite (`DefaultsSuite.open` in the tests) so parallel test
     /// processes don't race on the shared on-disk plist.
     @ObservationIgnored private let defaults: UserDefaults
 
