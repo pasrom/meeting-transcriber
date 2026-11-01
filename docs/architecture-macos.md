@@ -643,7 +643,8 @@ the previous content, and a retry reconciles any partial new content. A successf
 re-export replaces manual edits to the app-owned page. Only root blocks of a type
 the converter writes are deleted (`MarkdownToNotionBlocks.rootBlockTypes`), so
 sub-pages, databases, images and embeds the user added are kept, above the new
-content. The client pins Notion API version `2022-06-28`; databases with multiple
+content. A delete that answers 404 counts as done once a fresh listing no longer
+shows the block; Notion answers 404 for lost access as well. The client pins Notion API version `2022-06-28`; databases with multiple
 data sources are rejected rather than guessing which source should receive the meeting.
 
 A failed export retains the completed job and its local Markdown backup across
