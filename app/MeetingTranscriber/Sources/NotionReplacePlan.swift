@@ -20,7 +20,11 @@ import Foundation
 ///   the first pass that deletes cleanly.
 /// Formatting, table cells and toggle children are not compared, so a retry
 /// that differs from the interrupted run only there, and only while leftovers
-/// exist, keeps the interrupted run's version of those parts.
+/// exist, keeps the interrupted run's version of those parts. Refusing to match
+/// any block that has children would close that gap, but a saved protocol
+/// normally ends in transcript toggles and often holds a table, so the
+/// recognition would then never apply to the protocols users export, and the
+/// page would grow as before; the gap is the accepted cost.
 struct NotionReplacePlan: Equatable {
     /// Root blocks to delete once the new content is on the page.
     let staleBlockIDs: [String]
@@ -30,8 +34,7 @@ struct NotionReplacePlan: Equatable {
     init(existing: [NotionBlockSummary], replacement: [NotionBlock]) {
         // The cheap length test comes first: the first export and a plain
         // re-export never reach the per-block encode.
-        if !replacement.isEmpty,
-           existing.count > replacement.count,
+        if existing.count > replacement.count,
            Self.endsWithCopy(existing, of: replacement) {
             staleBlockIDs = existing.dropLast(replacement.count).map(\.id)
             needsAppend = false
