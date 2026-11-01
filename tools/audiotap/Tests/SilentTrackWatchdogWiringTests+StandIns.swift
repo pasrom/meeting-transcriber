@@ -91,13 +91,19 @@ extension SilentTrackWatchdogWiringTests {
         private let lock = NSLock()
         private var reads = 0
         private var _running = true
+        private var _hold = false
         let entered = DispatchSemaphore(value: 0)
         let release = DispatchSemaphore(value: 0)
-        var hold = false
 
         var running: Bool {
             get { lock.withLock { _running } }
             set { lock.withLock { _running = newValue } }
+        }
+
+        /// Written by the test, read by the probe on the diagnostics queue.
+        var hold: Bool {
+            get { lock.withLock { _hold } }
+            set { lock.withLock { _hold = newValue } }
         }
 
         var readCount: Int {
