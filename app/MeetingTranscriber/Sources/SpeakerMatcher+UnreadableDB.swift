@@ -14,16 +14,29 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Speaker
 extension SpeakerMatcher {
     enum ReadOutcome {
         case loaded([StoredSpeaker])
-        /// No file yet (fresh install, or after a quarantine), or one holding
-        /// nothing but whitespace: nothing to lose, start empty.
+        /// A JSON array of which only some entries are usable: `dropped`
+        /// entries did not decode (see `decodeSalvaging`). Reads use
+        /// `kept`; `mutateDB` copies the file aside before saving `kept`, so
+        /// the dropped entries stay recoverable from that copy.
+        case salvaged(kept: [StoredSpeaker], dropped: Int)
+        /// No file yet (fresh install), or one holding nothing but
+        /// whitespace: nothing to lose, start empty.
         case missing
-        /// The file was read but does not decode, twice (see
-        /// `settleBeforeReread`). Retrying will not help, so `mutateDB` moves
-        /// it aside.
+        /// The file was read but is not a JSON array, twice (see
+        /// `settleBeforeReread`). Nothing in it can be salvaged and retrying
+        /// will not help, so `mutateDB` copies it aside and replaces it.
         case undecodable(any Error)
         /// The file exists but reading it failed (permissions, I/O, a file
         /// not yet materialised). It may be intact, so it stays where it is.
         case unreadable(any Error)
+
+        /// What a reader can use: the decoded or salvaged entries, else none.
+        var usableSpeakers: [StoredSpeaker] {
+            switch self {
+            case let .loaded(speakers), let .salvaged(speakers, _): speakers
+            case .missing, .undecodable, .unreadable: []
+            }
+        }
     }
 
     /// Whether the change a `mutateDB` block made reached `speakers.json`.
@@ -42,14 +55,22 @@ extension SpeakerMatcher {
     struct Mutation<Value> {
         let value: Value
         let persistence: Persistence
-        /// Where an undecodable DB was moved before this change was saved
-        /// into a fresh one. The block then ran against an empty DB, so a
-        /// "not found" from it says nothing about the names the user knows,
+        /// Where an undecodable or partly undecodable DB was copied before this
+        /// change was saved. The block then ran against only the entries that
+        /// could be salvaged (none for a file that did not decode at all), so
+        /// a "not found" from it says nothing about the names the user knows,
         /// and every cached view of the DB is stale.
         var replacedCorruptDB: URL?
 
         var saved: Bool {
             persistence == .saved
+        }
+
+        /// Where the DB was copied aside, for an edit to report instead of its
+        /// own result, unless the edit `found` its target among the salvaged
+        /// entries; that result already tells callers to refresh.
+        func resetUnlessFound(_ found: Bool) -> URL? {
+            found ? nil : replacedCorruptDB
         }
     }
 
@@ -66,13 +87,78 @@ extension SpeakerMatcher {
     /// What went wrong with the DB in a `mutateDB`, passed to `onDBProblem` so
     /// the user learns their voices are not being kept.
     enum DBProblem: Equatable {
-        /// Undecodable; moved to this path and replaced by a fresh DB.
-        case movedAside(URL)
-        /// Left in place and nothing written, so the change was not saved.
+        /// Undecodable (or an array with nothing usable); copied to this path
+        /// unchanged and replaced by a fresh DB.
+        case copiedAside(URL)
+        /// A JSON array with some unusable entries; copied to this path
+        /// unchanged and replaced by a DB holding the `kept` entries (at
+        /// least one). The `dropped` ones are only in the copy.
+        case salvaged(copiedTo: URL, kept: Int, dropped: Int)
+        /// Left in place and nothing written, so the change was not saved:
+        /// unreadable, or damaged and impossible to copy aside.
         case leftInPlace
-        /// Writing failed. `movedAside` is the quarantined copy when the DB
-        /// had just been set aside, which is then the only copy left.
-        case saveFailed(movedAside: URL?)
+        /// Writing failed; the DB on disk is unchanged. `copiedTo` is the
+        /// copy of a damaged DB, made for this attempt or reused from an
+        /// earlier one with the same bytes; it stays.
+        case saveFailed(copiedTo: URL?)
+    }
+
+    /// How a file that has to be copied aside before a write is damaged.
+    enum Damage: Equatable {
+        /// Not a JSON array, or one with nothing usable in it.
+        case undecodable
+        /// A JSON array with some unusable entries.
+        case salvaged(kept: Int, dropped: Int)
+
+        var label: String {
+            switch self {
+            case .undecodable: "undecodable"
+            case .salvaged: "partly undecodable"
+            }
+        }
+
+        /// What to report once the copy is at `url` and the write succeeded.
+        func problem(copiedTo url: URL) -> DBProblem {
+            switch self {
+            case .undecodable: .copiedAside(url)
+            case let .salvaged(kept, dropped): .salvaged(copiedTo: url, kept: kept, dropped: dropped)
+            }
+        }
+    }
+
+    /// What `mutateDB` does with what it read: the speakers its block starts
+    /// from, whether it may write at all, and how the file is damaged when it
+    /// must be copied aside first.
+    struct WritePlan {
+        var stored: [StoredSpeaker] = []
+        var writable = true
+        var damage: Damage?
+    }
+
+    static func writePlan(for outcome: ReadOutcome) -> WritePlan {
+        var plan = WritePlan(stored: outcome.usableSpeakers)
+        switch outcome {
+        case .loaded, .missing:
+            break
+
+        case let .undecodable(error):
+            logger.error("Speaker DB undecodable: \(error.localizedDescription, privacy: .public)")
+            plan.damage = .undecodable
+
+        // Nothing usable is the same loss as an undecodable file.
+        case let .salvaged(kept, _) where kept.isEmpty:
+            logger.error("Speaker DB holds no usable entry")
+            plan.damage = .undecodable
+
+        case let .salvaged(kept, dropped):
+            logger.error("Speaker DB partly undecodable: keeping \(kept.count), dropping \(dropped)")
+            plan.damage = .salvaged(kept: kept.count, dropped: dropped)
+
+        case let .unreadable(error):
+            logger.error("Speaker DB unreadable, not writing: \(error.localizedDescription, privacy: .public)")
+            plan.writable = false
+        }
+        return plan
     }
 
     /// Read `speakers.json`, telling "no file" apart from "a file we cannot
@@ -89,9 +175,33 @@ extension SpeakerMatcher {
         // A whitespace-only file holds no voices any more than an empty one.
         guard data.contains(where: { !Self.jsonWhitespace.contains($0) }) else { return .missing }
         do {
-            return try .loaded(JSONDecoder().decode([StoredSpeaker].self, from: data))
+            let entries = try decodeSalvaging(data)
+            return entries.dropped == 0 ? .loaded(entries.kept) : .salvaged(kept: entries.kept, dropped: entries.dropped)
         } catch {
             return .undecodable(error)
+        }
+    }
+
+    /// Decode a DB entry by entry, keeping each one `StoredSpeaker` decodes.
+    /// Its decoder is the one rule for a usable entry: it rejects a wrong
+    /// type, a missing name, and a value no `Float` can hold (plain JSON has
+    /// no NaN token, so that is how a non-finite value arrives). Throws only
+    /// when `data` is not a JSON array at all, which leaves nothing to
+    /// salvage. Pure, so the per-entry rules are testable without a file.
+    static func decodeSalvaging(_ data: Data) throws -> (kept: [StoredSpeaker], dropped: Int) {
+        let entries = try JSONDecoder().decode([SalvagedEntry].self, from: data)
+        let kept = entries.compactMap(\.speaker)
+        return (kept, entries.count - kept.count)
+    }
+
+    /// One array element that decodes to nil instead of failing the whole
+    /// array. Its own decode always succeeds, so the array decode moves on to
+    /// the next element.
+    private struct SalvagedEntry: Decodable {
+        let speaker: StoredSpeaker?
+
+        init(from decoder: any Decoder) {
+            speaker = try? StoredSpeaker(from: decoder)
         }
     }
 
@@ -103,31 +213,56 @@ extension SpeakerMatcher {
     /// that then syncs out to every other machine.
     static let rereadDelay: TimeInterval = 0.3
 
-    /// Move an undecodable DB to `speakers.json.corrupt-<timestamp>` next to
-    /// it, owner-only like the DB itself. Returns the new path, or nil when
-    /// the move failed (the caller must then not write). Call with `dbLock` held.
-    static func quarantineUndecodableDB(at path: URL) -> URL? {
-        let stamp = quarantineStampFormatter.string(from: Date())
-        let base = "\(path.lastPathComponent).corrupt-\(stamp)"
+    /// Copy a damaged DB to `speakers.json.corrupt-<timestamp>` next to it,
+    /// unchanged and owner-only like the DB itself. The original stays in
+    /// place until the atomic replace in `writeDB` swaps the new file in, so
+    /// a failed write leaves it untouched and a reader never finds the path
+    /// empty. Returns the copy's path, or nil when copying failed (the caller
+    /// must then not write). Call with `dbLock` held.
+    static func quarantineDamagedDB(at path: URL, damage: Damage) -> URL? {
+        let kind = damage.label
+        let fm = FileManager.default
         let dir = path.deletingLastPathComponent()
-        var target = dir.appendingPathComponent(base)
-        // Two quarantines within the same second must not replace each other.
-        if FileManager.default.fileExists(atPath: target.path) {
-            target = dir.appendingPathComponent("\(base)-\(UUID().uuidString.prefix(8))")
-        }
+        // Copy under a name only this call uses, then move it to its final
+        // name: a failed copy then removes nothing but its own file, never
+        // the copy another process on the same DB made in the same second.
+        let partial = dir.appendingPathComponent(".\(path.lastPathComponent).quarantine-\(UUID().uuidString)")
         do {
-            try FileManager.default.moveItem(at: path, to: target)
+            try fm.copyItem(at: path, to: partial)
+            try fm.restrictToOwner(partial)
         } catch {
-            logger.error("Could not move undecodable speaker DB aside: \(error.localizedDescription, privacy: .public)")
+            try? fm.removeItem(at: partial)
+            logger.error("Could not copy \(kind, privacy: .public) speaker DB aside: \(error.localizedDescription, privacy: .public)")
             return nil
         }
-        do {
-            try FileManager.default.restrictToOwner(target)
-        } catch {
-            logger.error("Could not restrict quarantined speaker DB: \(error.localizedDescription, privacy: .public)")
+        let base = "\(path.lastPathComponent).corrupt-\(quarantineStampFormatter.string(from: Date()))"
+        // `moveItem` refuses an existing name, so two quarantines within the
+        // same second keep both copies.
+        for name in [base, "\(base)-\(UUID().uuidString.prefix(8))"] {
+            let target = dir.appendingPathComponent(name)
+            if (try? fm.moveItem(at: partial, to: target)) != nil {
+                logger.error("Copied \(kind, privacy: .public) speaker DB to \(name, privacy: .public)")
+                return target
+            }
         }
-        logger.error("Moved undecodable speaker DB to \(target.lastPathComponent, privacy: .public)")
-        return target
+        try? fm.removeItem(at: partial)
+        logger.error("Could not name the \(kind, privacy: .public) speaker DB copy")
+        return nil
+    }
+
+    /// The copy a write that failed for this unchanged file made, when it
+    /// still holds exactly the bytes at `path`. Anything else (edited,
+    /// truncated, replaced, or a DB rewritten in place with the same
+    /// metadata) is not a copy of what the next write replaces, so the
+    /// caller makes a fresh one. Restricted again, since the first attempt's
+    /// chmod may have failed. Call with `dbLock` held.
+    static func existingCopy(after known: DBProblem?, of path: URL) -> URL? {
+        guard case let .saveFailed(url?) = known,
+              let copy = try? Data(contentsOf: url),
+              let original = try? Data(contentsOf: path),
+              copy == original else { return nil }
+        try? FileManager.default.restrictToOwner(url)
+        return url
     }
 
     private static let quarantineStampFormatter = DateFormatter.filenameStamp("yyyyMMdd-HHmmss")
@@ -183,15 +318,17 @@ extension SpeakerMatcher {
     }
 
     /// Whether `problem` on `path` should reach the user, recording it if so.
-    /// A quarantine always does: it moved a file, so there is no earlier state
-    /// it could repeat. Call with `dbLock` held; `reports` is guarded by it.
+    /// A completed quarantine always does: the original was replaced, so
+    /// there is no earlier state it could repeat. A failed save, with or
+    /// without a copy, leaves the original in place and is reported once per
+    /// state of that file. Call with `dbLock` held; `reports` is guarded by it.
     static func shouldReport(_ problem: DBProblem, at path: URL, reports: inout [URL: ProblemReport]) -> Bool {
         switch problem {
-        case .movedAside, .saveFailed(movedAside: .some):
+        case .copiedAside, .salvaged:
             reports[path] = nil
             return true
 
-        case .leftInPlace, .saveFailed(movedAside: nil):
+        case .leftInPlace, .saveFailed:
             let report = ProblemReport(problem: problem, file: FileState(of: path))
             guard reports[path] != report else { return false }
             reports[path] = report
@@ -210,33 +347,55 @@ extension SpeakerMatcher {
     /// channel that reaches the user from every write path.
     static func notifyDBProblem(_ problem: DBProblem, via notifier: any AppNotifying) {
         switch problem {
-        case let .movedAside(url):
+        case let .copiedAside(url):
             notifier.notify(
                 title: "Voice profiles could not be read",
-                body: "The saved voice profiles were damaged and have been set aside as "
+                body: "The saved voice profiles were damaged. A copy was kept as "
                     + "\(url.lastPathComponent). Speakers need to be named again.",
             )
+
+        case let .salvaged(url, kept, dropped):
+            notifier.notify(title: "Some voice profiles could not be read", body: salvageMessage(
+                copiedTo: url, kept: kept, dropped: dropped,
+            ))
 
         case .leftInPlace:
             notifier.notify(
                 title: "Voice profiles could not be read",
-                body: "The saved voice profiles could not be opened, so speaker names "
-                    + "are not being saved. They were left unchanged.",
+                body: "The saved voice profiles could not be opened or updated, so speaker "
+                    + "names are not being saved. They were left unchanged.",
             )
 
-        case let .saveFailed(movedAside: url?):
+        case let .saveFailed(copiedTo: url?):
             notifier.notify(
                 title: "Voice profiles could not be saved",
-                body: "The saved voice profiles were damaged and have been set aside as "
-                    + "\(url.lastPathComponent), and the new profiles could not be written. "
-                    + "Speaker names are not being saved.",
+                body: "The saved voice profiles are damaged. A copy was kept as "
+                    + "\(url.lastPathComponent), but the repaired profiles could not be written, "
+                    + "so speaker names are not being saved. The profiles were left unchanged.",
             )
 
-        case .saveFailed(movedAside: nil):
+        case .saveFailed(copiedTo: nil):
             notifier.notify(
                 title: "Voice profiles could not be saved",
                 body: "Writing the voice profiles failed, so speaker names are not being saved.",
             )
         }
+    }
+
+    /// The body of the `.salvaged` notification: how many profiles were kept,
+    /// how many were not, and where the dropped ones can still be found. A
+    /// dropped speaker who is named again gets a new profile; the old one is
+    /// not merged back, so the text does not promise that nothing changes.
+    static func salvageMessage(copiedTo url: URL, kept: Int, dropped: Int) -> String {
+        let file = url.lastPathComponent
+        return "\(profiles(kept)) \(kept == 1 ? "was" : "were") kept. "
+            + "\(profiles(dropped)) could not be read and \(dropped == 1 ? "was" : "were") "
+            + "left out, so \(dropped == 1 ? "that speaker is" : "those speakers are") no longer recognised. "
+            + "The original file was kept as \(file). A left-out speaker who is named again "
+            + "starts a new profile; the old one stays in that file and is not merged."
+    }
+
+    private static func profiles(_ count: Int) -> String {
+        count == 1 ? "1 voice profile" : "\(count) voice profiles"
     }
 }

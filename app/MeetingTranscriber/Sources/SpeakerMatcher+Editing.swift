@@ -3,9 +3,12 @@ import Foundation
 /// Rename, delete and merge, for Known Voices and the debug RPC. Each goes
 /// through `mutateDB`, so an edit against a DB that could not be used answers
 /// `notSaved` rather than a result that reads as done, or as a missing name.
-/// One that found the DB undecodable answers `replacedCorruptDB`: the DB was
-/// moved aside and replaced by an empty one, so the edit had nothing to act
-/// on, yet the file did change.
+/// One that found the DB damaged answers `replacedCorruptDB` when it found
+/// nothing to act on: the DB was copied aside and replaced by the entries that
+/// could be salvaged (none, for a file that did not decode at all), so the
+/// name may be among the dropped ones, and the file did change. An edit that
+/// did find its name among the salvaged entries answers as usual; that
+/// already tells callers to refresh.
 extension SpeakerMatcher {
     enum RenameResult: Equatable {
         case renamed
@@ -14,8 +17,8 @@ extension SpeakerMatcher {
         case noop
         /// The DB could not be read or written; nothing changed on disk.
         case notSaved
-        /// The DB was undecodable, moved to this path and replaced by an
-        /// empty one. The edit found nothing to act on.
+        /// The DB was damaged, copied to this path and replaced by the entries
+        /// that could be salvaged. The edit found nothing to act on among them.
         case replacedCorruptDB(URL)
     }
 
@@ -50,7 +53,7 @@ extension SpeakerMatcher {
             return .renamed
         }
         guard mutation.saved else { return .notSaved }
-        if let movedTo = mutation.replacedCorruptDB { return .replacedCorruptDB(movedTo) }
+        if let copiedTo = mutation.resetUnlessFound(mutation.value != .notFound) { return .replacedCorruptDB(copiedTo) }
         return mutation.value
     }
 
@@ -85,7 +88,7 @@ extension SpeakerMatcher {
 
     private static func editResult(_ mutation: Mutation<Bool>) -> EditResult {
         guard mutation.saved else { return .notSaved }
-        if let movedTo = mutation.replacedCorruptDB { return .replacedCorruptDB(movedTo) }
+        if let copiedTo = mutation.resetUnlessFound(mutation.value) { return .replacedCorruptDB(copiedTo) }
         return mutation.value ? .applied : .notFound
     }
 }
