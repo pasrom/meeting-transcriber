@@ -272,6 +272,30 @@ final class PipelineJobTests: XCTestCase {
         XCTAssertEqual(decoded.sidecarOutputDirs.map(\.path), ["/tmp/second"])
     }
 
+    func testRetryableNotionBackupNeedsAFailedExportOnADoneJobWithABackupPath() {
+        var job = Self.makeJob()
+        job.state = .done
+        job.protocolPath = URL(fileURLWithPath: "/nonexistent-volume/protocol.md")
+        XCTAssertFalse(job.hasRetryableNotionBackup, "no export was attempted")
+
+        job.beginNotionExport(speakerNames: [])
+        XCTAssertFalse(job.hasRetryableNotionBackup, "still running")
+
+        job.finishNotionExport(succeeded: false)
+        XCTAssertTrue(job.hasRetryableNotionBackup)
+
+        job.protocolPath = nil
+        XCTAssertFalse(job.hasRetryableNotionBackup, "nothing to retry from")
+
+        job.protocolPath = URL(fileURLWithPath: "/nonexistent-volume/protocol.md")
+        job.state = .error
+        XCTAssertFalse(job.hasRetryableNotionBackup, "not a finished job")
+
+        job.state = .done
+        job.finishNotionExport(succeeded: true)
+        XCTAssertFalse(job.hasRetryableNotionBackup, "already exported")
+    }
+
     /// A job's encoded form as a mutable dictionary, so a test can produce a
     /// state no writer reaches and decode it back.
     private static func encodedFields(of job: PipelineJob) throws -> [String: Any] {

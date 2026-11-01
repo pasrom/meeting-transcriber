@@ -202,11 +202,12 @@ extension PipelineQueue {
 
     /// A failed export already has a complete Markdown backup. Retrying it
     /// must not transcribe the audio or spend another protocol-generation call.
+    /// A hint from the job's state only; see `PipelineJob.hasRetryableNotionBackup`.
+    /// It must not check the file: it stands for what the menu shows on every
+    /// render, and the output folder can be a network volume. The retry reads
+    /// the file itself.
     func canRetryNotionExport(id: UUID) -> Bool {
-        guard let job = jobs.first(where: { $0.id == id }),
-              job.state == .done, job.notionExportStatus == .failed,
-              let path = job.protocolPath else { return false }
-        return FileManager.default.fileExists(atPath: path.path)
+        jobs.first { $0.id == id }?.hasRetryableNotionBackup ?? false
     }
 
     @discardableResult

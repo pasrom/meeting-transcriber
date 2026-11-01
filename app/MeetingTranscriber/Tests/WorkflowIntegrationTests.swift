@@ -1225,6 +1225,34 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: backup.path))
     }
 
+    /// The menu offers the retry from the job's state alone, so a backup removed
+    /// behind the app's back is only discovered when the retry runs. It then
+    /// says so instead of doing nothing, and does not export an empty page.
+    func testNotionRetryReportsAReadFailureWhenTheBackupWasRemovedBehindTheApp() async throws {
+        let exporter = StubNotionExporter(
+            result: NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),
+            failAfterPageCreatedCount: 1,
+        )
+        let (harness, _) = try makeHarness(
+            notionExportConfiguration: NotionExportConfiguration(exporter: exporter, databaseID: "database-1"),
+        )
+        let job = makeJob(audioPath: harness.audioPath)
+        harness.queue.enqueue(job)
+        await harness.queue.awaitProcessing()
+        let backup = try XCTUnwrap(harness.queue.jobs.first?.protocolPath)
+        try FileManager.default.removeItem(at: backup)
+
+        XCTAssertTrue(harness.queue.canRetryNotionExport(id: job.id), "The hint comes from the job's state, not the file")
+        let retrySucceeded = await harness.queue.retryNotionExport(id: job.id)
+
+        XCTAssertFalse(retrySucceeded)
+        let failed = try XCTUnwrap(harness.queue.jobs.first)
+        XCTAssertEqual(failed.notionExportStatus, .failed)
+        XCTAssertTrue(failed.warnings.contains("Could not read the local protocol backup; Notion export was not retried"))
+        let exports = await exporter.exports
+        XCTAssertEqual(exports.count, 1, "No second export without a backup to export")
+    }
+
     func testSuccessfulNotionRetryKeepsLocalProtocolWithoutSkipLocal() async throws {
         let exporter = StubNotionExporter(
             result: NotionPageResult(pageID: "page-1", url: "https://www.notion.so/page-1"),

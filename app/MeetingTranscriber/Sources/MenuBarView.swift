@@ -337,7 +337,7 @@ struct MenuBarView: View {
                 Task { await pipelineQueue.retryNotionExport(id: job.id) }
             }
             .accessibilityIdentifier(A11yID.jobNotionRetryButton(index))
-            .disabled(!notionExportEnabled || !pipelineQueue.canRetryNotionExport(id: job.id))
+            .disabled(!notionExportEnabled || !job.hasRetryableNotionBackup)
             .help(notionExportEnabled ? "" : "Enable Notion export in Settings → Output to retry.")
         }
     }
