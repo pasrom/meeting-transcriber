@@ -34,7 +34,13 @@ finish() {
 trap finish EXIT
 ok()  { echo "$1 ... PASS"; PASSED=$(( PASSED + 1 )); }
 bad() { echo "$1 ... FAIL: $2"; exit 1; }
-now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
+# The blocked fakes below hang for 300 s, so this only has to tell "bounded"
+# from "waited out the hang" (or a bound stretched many times over). It is a
+# ceiling, not a precision check: run_bounded's own wall-clock cap lets a 1 s
+# bound run close to 3 s, a 2.5 s limit failed on loaded runners after a bound
+# that had worked, and the bound itself is proven by the status (124 only
+# ever means run_bounded gave up) and by the blocked process being gone.
+HANG_CEILING_S=20
 
 # --- run_bounded ---------------------------------------------------------------
 
@@ -55,15 +61,17 @@ chmod +x "$TMP/forever"
 # A full second: the fake has to start, write its pid and print, which a cold,
 # loaded host (a fresh checkout on CI) does not reliably do within 0.2 s.
 status=0
-t0="$(now_ms)"
+t0=$SECONDS
 out="$(run_bounded 1 "$TMP/forever")" || status=$?
-elapsed=$(( $(now_ms) - t0 ))
+elapsed=$(( SECONDS - t0 ))
 blocked_pid="$(cat "$TMP/forever.pid" 2>/dev/null || true)"
 PIDS="$PIDS $blocked_pid"
-[ "$status" -eq 124 ] && [ "$elapsed" -lt 2500 ] && [ "$out" = started ] \
-    && ok bounded_reports_a_hang_within_the_bound || bad bounded_reports_a_hang_within_the_bound "status $status after ${elapsed}ms, out '$out'"
-[ -n "$blocked_pid" ] && poll_until 2 0.1 _no_pid_alive "$blocked_pid" \
-    && ok bounded_kills_the_blocked_process || bad bounded_kills_the_blocked_process "pid '$blocked_pid' still alive"
+[ "$status" -eq 124 ] && [ "$elapsed" -lt "$HANG_CEILING_S" ] && [ "$out" = started ] \
+    && ok bounded_reports_a_hang_within_the_bound || bad bounded_reports_a_hang_within_the_bound "status $status after ${elapsed}s, out '$out'"
+# The SIGKILL landed before run_bounded returned; the wait is only for the
+# kernel to reap it, so it too is a generous ceiling that returns at once.
+[ -n "$blocked_pid" ] && poll_until 10 0.1 _no_pid_alive "$blocked_pid" \
+    && ok bounded_kills_the_blocked_process || bad bounded_kills_the_blocked_process "pid '${blocked_pid:-<never written>}' still alive"
 
 # Under errexit, a failing command must still report its status.
 status=0
@@ -194,6 +202,7 @@ out="$(preflight env 2>&1)" || status=$?
 
 cat >"$TMP/ls-forever" <<EOF
 #!/bin/sh
+echo \$\$ >"$TMP/ls-forever.pid"
 exec sleep 300
 EOF
 cat >"$TMP/ls-denied" <<'EOF'
@@ -205,15 +214,21 @@ chmod +x "$TMP/ls-forever" "$TMP/ls-denied"
 
 status=0
 : >"$TMP/summary"
-t0="$(now_ms)"
+t0=$SECONDS
 out="$(preflight env TCC_PREFLIGHT_BOUND=0.3 TCC_PREFLIGHT_LS="$TMP/ls-forever" 2>&1)" || status=$?
-elapsed=$(( $(now_ms) - t0 ))
-[ "$status" -eq 1 ] && [ "$elapsed" -lt 3000 ] \
+elapsed=$(( SECONDS - t0 ))
+[ "$status" -eq 1 ] && [ "$elapsed" -lt "$HANG_CEILING_S" ] \
     && grep -q '^::error title=TCC Files & Folders → Downloads not usable::no answer within 0.3s: a consent prompt is probably waiting' <<<"$out" \
     && grep -q 'allow /runner/externals/node99/bin/node' <<<"$out" \
     && grep -q 'not usable (blocked)' "$TMP/summary" \
     && ok preflight_blocked_read_fails_fast_naming_grant_and_binary \
-    || bad preflight_blocked_read_fails_fast_naming_grant_and_binary "status $status after ${elapsed}ms: $out"
+    || bad preflight_blocked_read_fails_fast_naming_grant_and_binary "status $status after ${elapsed}s: $out"
+# With a 0.3 s bound a loaded host may kill the fake before it records its
+# pid; then it never ran and nothing can be left over.
+ls_pid="$(cat "$TMP/ls-forever.pid" 2>/dev/null || true)"
+PIDS="$PIDS $ls_pid"
+{ [ -z "$ls_pid" ] || poll_until 10 0.1 _no_pid_alive "$ls_pid"; } \
+    && ok preflight_kills_the_blocked_read || bad preflight_kills_the_blocked_read "pid '$ls_pid' still alive"
 
 status=0
 out="$(preflight env TCC_PREFLIGHT_LS="$TMP/ls-denied" 2>&1)" || status=$?
