@@ -105,7 +105,7 @@ echo "  RPC up"
 
 # --- 5. Assert channelHealth state ---------------------------------------
 
-STATE_JSON="$("$MTCLI" state)"
+STATE_JSON="$(state_query .)" || die "$(state_why $? "the channelHealth assertions")"
 read -r MIC_SILENT APP_SILENT < <(
     echo "$STATE_JSON" | jq -r '"\(.channelHealth.micSilent) \(.channelHealth.appSilent)"'
 )
