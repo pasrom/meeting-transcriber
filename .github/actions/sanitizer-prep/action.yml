@@ -1,0 +1,42 @@
+name: "Sanitizer prep"
+description: >
+  Prepares a self-hosted Mini for ./.github/actions/sanitizer-tests: the CI
+  keychain the KeychainHelper tests write to, and the ffmpeg the ffmpeg-tier
+  tests need. Separate from sanitizer-tests so that a failure here reports as
+  a setup failure of its own step, which neither cancels the run nor reads as
+  a sanitizer finding in sanitizer-gate. Shared by both sanitizer legs.
+
+runs:
+  using: "composite"
+  steps:
+    # `mt-ci.keychain-db` is pre-staged by setup-self-hosted-runner.sh, but
+    # macOS occasionally drops it from the per-user search list (seen after
+    # a second runner's `config.sh` ran as the same OS user). When that
+    # happens `SecItemAdd` writes to the default keychain while
+    # `SecItemCopyMatching` searches login.keychain only, and the
+    # KeychainHelper tests silent-fail. Re-assert per job; safe when both
+    # legs run at once because every job writes the same value.
+    #
+    # `set-keychain-settings -lut 36000` raises the auto-lock-on-idle
+    # timeout to 10 h. The default ~5 min fired mid-run on the Mini
+    # (sanitizer compile ~4 min + slower tests pushed read calls past
+    # the threshold), causing `SecItemCopyMatching` to silent-fail with
+    # `errSecAuthFailed` between two consecutive reads in
+    # `testOpenAIAPIKeyViaKeychainHelper`. Without `-l` the keychain
+    # also doesn't lock on system sleep, irrelevant inside a CI job
+    # but defensive.
+    #
+    # The tests' test home does not change this: they keep the account's HOME,
+    # through which the Security framework reads the default and search list
+    # set here (see runner-home for why HOME is not moved).
+    - name: Ensure CI keychain is default + in search list + unlocked + no-autolock
+      shell: bash
+      run: |
+        MT_CI_KEYCHAIN="$HOME/Library/Keychains/mt-ci.keychain-db"
+        security default-keychain -s "$MT_CI_KEYCHAIN"
+        "$GITHUB_WORKSPACE/scripts/keychain-prepend.sh" "$MT_CI_KEYCHAIN"
+        security unlock-keychain -p "" "$MT_CI_KEYCHAIN"
+        security set-keychain-settings -lut 36000 "$MT_CI_KEYCHAIN"
+    # sanitizer-tests runs the full suite, ffmpeg-tier tests included, and
+    # those fail rather than skip without ffmpeg (see setup-ffmpeg).
+    - uses: ./.github/actions/setup-ffmpeg
