@@ -53,6 +53,13 @@ struct HeldFake {
     /// For limits not under test (a timeout, a drain grace that nothing
     /// should end early): past `safetyNet`, so they cannot end a run first.
     static let noLimit = TimeInterval(2 * safetyNet)
+    /// The limit `passLimit` hands the code under test unless told otherwise.
+    /// It must differ from every limit the code under test has of its own
+    /// (its defaults, and its other limits on the same clock), so that code
+    /// measuring one of those instead is caught by the deadline it set; keep
+    /// it so when adding a limit to such code. Past `safetyNet`, so a limit
+    /// measured on the wall clock cannot end the fake first.
+    static let testLimit: TimeInterval = 45
     /// A coarse ceiling on stopping a process, SIGTERM then SIGKILL a short
     /// grace later, for tests of a genuine time limit; not a speed check.
     static let stopBound: TimeInterval = 10
@@ -130,6 +137,21 @@ struct HeldFakeNotStarted: Error, CustomStringConvertible {
     }
 }
 
+/// The limit `passLimit` handed in was not what slept on its clock: the code
+/// measured another limit, or none on that clock.
+struct LimitNotOnClock: Error, CustomStringConvertible {
+    let handedIn: TimeInterval
+    let asleep: [Duration]
+    let run: String
+
+    var description: String {
+        let what = asleep.isEmpty
+            ? "the limit was not measured on the given clock"
+            : "the limits asleep on the clock are \(asleep), not the \(handedIn) s handed in"
+        return "\(what); the run, cancelled, ended with \(run)"
+    }
+}
+
 extension XCTestCase {
     /// A `HeldFake` named `name`, released when `folder` is removed. The
     /// polling is perl's, not the shell's, so it forks nothing while it
@@ -188,18 +210,27 @@ extension XCTestCase {
     /// first: in real time the limit could pass first on a loaded machine,
     /// and the stop would then end a fake before it had set its trap or done
     /// what the test is about. `run` gets the clock and the limit to measure
-    /// on it; the size of the limit does not matter. Checks that the limit
-    /// was measured on that clock and that `held` was stopped
-    /// (`HeldFake.assertStopped`, with `message`, from when the limit
-    /// passed). Throws `HeldFakeNotStarted`, saying how `run` ended, when
-    /// `run` ends before the limit could pass (it failed, or its limit did
+    /// on it, `timeout` (`HeldFake.testLimit` by default).
+    ///
+    /// Before the clock moves, what sleeps on it must be exactly that limit,
+    /// due `timeout` after the start: a limit measured on another clock
+    /// leaves nothing asleep, and one of the wrong value, or another limit
+    /// in its place, sleeps to another deadline. Either throws
+    /// `LimitNotOnClock` at once, once the run has been cancelled and has
+    /// ended, instead of leaving the fake to its safety net. The deadlines
+    /// are read when the first one is set, so a second limit set later is
+    /// not seen. Otherwise the clock moves by `timeout` and `held` must have
+    /// been stopped (`HeldFake.assertStopped`, with `message`, from when the
+    /// limit passed).
+    ///
+    /// Also throws `HeldFakeNotStarted`, saying how `run` ended, when `run` ends before the limit could pass (it failed, or its limit did
     /// not wait for the clock), or when `held` never starts, once `run` has
     /// then been cancelled and has ended.
     func passLimit<T: Sendable>(
-        of held: HeldFake, _ message: String, file: StaticString = #filePath, line: UInt = #line,
+        of held: HeldFake, _ message: String, timeout: TimeInterval = HeldFake.testLimit,
+        file: StaticString = #filePath, line: UInt = #line,
         _ run: @escaping @Sendable (_ clock: ManualClock, _ timeout: TimeInterval) async throws -> T,
     ) async throws -> Result<T, any Error> {
-        let timeout: TimeInterval = 1
         let clock = ManualClock()
         let ended = OSAllocatedUnfairLock(initialState: false)
         let task = Task {
@@ -221,10 +252,15 @@ extension XCTestCase {
             let result = await task.result
             throw HeldFakeNotStarted(started: held.started, runEndedFirst: true, run: "\(result)")
         }
-        let slept = await clock.advance(by: .seconds(timeout))
+        let deadlines = await clock.sleepingDeadlines()
+        guard deadlines == [.seconds(timeout)] else {
+            task.cancel()
+            let result = await task.result
+            throw LimitNotOnClock(handedIn: timeout, asleep: deadlines, run: "\(result)")
+        }
+        await clock.advance(by: .seconds(timeout))
         let start = Date()
         let result = await task.result
-        XCTAssertTrue(slept, "the limit was not measured on the given clock", file: file, line: line)
         held.assertStopped(since: start, message, file: file, line: line)
         return result
     }

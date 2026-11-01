@@ -82,10 +82,7 @@ final class ManualClock: Clock, Sendable {
     /// Returns whether something was asleep; it moves the clock either way.
     @discardableResult
     func advance(by duration: Duration) async -> Bool {
-        let sleptBy = ContinuousClock.now + regressionCeiling
-        while state.withLock({ $0.sleepers.isEmpty }), ContinuousClock.now < sleptBy {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        await waitForSleeper()
         let slept = state.withLock { !$0.sleepers.isEmpty }
         let due = state.withLock { current in
             current.now = current.now.advanced(by: duration)
@@ -97,5 +94,21 @@ final class ManualClock: Clock, Sendable {
             sleeper.continuation.resume()
         }
         return slept
+    }
+
+    /// When what is asleep on the clock is due, measured from the clock's
+    /// start, earliest first: on a fresh clock, the limits the code under test
+    /// set. Waits first, up to `regressionCeiling`, for something to be
+    /// asleep, for the reason `advance` gives; empty when nothing came.
+    func sleepingDeadlines() async -> [Duration] {
+        await waitForSleeper()
+        return state.withLock { $0.sleepers.map(\.deadline.elapsed).sorted() }
+    }
+
+    private func waitForSleeper() async {
+        let sleptBy = ContinuousClock.now + regressionCeiling
+        while state.withLock({ $0.sleepers.isEmpty }), ContinuousClock.now < sleptBy {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
     }
 }
