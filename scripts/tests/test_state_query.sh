@@ -98,11 +98,14 @@ script 'answer {"windows":null}'
 status=0; state_query '.windows[]' >/dev/null 2>&1 || status=$?
 [ "$status" -eq 3 ] && ok query_filter_error_is_its_own_status || bad query_filter_error_is_its_own_status "status $status"
 
-# A wedged app must not hang the step: the read is bounded.
+# A wedged app must not hang the step: the read is bounded. The fake hangs for
+# 30 s, so the wall clock is only a ceiling telling "bounded" from "waited it
+# out": run_bounded's whole-second cap lets a 0.1 s bound run close to 3 s, and
+# a loaded runner more, so the old 5 s judged the host rather than the bound.
 script hang
 start=$SECONDS status=0
 STATE_READ_BOUND_S=0.1 state_query . >/dev/null 2>"$TMP/err" || status=$?
-[ "$status" -eq 2 ] && [ $(( SECONDS - start )) -lt 5 ] && grep -q 'no reply within 0.1s' "$TMP/err" \
+[ "$status" -eq 2 ] && [ $(( SECONDS - start )) -lt 20 ] && grep -q 'no reply within 0.1s' "$TMP/err" \
     && ok query_hang_is_bounded_no_answer || bad query_hang_is_bounded_no_answer "status $status after $(( SECONDS - start ))s: $(cat "$TMP/err")"
 
 # --- state_read -------------------------------------------------------------
@@ -116,8 +119,11 @@ status=0; state_read || status=$?
 
 # --- poll_state -------------------------------------------------------------
 
+# The windows of the polls meant to hold are ceilings: they end at the read
+# the condition holds on. The interval keeps a never-true condition from
+# forking the fake back to back for the whole window.
 script 'answer {"watchState":"watching"}' 'answer {"watchState":"recording"}'
-status=0; poll_state 5 0 state_is '.watchState == "recording"' 2>/dev/null || status=$?
+status=0; poll_state 20 0.05 state_is '.watchState == "recording"' 2>/dev/null || status=$?
 [ "$status" -eq 0 ] && ok poll_holds || bad poll_holds "status $status"
 
 # The real false: the app answers throughout and the condition never holds.
@@ -140,7 +146,7 @@ status=0; poll_state 0 0 state_is '[.windows[]? | select(.id == "speaker-naming"
 # The app goes quiet mid-poll and comes back: polling goes on, the gap is
 # logged once each way, and the condition is still found.
 script 'answer {"x":0}' fail fail fail 'answer {"x":1}'
-status=0; poll_state 10 0 state_is '.x == 1' 2>"$TMP/err" || status=$?
+status=0; poll_state 20 0.05 state_is '.x == 1' 2>"$TMP/err" || status=$?
 [ "$status" -eq 0 ] && [ "$(grep -c 'still polling' "$TMP/err")" = 1 ] && grep -q 'answers /state again' "$TMP/err" \
     && ok poll_survives_a_gap || bad poll_survives_a_gap "status $status: $(cat "$TMP/err")"
 
