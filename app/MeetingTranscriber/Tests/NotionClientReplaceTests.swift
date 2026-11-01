@@ -47,9 +47,7 @@ final class NotionClientReplaceTests: XCTestCase {
 
         // Pass 3 finally deletes cleanly: exactly one copy remains.
         page.deletePlan = .alwaysSucceed
-        let result = try await client.exportMeeting(
-            title: "Notes", date: nil, tags: [], markdown: newContent, transcript: nil, existingPageID: pageID,
-        )
+        let result = try await export(client, markdown: newContent)
         XCTAssertTrue(result.updatedExistingPage)
         XCTAssertEqual(page.texts, texts("New", count: 5))
         XCTAssertEqual(page.creates, 0)
@@ -95,17 +93,13 @@ final class NotionClientReplaceTests: XCTestCase {
         XCTAssertEqual(page.appends, 1, "Only the first pass wrote the protocol")
 
         page.deletePlan = .alwaysSucceed
-        _ = try await client.exportMeeting(
-            title: "Notes", date: nil, tags: [], markdown: protocolMarkdown, transcript: nil, existingPageID: pageID,
-        )
+        _ = try await export(client, markdown: protocolMarkdown)
         XCTAssertEqual(page.types, expected.map(\.type))
         XCTAssertEqual(page.appends, 1)
     }
 
     func testAHeadingIsNotTakenForAParagraphWithTheSameText() async throws {
-        // The page ends in a heading "Alpha" and a paragraph "Beta"; the new
-        // content is two paragraphs with that same text. The text matches, the
-        // types do not, so the new content must still be written.
+        // Text equal, types differ: the new content must still be written.
         let page = FakeNotionPage(initial: [
             .init(type: "paragraph", text: "Old"),
             .init(type: "heading_1", text: "Alpha"),
@@ -113,9 +107,7 @@ final class NotionClientReplaceTests: XCTestCase {
         ])
         let client = page.makeClient(databaseID: databaseID)
 
-        _ = try await client.exportMeeting(
-            title: "Notes", date: nil, tags: [], markdown: "Alpha\n\nBeta", transcript: nil, existingPageID: pageID,
-        )
+        _ = try await export(client, markdown: "Alpha\n\nBeta")
         XCTAssertEqual(page.texts, ["Alpha", "Beta"])
         XCTAssertEqual(page.types, ["paragraph", "paragraph"])
         XCTAssertEqual(page.appends, 1)
@@ -127,10 +119,7 @@ final class NotionClientReplaceTests: XCTestCase {
         let page = FakeNotionPage(initial: ["Old paragraph 5."] + texts("Version1", count: 3))
         let client = page.makeClient(databaseID: databaseID)
 
-        _ = try await client.exportMeeting(
-            title: "Notes", date: nil, tags: [], markdown: markdown("Version2", count: 3), transcript: nil,
-            existingPageID: pageID,
-        )
+        _ = try await export(client, markdown: markdown("Version2", count: 3))
         XCTAssertEqual(page.texts, texts("Version2", count: 3))
     }
 
@@ -140,10 +129,7 @@ final class NotionClientReplaceTests: XCTestCase {
         let page = FakeNotionPage(initial: texts("Same", count: 3))
         let client = page.makeClient(databaseID: databaseID)
 
-        _ = try await client.exportMeeting(
-            title: "Notes", date: nil, tags: [], markdown: markdown("Same", count: 3), transcript: nil,
-            existingPageID: pageID,
-        )
+        _ = try await export(client, markdown: markdown("Same", count: 3))
         XCTAssertEqual(page.texts, texts("Same", count: 3))
         XCTAssertEqual(page.appends, 1)
         XCTAssertEqual(page.deleteAttempts, 3)
@@ -157,10 +143,7 @@ final class NotionClientReplaceTests: XCTestCase {
         page.deletePlan = .failBlocks(containing: ["Old paragraph 2."])
 
         do {
-            _ = try await client.exportMeeting(
-                title: "Notes", date: nil, tags: [], markdown: markdown("New", count: 2), transcript: nil,
-                existingPageID: pageID,
-            )
+            _ = try await export(client, markdown: markdown("New", count: 2))
             XCTFail("The failed delete must be reported")
         } catch {
             XCTAssertEqual((error as? NotionClientError)?.httpStatusCode, 500)
@@ -196,25 +179,22 @@ final class NotionClientReplaceTests: XCTestCase {
         let page = FakeNotionPage(initial: texts("Old", count: 150))
         let client = page.makeClient(databaseID: databaseID)
 
-        _ = try await client.exportMeeting(
-            title: "Notes", date: nil, tags: [], markdown: markdown("New", count: 3), transcript: nil, existingPageID: pageID,
-        )
+        _ = try await export(client, markdown: markdown("New", count: 3))
         XCTAssertEqual(page.listCalls, 2)
         XCTAssertEqual(page.deleteAttempts, 150)
         XCTAssertEqual(page.texts, texts("New", count: 3))
     }
 
     func testACompleteCopyIsRecognisedWhenTheListingNeedsSeveralPages() async throws {
-        // 120 leftovers then the copy: the copy straddles the 100-block page
-        // boundary of the listing, so it is only seen when every page is read.
-        let page = FakeNotionPage(initial: texts("Old", count: 120) + texts("New", count: 3))
+        // 98 leftovers then the copy: its last block is the 101st, so the copy
+        // is split across the first two listing pages and only seen whole when
+        // every page is read.
+        let page = FakeNotionPage(initial: texts("Old", count: 98) + texts("New", count: 3))
         let client = page.makeClient(databaseID: databaseID)
 
-        _ = try await client.exportMeeting(
-            title: "Notes", date: nil, tags: [], markdown: markdown("New", count: 3), transcript: nil, existingPageID: pageID,
-        )
+        _ = try await export(client, markdown: markdown("New", count: 3))
         XCTAssertEqual(page.appends, 0)
-        XCTAssertEqual(page.deleteAttempts, 120)
+        XCTAssertEqual(page.deleteAttempts, 98)
         XCTAssertEqual(page.texts, texts("New", count: 3))
     }
 
@@ -224,11 +204,16 @@ final class NotionClientReplaceTests: XCTestCase {
         (1 ... count).map { "\(prefix) paragraph \($0)." }
     }
 
+    @discardableResult
+    private func export(_ client: NotionClient, markdown: String) async throws -> NotionPageResult {
+        try await client.exportMeeting(
+            title: "Notes", date: nil, tags: [], markdown: markdown, transcript: nil, existingPageID: pageID,
+        )
+    }
+
     private func assertFails(_ client: NotionClient, markdown: String, line: UInt = #line) async {
         do {
-            _ = try await client.exportMeeting(
-                title: "Notes", date: nil, tags: [], markdown: markdown, transcript: nil, existingPageID: pageID,
-            )
+            _ = try await export(client, markdown: markdown)
             XCTFail("Expected the replace to fail", line: line)
         } catch {
             XCTAssertEqual((error as? NotionClientError)?.httpStatusCode, 500, line: line)
@@ -255,7 +240,6 @@ private final class FakeNotionPage: @unchecked Sendable {
         let id: String
         let type: String
         let text: String
-        let hasChildren: Bool
     }
 
     private static let listPageSize = 100
@@ -281,7 +265,7 @@ private final class FakeNotionPage: @unchecked Sendable {
     }
 
     init(initial: [Seed]) {
-        blocks = initial.map { Block(id: newID(), type: $0.type, text: $0.text, hasChildren: false) }
+        blocks = initial.map { Block(id: newID(), type: $0.type, text: $0.text) }
     }
 
     convenience init(initial: [String]) {
@@ -346,14 +330,13 @@ private final class FakeNotionPage: @unchecked Sendable {
 
     private func list(_ request: URLRequest) -> (HTTPURLResponse, Data) {
         listCalls += 1
-        let cursor = URLComponents(url: request.url ?? URL(fileURLWithPath: "/"), resolvingAgainstBaseURL: false)?
+        let cursor = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?
             .queryItems?.first { $0.name == "start_cursor" }?.value.flatMap(Int.init) ?? 0
         let end = min(cursor + Self.listPageSize, blocks.count)
         let objects: [[String: Any]] = blocks[cursor ..< end].map { block in
             [
                 "id": block.id,
                 "type": block.type,
-                "has_children": block.hasChildren,
                 block.type: ["rich_text": [["type": "text", "plain_text": block.text, "text": ["content": block.text]]]],
             ]
         }
@@ -372,7 +355,7 @@ private final class FakeNotionPage: @unchecked Sendable {
             let content = child[type] as? [String: Any]
             let richText = content?["rich_text"] as? [[String: Any]]
             let text = richText?.compactMap { ($0["text"] as? [String: Any])?["content"] as? String }.joined() ?? ""
-            blocks.append(Block(id: newID(), type: type, text: text, hasChildren: content?["children"] != nil))
+            blocks.append(Block(id: newID(), type: type, text: text))
         }
         return respond(request, json: "{}")
     }

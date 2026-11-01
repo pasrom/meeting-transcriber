@@ -20,11 +20,9 @@ import Foundation
 ///   the first pass that deletes cleanly.
 /// Formatting, table cells and toggle children are not compared, so a retry
 /// that differs from the interrupted run only there, and only while leftovers
-/// exist, keeps the interrupted run's version of those parts. Refusing to match
-/// any block that has children would close that gap, but a saved protocol
-/// normally ends in transcript toggles and often holds a table, so the
-/// recognition would then never apply to the protocols users export, and the
-/// page would grow as before; the gap is the accepted cost.
+/// exist, keeps the interrupted run's version of those parts. Refusing blocks
+/// that have children would close that gap but disable the recognition for
+/// typical protocols (transcript toggles, tables), so the gap is accepted.
 struct NotionReplacePlan: Equatable {
     /// Root blocks to delete once the new content is on the page.
     let staleBlockIDs: [String]
