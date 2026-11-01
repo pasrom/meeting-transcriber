@@ -423,8 +423,10 @@ Scope and limits:
   `in_progress`, `failed` or `completed`. `id` appears as soon as the page exists, so
   a failed or interrupted export can be retried against it. `url` appears only after the export
   completes, which can be after `state` is `done`: the export runs in the background,
-  so poll while `status` is `in_progress`. `POST /v1/transcribe` waits for it within
-  `maxWaitSeconds`. A successful Notion-only export has no `protocolPath`; use
+  so poll while `status` is `in_progress`. `POST /v1/transcribe` does not wait for
+  it: it returns once `state` is terminal, with the export still `in_progress` if
+  Notion has not finished. One export is stopped after ten minutes and ends as
+  `failed`, which the menu can retry. A successful Notion-only export has no `protocolPath`; use
   `url` to open the page.
 - A done job with `export.status: "failed"` can be retried from its local
   Markdown backup using the menu's **Retry Notion Export** action. This reads

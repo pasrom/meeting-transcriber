@@ -42,7 +42,7 @@ class PipelineQueue {
     /// failure cause or nil on success.
     @ObservationIgnored var onNotionExportFinished: ((PipelineJob, String?) -> Void)?
     @ObservationIgnored var pendingNotionExports: [UUID: PendingNotionExport] = [:]
-    @ObservationIgnored var notionExportTasks: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
+    @ObservationIgnored var notionExportTasks: [UUID: (token: UUID, task: Task<Void, Never>, export: PendingNotionExport)] = [:]
     /// Internal (not private) because `loadSnapshot` in PipelineQueue+Recovery.swift
     /// reads it to locate the snapshot file.
     let logDir: URL

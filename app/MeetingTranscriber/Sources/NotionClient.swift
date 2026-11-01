@@ -546,6 +546,9 @@ enum NotionClientError: LocalizedError, Equatable {
         case is CancellationError:
             "cancelled"
 
+        case is NotionExportDeadlineExceeded:
+            "time limit reached"
+
         default:
             "unexpected response from Notion"
         }

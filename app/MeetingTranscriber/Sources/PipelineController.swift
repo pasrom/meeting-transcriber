@@ -205,7 +205,8 @@ final class PipelineController {
     /// Whether the queue holds no unfinished work: nothing processing, and
     /// every job done or failed (a job parked for naming is neither).
     private var canReplaceQueue: Bool {
-        !queue.isProcessing && queue.jobs.allSatisfy { $0.state.isTerminal && $0.notionExportStatus != .inProgress }
+        !queue.isProcessing && queue.jobs.allSatisfy(\.state.isTerminal)
+            && queue.canHandOverNotionExports(builtHere: queueWasBuiltHere)
     }
 
     /// Rebuild the queue when the output folder has changed since it was built,
@@ -555,7 +556,7 @@ final class PipelineController {
     /// state. Returns `.noFile` when the path doesn't exist, `.timedOut` with
     /// the in-flight status once `maxWaitSeconds` elapses (the job keeps running
     /// and will still finish on its own), else `.completed` with the terminal
-    /// status.
+    /// status. A Notion export is not waited for: `export` says if it is pending.
     func transcribeAndWait(
         path: URL,
         maxWaitSeconds: Double,
@@ -566,17 +567,16 @@ final class PipelineController {
         let deadline = ContinuousClock.now.advanced(by: .seconds(maxWaitSeconds))
         while ContinuousClock.now < deadline {
             if let job = queue.jobs.first(where: { $0.id == jobID }) {
-                if job.state.isTerminal, job.notionExportStatus != .inProgress { return .completed(JobStatusDTO(job: job)) }
+                if job.state.isTerminal { return .completed(JobStatusDTO(job: job)) }
             } else if let record = terminalJobStore.lookup(jobID: jobID) {
                 return .completed(record) // already reaped from the live queue
             }
             try? await Task.sleep(for: pollInterval)
         }
-        // Final read: a job that went terminal in the last sub-interval window
-        // (or while we were enqueuing with maxWaitSeconds==0) is completed, not
-        // timed out.
+        // Final read: a job that went terminal in the last sub-interval window (or
+        // while enqueuing with maxWaitSeconds==0) is completed, not timed out.
         let final = jobStatus(forID: jobID)
-        if let final, final.state.isTerminal, final.export?.isInProgress != true { return .completed(final) }
+        if let final, final.state.isTerminal { return .completed(final) }
         return .timedOut(final)
     }
 }
