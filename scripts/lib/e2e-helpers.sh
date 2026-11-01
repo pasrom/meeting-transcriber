@@ -189,22 +189,212 @@ fail_on_host_skips() {
     return 1
 }
 
-# watch_state_from_state — read a GET /state body on stdin and print its
-# `watchState`: the loop's state, empty when there is no watch loop, and
-# `unreadable` when the body is empty or not an object, so a dead or hung app
-# never reads as "not watching". (`jq -e` alone exits 0 on empty input in jq
-# 1.6, hence the explicit test.)
-watch_state_from_state() {
-    local body
-    body="$(cat)"
-    [ -n "$body" ] \
-        && jq -er 'if type == "object" then (.watchState // "") else error end' <<<"$body" 2>/dev/null \
-        || echo unreadable
+# --- Reading /state: an answer, or no answer ---------------------------------
+#
+# A driver that pipes `/state` into jq cannot tell an app that answered `false`
+# from one that did not answer at all: a refused connection, a timeout, an app
+# blocked behind a TCC consent prompt all come out as empty input, jq turns
+# that into empty or `null`, and the caller reads it as the real value. A poll
+# then waits out its whole window on "not yet" and blames the feature, and a
+# negative check ("the window is gone", "the prompt was cleared") passes on an
+# app that said nothing. These helpers keep the two apart by status:
+#
+#   state_read            one read into STATE_BODY; 0 answered, 2 no answer
+#   state_query <f> [a]   jq -r <f> [a] over one read; 0 + output, 2 no answer,
+#                         3 the filter failed on an answer
+#   poll_state [--each <cmd>] [--judge-deadline-read] <t> <i> <pred...>
+#                         poll_until over fresh reads; 0 pred held, 1 timed
+#                         out with the app answering, 2 app not answering,
+#                         4 the --each check returned non-zero
+#   state_is <f> [a]      a poll_state predicate: jq -e <f> [a] on STATE_BODY
+#   state_why <rc> <msg>  the failure message for one of those statuses
+#
+# No answer means no usable answer: no reply within the bound, a transport
+# error (an HTTP error status included: a 401 says nothing about the field
+# either), or a body that is not a JSON object.
+
+# Per-read bound, enforced by run_bounded whichever transport is used (mt-cli's
+# own 5 s request timeout does not cover everything it can block on), and also
+# handed to curl as --max-time.
+: "${STATE_READ_BOUND_S:=15}"
+
+# One GET /state to stdout, non-zero when the app did not answer. curl with the
+# driver's RPC_TOKEN when it holds one, since its token file can sit in a lane's
+# own home where mt-cli does not look; mt-cli (which exits non-zero on any
+# transport failure) for the drivers that only ever talk through $MTCLI.
+_state_transport() {
+    if [ -n "${RPC_TOKEN:-}" ]; then
+        curl --silent --show-error --fail --max-time "$STATE_READ_BOUND_S" \
+            --header "Authorization: Bearer $RPC_TOKEN" \
+            "${RPC_BASE:-http://127.0.0.1:9876}/state"
+    elif [ -n "${MTCLI:-}" ]; then
+        "$MTCLI" state
+    else
+        echo "neither RPC_TOKEN nor MTCLI is set, so there is no way to ask the app" >&2
+        return 1
+    fi
 }
 
-# watch_state — the app's watch state, read through the calling driver's
-# `rpc` GET helper (see watch_state_from_state for the values).
-watch_state() { rpc /state | watch_state_from_state; }
+# state_read — one bounded read of /state. Answered: the body in STATE_BODY,
+# status 0. Not answered: STATE_BODY keeps the last answer (what a timed-out
+# poll wants to show), the reason goes to STATE_ERR, status 2. Runs in the
+# current shell so both survive; call it bare or in a condition, not in $(...).
+state_read() {
+    local body err status=0
+    err="$(mktemp "${TMPDIR:-/tmp}/state-read.XXXXXX")" || { STATE_ERR="mktemp failed"; return 2; }
+    body="$(run_bounded "$STATE_READ_BOUND_S" _state_transport 2>"$err")" || status=$?
+    if [ "$status" -eq 0 ] && [ -n "$body" ] && jq -e 'type == "object"' <<<"$body" >/dev/null 2>&1; then
+        STATE_BODY="$body"
+        rm -f "$err"
+        return 0
+    fi
+    case "$status" in
+        0) STATE_ERR="the reply was not a JSON object: '$(head -c 200 <<<"$body")'" ;;
+        124) STATE_ERR="no reply within ${STATE_READ_BOUND_S}s" ;;
+        *) STATE_ERR="the request failed (exit $status): $(tr '\n' ' ' <"$err" | head -c 300)" ;;
+    esac
+    rm -f "$err"
+    return 2
+}
+
+# state_query <filter> [jq-args...] — one read, `jq -r <filter>` over it.
+# Answered: jq's output, status 0, even when that is `false`, `null` or empty.
+# No answer: the reason on stderr, status 2. A filter that fails on the answer:
+# status 3. Meant for `v="$(state_query ...)" || fail "$(state_why $? ...)"`;
+# `state_query .` is the whole body, for several fields from one snapshot.
+state_query() {
+    local filter="$1"
+    shift
+    state_read || { echo "state_query: no answer from the app on /state ($STATE_ERR)" >&2; return 2; }
+    jq -r "$@" "$filter" <<<"$STATE_BODY" || return 3
+}
+
+# state_is <filter> [jq-args...] — true when `jq -e <filter>` holds on
+# STATE_BODY. A filter that errors (a field not there yet) is false, as it
+# would be in the pipe it replaces.
+state_is() {
+    local filter="$1"
+    shift
+    jq -e "$@" "$filter" <<<"$STATE_BODY" >/dev/null 2>&1
+}
+
+# poll_state [--each <cmd>] [--judge-deadline-read] <timeout_s> <interval_s>
+#            <predicate> [args...]
+# poll_until with a fresh state_read before every tick; the predicate runs
+# only on an answer and reads STATE_BODY (state_is, or a function that also
+# stashes fields or traces, in the current shell). The app going quiet and
+# coming back is logged, once each way, and does not stop the poll.
+#
+# --each <cmd>: run <cmd> at the start of every tick, before the read and
+#   whether or not the app then answers, and once more before the deadline
+#   read below. It is for the liveness check (assert_app_alive), which has to
+#   run on an unanswered tick above all: a crashed app answers nothing, so a
+#   check inside the predicate would never run, and the poll would sit out its
+#   window and report no answer instead of a dead process. <cmd> is one word
+#   (wrap a check that takes arguments in a function) and is expected to end
+#   the run itself on failure, as assert_app_alive does; if it returns
+#   non-zero instead, the poll stops at once with status 4.
+# --judge-deadline-read: run the predicate on the deadline read too (below).
+#   Only for a predicate whose verdict is in the snapshot's own content, such
+#   as "a job that is new and terminal": seen on that read after a gap, it
+#   proves as much as it would on any answered tick, the last of which can
+#   land past the deadline as well. Not for a predicate with a time bound: the
+#   deadline read can return up to STATE_READ_BOUND_S after the window. It
+#   passes only when the app also answered inside the window. Without it, a
+#   condition first seen on the deadline read is not a pass.
+#
+# 0: the predicate held. 1: the window ran out with the app answering at its
+# end, so the condition was false on every answer (gaps inside the window are
+# logged, not held against the verdict). 2: the app was not answering: no
+# answer in the whole window, or none at its end and none to one more read, so
+# a single dropped read at the deadline is not taken for a dead app. 4: the
+# --each command returned non-zero. 1 and 2 are what keep "never happened"
+# apart from "nobody there to ask"; state_why words them.
+poll_state() {
+    local each="" judge_late=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --each) each="$2"; shift 2 ;;
+            --judge-deadline-read) judge_late=1; shift ;;
+            *) break ;;
+        esac
+    done
+    local timeout="$1" interval="$2" answered=0 last=0 quiet_since="" each_rc=0
+    shift 2
+    if poll_until "$timeout" "$interval" _poll_state_tick "$@"; then
+        return "$each_rc"
+    fi
+    if [ "$last" -eq 1 ]; then
+        return 1
+    fi
+    # The extra read asks whether the app still answers. Without
+    # --judge-deadline-read the predicate is not run on it, since a condition
+    # first true after the window is not one that held inside it, and
+    # STATE_BODY stays the window's last answer, for the caller's diagnostics.
+    local window_body="${STATE_BODY:-}"
+    if [ -n "$each" ]; then
+        "$each" || return 4
+    fi
+    if ! state_read; then
+        echo "poll_state: no answer from the app on /state at the end of the ${timeout}s window${quiet_since:+, none for the last $(( SECONDS - quiet_since ))s} ($STATE_ERR)" >&2
+        return 2
+    fi
+    # Judged only after answers inside the window: a pass needs the window to
+    # have been observed at all, or what a caller collected per tick (a value
+    # seen or never seen) would stand on nothing.
+    if [ "$judge_late" -eq 1 ] && [ "$answered" -eq 1 ]; then
+        "$@" && return 0
+    elif [ "$judge_late" -eq 0 ]; then
+        STATE_BODY="$window_body"
+    fi
+    if [ "$answered" -eq 0 ]; then
+        echo "poll_state: the app answered /state only after the ${timeout}s window, never inside it" >&2
+        return 2
+    fi
+    return 1
+}
+
+# One poll_state tick: the --each command, a read, then the predicate if the
+# app answered. It updates poll_state's answered / last / quiet_since /
+# each_rc, which bash's dynamic scoping makes visible here. A failed --each
+# command ends poll_until (by returning 0) with each_rc set.
+_poll_state_tick() {
+    if [ -n "$each" ] && ! "$each"; then
+        each_rc=4
+        return 0
+    fi
+    if ! state_read; then
+        last=0
+        if [ -z "$quiet_since" ]; then
+            quiet_since="$SECONDS"
+            echo "poll_state: no answer from the app on /state ($STATE_ERR); still polling" >&2
+        fi
+        return 1
+    fi
+    if [ -n "$quiet_since" ]; then
+        echo "poll_state: the app answers /state again, after $(( SECONDS - quiet_since ))s without an answer" >&2
+        quiet_since=""
+    fi
+    answered=1 last=1
+    "$@"
+}
+
+# state_why <status> <message> — the failure message for a state_query or
+# poll_state status: <message> as given when the app answered, and a statement
+# that the app did not, so the check never ran, when it did not.
+state_why() {
+    case "$1" in
+        2) echo "no answer from the app on /state (reason logged above), so this went unchecked: $2" ;;
+        3) echo "the jq filter failed on the app's /state answer (jq's error is above): $2" ;;
+        4) echo "the per-tick check handed to poll_state failed (its output is above), so this went unchecked: $2" ;;
+        *) echo "$2" ;;
+    esac
+}
+
+# watch_state — the app's watch state: the loop's state, empty when there is no
+# watch loop, and `unreadable` when the app did not answer, so a dead or hung
+# app never reads as "not watching".
+watch_state() { state_query '.watchState // ""' 2>/dev/null || echo unreadable; }
 
 # rpc_post_status <path> <json> [max-time] — POST a JSON body to the debug RPC
 # server and print only the HTTP status, `000` when nothing answered. For the
