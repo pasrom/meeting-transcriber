@@ -117,24 +117,6 @@ require_command() {
 }
 
 RPC_TOKEN=""
-rpc() {
-    local path="$1"
-    curl --silent --show-error --max-time 10 \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        "$RPC_BASE$path" 2>/dev/null || true
-}
-
-# Fetch /metrics, refusing anything that is not a usable snapshot. The
-# non-empty guard matters: jq 1.6 exits 0 on EMPTY input even with -e, so a
-# timed-out curl would otherwise masquerade as a valid reading and silently
-# flatten the growth curve.
-metrics_snapshot() {
-    local m
-    m="$(rpc /metrics)"
-    { [ -n "$m" ] && jq -e '.monotonicTimeSeconds > 0' <<<"$m" >/dev/null 2>&1; } \
-        || fail "/metrics returned no usable snapshot: $m"
-    printf '%s' "$m"
-}
 
 # Least-squares slope of footprint over time, in MB per hour, plus the summary
 # numbers worth logging. Reads a JSON array of {minutes, footprintMB} samples.
@@ -285,7 +267,8 @@ sleep "$RECORDING_SETTLE_S"
 SAMPLES="[]"
 ELAPSED_MIN=0
 while [ "$ELAPSED_MIN" -lt "$SOAK_MINUTES" ]; do
-    snap="$(metrics_snapshot)"
+    metrics_snapshot || fail "$(rpc_why $? /metrics "the CPU/RAM snapshot was not taken")"
+    snap="$RPC_BODY"
     footprint_mb="$(jq -r '(.physFootprintBytes / 1048576) | round' <<<"$snap")"
     SAMPLES="$(jq -n --argjson s "$SAMPLES" --argjson m "$ELAPSED_MIN" --argjson f "$footprint_mb" \
         '$s + [{minutes: $m, footprintMB: $f}]')"
@@ -298,7 +281,8 @@ while [ "$ELAPSED_MIN" -lt "$SOAK_MINUTES" ]; do
     ELAPSED_MIN=$((ELAPSED_MIN + SAMPLE_EVERY_MIN))
 done
 
-snap="$(metrics_snapshot)"
+metrics_snapshot || fail "$(rpc_why $? /metrics "the CPU/RAM snapshot was not taken")"
+snap="$RPC_BODY"
 footprint_mb="$(jq -r '(.physFootprintBytes / 1048576) | round' <<<"$snap")"
 SAMPLES="$(jq -n --argjson s "$SAMPLES" --argjson m "$ELAPSED_MIN" --argjson f "$footprint_mb" \
     '$s + [{minutes: $m, footprintMB: $f}]')"

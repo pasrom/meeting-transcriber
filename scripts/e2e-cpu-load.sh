@@ -114,24 +114,6 @@ require_command() {
 }
 
 RPC_TOKEN=""
-rpc() {
-    local path="$1"
-    curl --silent --show-error --max-time 10 \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        "$RPC_BASE$path" 2>/dev/null || true
-}
-
-# Fetch /metrics and verify it looks like a metrics snapshot. The explicit
-# non-empty guard matters: jq 1.6 exits 0 on EMPTY input even with -e
-# (fixed in 1.7 to exit 4) — without it a timed-out curl would masquerade
-# as a valid snapshot.
-metrics_snapshot() {
-    local m
-    m="$(rpc /metrics)"
-    { [ -n "$m" ] && jq -e '.monotonicTimeSeconds > 0' <<<"$m" >/dev/null 2>&1; } \
-        || fail "/metrics returned no usable snapshot: $m"
-    printf '%s' "$m"
-}
 
 # Compute window averages from two cumulative snapshots.
 # $1 = start JSON, $2 = end JSON; prints a one-object JSON summary.
@@ -302,10 +284,12 @@ _PIPELINE_DRAINED='.pipeline.isProcessing == false and .pipeline.activeJobCount 
 measure_window() {
     local secs="$1" start end
     assert_app_alive
-    start="$(metrics_snapshot)"
+    metrics_snapshot || fail "$(rpc_why $? /metrics "the CPU/RAM snapshot was not taken")"
+    start="$RPC_BODY"
     sleep "$secs"
     assert_app_alive
-    end="$(metrics_snapshot)"
+    metrics_snapshot || fail "$(rpc_why $? /metrics "the CPU/RAM snapshot was not taken")"
+    end="$RPC_BODY"
     window_delta "$start" "$end"
 }
 
