@@ -7,6 +7,20 @@ import XCTest
 /// generous: the verdict is the event, never the time it took.
 let regressionCeiling: Duration = .seconds(10)
 
+/// How `body` ended, as text an assertion compares: "returned",
+/// "cancelled" for a `CancellationError`, or the error it failed with.
+@MainActor
+func outcome(of body: () async throws -> Void) async -> String {
+    do {
+        try await body()
+        return "returned"
+    } catch is CancellationError {
+        return "cancelled"
+    } catch {
+        return "failed with \(error)"
+    }
+}
+
 @MainActor
 extension XCTestCase {
     /// What `task` returned, or nil when it has not returned within
