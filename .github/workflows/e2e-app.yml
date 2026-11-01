@@ -485,6 +485,39 @@ jobs:
         timeout-minutes: 10
         run: bash scripts/e2e-app.sh --no-build --echo-cancel
 
+      # Protocol lane: every other lane leaves the protocol provider at its
+      # default, the Claude CLI, which is not logged in for the runner account,
+      # so each of them logs "Protocol generation failed — transcript saved" and
+      # nothing ever checks that a protocol gets written. This one points the
+      # OpenAI-compatible provider at a local stub on a free 127.0.0.1 port and
+      # imports a short fixture twice: once with the stub answering (asserts the
+      # exact request, the job done without a protocol warning, and the protocol
+      # file's contents) and once with it answering HTTP 500 (asserts the
+      # warning and no protocol file). The host's settings are restored on exit,
+      # and by the always-run step below when the step is killed (a timeout);
+      # the API key is left alone. What each check means is written at
+      # `run_protocol_lane` in scripts/e2e-app.sh.
+      # PLACEMENT: file-driven, no audio device, two short imports; with the
+      # other file-driven lanes and ahead of crash-recovery's SIGKILL teardown.
+      - id: protocol-lane
+        name: "Run protocol-generation E2E (local OpenAI-compatible stub)"
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        # Two imports of a 15 s fixture; under a minute typical. Each job poll is
+        # capped at 240 s, so 10 min covers both and still ends a hang.
+        timeout-minutes: 10
+        run: bash scripts/e2e-app.sh --no-build --protocol
+
+      # A killed lane step (timeout, cancel) cannot run its own exit trap to the
+      # end. Without this, the stub endpoint and diarize=false would stay set for
+      # every driver that launches the dev bundle without going through
+      # e2e-app.sh (e2e-browser.yml, the channel and soak lanes) until the next
+      # e2e-app.sh run repairs it. A no-op when the lane cleaned up after itself.
+      - name: "Repair what the protocol lane left"
+        if: always() && steps.protocol-lane.outcome != 'skipped'
+        timeout-minutes: 2
+        run: bash scripts/e2e-app.sh --protocol-repair
+
       # Upgrade lane: every lane above starts the app on a clean or empty home,
       # so none runs this build on the data an older release left behind. This
       # one seeds, in a throwaway home, what v0.8.1 writes (a WhisperKit model

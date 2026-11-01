@@ -168,6 +168,49 @@ PRs are excluded from the self-hosted runner.
   asserts the bundled model is in the deployed bundle up front: without it the
   stage correctly reports a missing model and leaves the track as recorded,
   which would read as a broken canceller.
+- The `--protocol` lane is the only one that asserts the protocol stage writes a
+  protocol. Every other lane runs with the runner's provider, the Claude CLI,
+  which is installed there but not logged in for the runner account, so they all
+  log "Protocol generation failed — transcript saved" and pass on the transcript
+  alone. This lane points the OpenAI-compatible provider at
+  `scripts/fixtures/openai-chat-stub.py` (stdlib Python, `127.0.0.1`, a port the
+  kernel picks, one JSON line per request with no header beyond the content
+  type) and imports a 15 s fixture twice through `POST /v1/jobs`, which runs the
+  same `PipelineQueue` protocol stage a recording does. With the stub answering
+  it asserts the one request it got (model, `stream`, `max_tokens`, temperature
+  set and `top_p` absent, the protocol language in the system prompt, the
+  transcript file as the user message), the job `done` without a protocol
+  warning, and a `protocolPath` in the output folder whose file is exactly the
+  reply plus the transcript. With the stub answering HTTP 500 it asserts the job
+  still `done` with the "transcript saved" warning, no `protocolPath` and no
+  protocol file: the control that shows the first half can tell the outcomes
+  apart. Diarization is off for the run so the job never parks at naming.
+  - **It leaves the API key alone.** The app reads it from the Keychain, and a
+    lane-owned item would mean editing the user keychain search list, which the
+    second runner and an installed app on the host share. The request carries
+    whatever key the host has, the stub never logs it, and where the key goes is
+    covered by `OpenAIProtocolGeneratorTests`.
+  - **It changes host settings** (provider, language, endpoint, model, sampling,
+    diarize, three output options). Their old values go, as plist XML so a double
+    round-trips bit for bit (`defaults write -float` is 32-bit), to a record
+    under `~/Library/Caches/MeetingTranscriber-e2e` before the first write, with
+    the job ids and output files beside it. On exit the stub is stopped and the
+    settings are restored first, with INT/TERM ignored, and only then the app is
+    quit (it holds the settings in memory), its unfinished lane jobs are dropped
+    from the queue snapshot and the files removed. A setting changed after the
+    lane wrote it is kept; a restore that does not read back turns the run red
+    and keeps only the lines that failed.
+  - **A killed run is finished** by the next `e2e-app.sh` run, whatever its lane,
+    which fails hard when a setting will not come back, and in CI at once by an
+    always-run `--protocol-repair` step, so drivers that launch the dev bundle on
+    their own (e2e-browser and others) never see the stub endpoint.
+  - **Nothing else may reach the stub**, since its reply would be saved as that
+    meeting's protocol: the lane requires an idle app before its first job and,
+    outside CI, refuses up front while the queue snapshot or the staging folder
+    holds work.
+
+  The helpers and the stub are tested by
+  `scripts/tests/test_protocol_lane_helpers.sh`.
 - The `--mic-stall` lane (issues #724, #706) covers the microphone progress
   watchdog in the shipped app, a fault no runner produces on its own (the
   loopback input always delivers; the field cases need a Bluetooth headset). It
