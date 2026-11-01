@@ -135,7 +135,7 @@ enum OpenAIAPIKeyPlacement: String, CaseIterable {
 /// override that is not set is left out of the request entirely, so the server
 /// applies its own default (LM Studio and Ollama keep a per-model one) rather
 /// than one invented here.
-enum OpenAISamplingParameter: String {
+enum OpenAISamplingParameter: String, CaseIterable {
     case temperature
     case topP = "top_p"
 

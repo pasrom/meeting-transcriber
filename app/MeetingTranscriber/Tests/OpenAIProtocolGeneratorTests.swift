@@ -541,7 +541,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
 
     func testRequestBodyOmitsSamplingKeysWhenUnset() {
         let body = makeSamplingGenerator(temperature: nil, topP: nil)
-            .requestBody(messages: [], tokenLimit: .maxTokens)
+            .requestBody(messages: [], shape: .init(tokenLimit: .maxTokens, includesSampling: true))
 
         XCTAssertNil(body["temperature"], "an unset override must leave the server default in place")
         XCTAssertNil(body["top_p"])
@@ -550,7 +550,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
 
     func testRequestBodyCarriesSamplingKeysWhenSet() {
         let body = makeSamplingGenerator(temperature: 0.3, topP: 0.9)
-            .requestBody(messages: [], tokenLimit: .maxTokens)
+            .requestBody(messages: [], shape: .init(tokenLimit: .maxTokens, includesSampling: true))
 
         XCTAssertEqual(body["temperature"] as? Double, 0.3)
         XCTAssertEqual(body["top_p"] as? Double, 0.9)
@@ -558,15 +558,14 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
 
     func testRequestBodyCarriesOnlyTheOverrideThatIsSet() {
         let body = makeSamplingGenerator(temperature: nil, topP: 0.5)
-            .requestBody(messages: [], tokenLimit: .maxTokens)
+            .requestBody(messages: [], shape: .init(tokenLimit: .maxTokens, includesSampling: true))
 
         XCTAssertNil(body["temperature"])
         XCTAssertEqual(body["top_p"] as? Double, 0.5)
     }
 
     func testRetryWithMaxCompletionTokensKeepsSamplingOverrides() async throws {
-        final class Recorder: @unchecked Sendable { var bodies: [[String: Any]] = [] }
-        let recorder = Recorder()
+        let recorder = RequestRecorder()
 
         MockURLProtocol.handler = { request in
             let body = self.requestBody(request)
@@ -598,12 +597,322 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         XCTAssertNil(OpenAISamplingParameter.topP.normalized(.infinity))
     }
 
-    func testGenerateDoesNotRetryOnUnrelated400() async throws {
-        final class Recorder: @unchecked Sendable { var count = 0 }
-        let recorder = Recorder()
+    func testRequestBodyLeavesSamplingOutWhenShapeDropsIt() {
+        let body = makeSamplingGenerator(temperature: 0.3, topP: 0.9)
+            .requestBody(messages: [], shape: .init(tokenLimit: .maxCompletionTokens, includesSampling: false))
+
+        XCTAssertNil(body["temperature"])
+        XCTAssertNil(body["top_p"])
+        XCTAssertEqual(body["max_completion_tokens"] as? Int, 16000)
+    }
+
+    // MARK: - Rejected sampling overrides
+
+    /// 400 body the OpenAI API returns for a reasoning model (o-series, GPT-5)
+    /// sent a non-default temperature.
+    private static let unsupportedTemperatureValueBody = """
+    {"error":{"message":"Unsupported value: 'temperature' does not support 0.2 \
+    with this model. Only the default (1) value is supported.",\
+    "type":"invalid_request_error","param":"temperature","code":"unsupported_value"}}
+    """
+
+    func testRejectsSamplingParameterMatchesRealRefusals() {
+        let refusals = [
+            Self.unsupportedTemperatureValueBody,
+            // The key refused outright, named only in `param`.
+            #"{"error":{"message":"Unsupported parameter for this model.","param":"top_p","code":"unsupported_parameter"}}"#,
+            // Both keys refused together, Anthropic-style envelope.
+            #"{"type":"error","error":{"type":"invalid_request_error","#
+                + #""message":"`temperature` and `top_p` cannot both be specified for this model."}}"#,
+            // The error as a bare string, the top-level `message` and `detail` shapes.
+            #"{"error":"temperature is not supported"}"#,
+            #"{"message":"top_p must be at most 0.99"}"#,
+            #"{"detail":"Unsupported parameter: temperature"}"#,
+            // Not JSON at all.
+            "Bad Request: invalid temperature",
+            // A proxy wrapping the upstream refusal (OpenRouter), and a list of details.
+            #"{"error":{"message":"Provider returned error","code":400,"#
+                + #""metadata":{"raw":"Unsupported value: 'temperature' does not support 0.2"}}}"#,
+            #"{"error":{"message":"Invalid request","details":["top_p is not supported"]}}"#,
+            // Any case.
+            #"{"error":{"message":"Temperature is not supported with this model."}}"#,
+            "TOP_P out of range",
+            // A top-level array of errors (Gemini's OpenAI-compatible endpoint).
+            #"[{"error":{"code":400,"message":"Unsupported parameter: temperature"}}]"#,
+            // The upstream body embedded as a JSON string is searched as JSON.
+            #"{"error":{"message":"Provider returned error","metadata":{"raw":"#
+                + #""{\"error\":{\"message\":\"'temperature' does not support 0.2\"}}"}}}"#,
+        ]
+        for body in refusals {
+            XCTAssertTrue(OpenAIProtocolGenerator.rejectsSamplingParameter(body), body)
+        }
+    }
+
+    func testRejectsSamplingParameterIgnoresUnrelatedErrors() {
+        let unrelated = [
+            "",
+            #"{"error":{"message":"Incorrect API key provided","code":"invalid_api_key"}}"#,
+            Self.unsupportedMaxTokensBody,
+            // Only whole names count.
+            #"{"error":{"message":"top_probs must be an integer","param":"top_probs"}}"#,
+            #"{"error":{"message":"temperature_scale is not a valid field"}}"#,
+            // A validation error echoing the request: the overrides appear,
+            // but outside the error or only as object keys.
+            #"{"error":{"message":"Input validation error"},"input":{"temperature":0.2,"top_p":0.9}}"#,
+            #"{"error":{"message":"Input validation error","input":{"temperature":0.2}}}"#,
+            // The same echo cut off at the read cap: no longer JSON, still not searched.
+            "{\n  \"error\": {\n    \"message\": \"Input validation error\",\n    \"input\": {\"temperature\": 0.2,",
+            "[{\"error\": {\"message\": \"Input validation error\", \"input\": \"temperature",
+            // An array whose error is unrelated, the echo in another element.
+            #"[{"error":{"message":"Invalid model"}},{"input":{"temperature":0.2}}]"#,
+            // An upstream body embedded as a JSON string: its echo is not searched as text.
+            #"{"error":{"message":"Provider returned error","metadata":{"raw":"#
+                + #""{\"error\":{\"message\":\"bad request\"},\"input\":{\"temperature\":0.2}}"}}}"#,
+        ]
+        for body in unrelated {
+            XCTAssertFalse(OpenAIProtocolGenerator.rejectsSamplingParameter(body), body)
+        }
+    }
+
+    func testRequestShapeFallbackAppliesEachFallbackOnceAndOnlyWhenNamed() {
+        typealias Shape = OpenAIProtocolGenerator.RequestShape
+        let initial = Shape(tokenLimit: .maxTokens, includesSampling: true)
+        let bothNamed = #"{"error":{"message":"Unsupported parameter: 'max_tokens'; use 'max_completion_tokens'. 'temperature' is not supported either."}}"#
+
+        XCTAssertEqual(
+            initial.fallback(status: 400, after: Self.unsupportedMaxTokensBody),
+            Shape(tokenLimit: .maxCompletionTokens, includesSampling: true),
+        )
+        XCTAssertEqual(
+            initial.fallback(status: 400, after: Self.unsupportedTemperatureValueBody),
+            Shape(tokenLimit: .maxTokens, includesSampling: false),
+        )
+        XCTAssertEqual(
+            initial.fallback(status: 400, after: bothNamed),
+            Shape(tokenLimit: .maxCompletionTokens, includesSampling: false),
+            "one 400 naming both applies both fallbacks at once",
+        )
+        XCTAssertNil(initial.fallback(status: 400, after: #"{"error":{"message":"Incorrect API key provided"}}"#))
+        // Nothing left to change: a fallback already applied, or no overrides sent.
+        XCTAssertNil(
+            Shape(tokenLimit: .maxCompletionTokens, includesSampling: true)
+                .fallback(status: 400, after: Self.unsupportedMaxTokensBody),
+        )
+        XCTAssertNil(
+            Shape(tokenLimit: .maxTokens, includesSampling: false)
+                .fallback(status: 400, after: Self.unsupportedTemperatureValueBody),
+        )
+    }
+
+    func testRequestShapeFallbackAcceptsSamplingRefusalOn422Only() {
+        typealias Shape = OpenAIProtocolGenerator.RequestShape
+        let initial = Shape(tokenLimit: .maxTokens, includesSampling: true)
+        let validationError = #"{"error":"Input validation error: `temperature` must be strictly positive"}"#
+
+        XCTAssertEqual(
+            initial.fallback(status: 422, after: validationError),
+            Shape(tokenLimit: .maxTokens, includesSampling: false),
+        )
+        XCTAssertNil(
+            initial.fallback(status: 422, after: Self.unsupportedMaxTokensBody),
+            "the max_tokens rename is only answered with a 400",
+        )
+        XCTAssertNil(initial.fallback(status: 500, after: validationError))
+    }
+
+    func testShownErrorBodyKeepsTheBoundAndSeparatesLines() {
+        let lines = (0 ..< 20).map { String(repeating: Character(String($0 % 10)), count: 100) }
+
+        // Five lines reach exactly 500, the sixth takes it past the bound.
+        XCTAssertEqual(
+            OpenAIProtocolGenerator.shownErrorBody(lines),
+            lines.prefix(6).joined(separator: "\n"),
+        )
+        XCTAssertEqual(OpenAIProtocolGenerator.shownErrorBody(["Bad Request", "x"]), "Bad Request\nx")
+    }
+
+    func testGenerateRetriesSamplingRefusalSpreadOverLines() async throws {
+        // Plain text over two lines: joined without a separator, "Request" and
+        // "temperature" would fuse into one word.
+        let recorder = try await recordSamplingRetry(status: 400, body: "Bad Request\ntemperature is not supported")
+        XCTAssertEqual(recorder.bodies.count, 2)
+    }
+
+    func testGenerateRetriesSamplingRefusalAnsweredWith422() async throws {
+        let recorder = try await recordSamplingRetry(
+            status: 422, body: #"{"error":"Input validation error: `temperature` must be strictly positive"}"#,
+        )
+        XCTAssertEqual(recorder.bodies.count, 2)
+    }
+
+    func testGenerateRetriesPrettyPrintedRefusalLongerThanTheShownBound() async throws {
+        // A LiteLLM-style refusal, pretty-printed and well past 500 characters,
+        // still arrives whole and parses.
+        let padding = String(repeating: "x", count: 80)
+        let notes = (0 ..< 10).map { "    \"note\($0)\": \"\(padding)\"," }.joined(separator: "\n")
+        let body = """
+        {
+          "error": {
+            "message": "litellm.UnsupportedParamsError: openai does not support parameters: ['temperature'], for model=o3.",
+            "type": "None",
+            "param": null,
+            "code": "400",
+        \(notes)
+            "end": true
+          }
+        }
+        """
+        XCTAssertGreaterThan(body.count, 1000)
+        let recorder = try await recordSamplingRetry(status: 400, body: body)
+        XCTAssertEqual(recorder.bodies.count, 2)
+    }
+
+    func testGenerateShowsOnlyTheBoundedErrorBody() async throws {
+        let lines = (0 ..< 20).map { "line \($0) " + String(repeating: "y", count: 92) }
+        MockURLProtocol.handler = { request in
+            self.mockResponse(request, status: 400, body: Data(lines.joined(separator: "\n").utf8))
+        }
+
+        do {
+            _ = try await makeGenerator(session: makeMockSession())
+                .generate(transcript: "x", title: "t", diarized: false)
+            XCTFail("expected the 400 to propagate")
+        } catch let ProtocolError.httpError(_, body) {
+            XCTAssertEqual(body, OpenAIProtocolGenerator.shownErrorBody(lines))
+            XCTAssertLessThan(body.count, 700)
+        }
+    }
+
+    /// Run a generation with both overrides set against an endpoint that
+    /// answers `status` with `body` while temperature is sent, and record the
+    /// requests.
+    private func recordSamplingRetry(status: Int, body: String) async throws -> RequestRecorder {
+        let recorder = RequestRecorder()
+        MockURLProtocol.handler = { request in
+            let sent = self.requestBody(request)
+            recorder.bodies.append(sent)
+            if sent["temperature"] != nil {
+                return self.mockResponse(request, status: status, body: Data(body.utf8))
+            }
+            return self.mockResponse(request, body: Data(Self.okSSE.utf8))
+        }
+        let result = try await makeSamplingGenerator(temperature: 0.2, topP: 0.8)
+            .generate(transcript: "x", title: "t", diarized: false)
+        XCTAssertEqual(result, "OK")
+        return recorder
+    }
+
+    func testGenerateRetriesWithoutSamplingOverridesWhenRejected() async throws {
+        let recorder = RequestRecorder()
 
         MockURLProtocol.handler = { request in
-            recorder.count += 1
+            let body = self.requestBody(request)
+            recorder.bodies.append(body)
+            if body["temperature"] != nil {
+                return self.mockResponse(
+                    request, status: 400, body: Data(Self.unsupportedTemperatureValueBody.utf8),
+                )
+            }
+            return self.mockResponse(request, body: Data(Self.okSSE.utf8))
+        }
+
+        let result = try await makeSamplingGenerator(temperature: 0.2, topP: 0.8)
+            .generate(transcript: "x", title: "t", diarized: false)
+
+        XCTAssertEqual(result, "OK")
+        XCTAssertEqual(recorder.bodies.count, 2)
+        let retry = try XCTUnwrap(recorder.bodies.last)
+        XCTAssertNil(retry["temperature"])
+        XCTAssertNil(retry["top_p"], "both overrides are dropped, not only the one named")
+        XCTAssertEqual(retry["max_tokens"] as? Int, 16000, "the cap is left as it was")
+    }
+
+    func testGenerateDoesNotRetrySamplingRefusalWhenNoOverrideWasSent() async throws {
+        let recorder = RequestRecorder()
+
+        MockURLProtocol.handler = { request in
+            recorder.bodies.append(self.requestBody(request))
+            return self.mockResponse(
+                request, status: 400, body: Data(Self.unsupportedTemperatureValueBody.utf8),
+            )
+        }
+
+        do {
+            _ = try await makeSamplingGenerator(temperature: nil, topP: nil)
+                .generate(transcript: "x", title: "t", diarized: false)
+            XCTFail("expected the 400 to propagate")
+        } catch let ProtocolError.httpError(status, _) {
+            XCTAssertEqual(status, 400)
+        }
+        XCTAssertEqual(recorder.bodies.count, 1, "nothing was sent that dropping could change")
+    }
+
+    /// The two fallbacks compose in either order and end on a body that
+    /// carries `max_completion_tokens` and no overrides.
+    private func assertBothFallbacksCompose(maxTokensRefusedFirst: Bool) async throws {
+        let recorder = RequestRecorder()
+
+        MockURLProtocol.handler = { request in
+            let body = self.requestBody(request)
+            recorder.bodies.append(body)
+            let maxTokensRefusal = body["max_tokens"] != nil ? Self.unsupportedMaxTokensBody : nil
+            let temperatureRefusal = body["temperature"] != nil ? Self.unsupportedTemperatureValueBody : nil
+            let refusal = maxTokensRefusedFirst
+                ? maxTokensRefusal ?? temperatureRefusal
+                : temperatureRefusal ?? maxTokensRefusal
+            if let refusal {
+                return self.mockResponse(request, status: 400, body: Data(refusal.utf8))
+            }
+            return self.mockResponse(request, body: Data(Self.okSSE.utf8))
+        }
+
+        let result = try await makeSamplingGenerator(temperature: 0.2, topP: nil)
+            .generate(transcript: "x", title: "t", diarized: false)
+
+        XCTAssertEqual(result, "OK")
+        XCTAssertEqual(recorder.bodies.count, 3)
+        let final = try XCTUnwrap(recorder.bodies.last)
+        XCTAssertEqual(final["max_completion_tokens"] as? Int, 16000)
+        XCTAssertNil(final["max_tokens"])
+        XCTAssertNil(final["temperature"])
+    }
+
+    func testGenerateComposesMaxTokensThenSamplingFallback() async throws {
+        try await assertBothFallbacksCompose(maxTokensRefusedFirst: true)
+    }
+
+    func testGenerateComposesSamplingThenMaxTokensFallback() async throws {
+        try await assertBothFallbacksCompose(maxTokensRefusedFirst: false)
+    }
+
+    func testGenerateStopsAfterThreeAttemptsWhenRefusalsPersist() async throws {
+        let recorder = RequestRecorder()
+
+        // Refuses the cap while it is `max_tokens`, then refuses temperature
+        // forever, even once it is no longer sent.
+        MockURLProtocol.handler = { request in
+            recorder.bodies.append(self.requestBody(request))
+            let refusal = self.requestBody(request)["max_tokens"] != nil
+                ? Self.unsupportedMaxTokensBody : Self.unsupportedTemperatureValueBody
+            return self.mockResponse(request, status: 400, body: Data(refusal.utf8))
+        }
+
+        do {
+            _ = try await makeSamplingGenerator(temperature: 0.2, topP: 0.8)
+                .generate(transcript: "x", title: "t", diarized: false)
+            XCTFail("expected the last 400 to propagate")
+        } catch let ProtocolError.httpError(status, body) {
+            XCTAssertEqual(status, 400)
+            XCTAssertEqual(body, Self.unsupportedTemperatureValueBody)
+        }
+        XCTAssertEqual(recorder.bodies.count, 3, "one attempt plus at most one retry per fallback")
+    }
+
+    func testGenerateDoesNotRetryOnUnrelated400() async throws {
+        let recorder = RequestRecorder()
+
+        MockURLProtocol.handler = { request in
+            recorder.bodies.append(self.requestBody(request))
             return self.mockResponse(
                 request, status: 400,
                 body: Data(#"{"error":{"message":"Incorrect API key provided"}}"#.utf8),
@@ -617,15 +926,14 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         } catch let ProtocolError.httpError(status, _) {
             XCTAssertEqual(status, 400)
         }
-        XCTAssertEqual(recorder.count, 1, "an unrelated 400 must not trigger a retry")
+        XCTAssertEqual(recorder.bodies.count, 1, "an unrelated 400 must not trigger a retry")
     }
 
     func testGenerateDoesNotRetryOnNon400NamingBothParameters() async throws {
-        final class Recorder: @unchecked Sendable { var count = 0 }
-        let recorder = Recorder()
+        let recorder = RequestRecorder()
 
         MockURLProtocol.handler = { request in
-            recorder.count += 1
+            recorder.bodies.append(self.requestBody(request))
             return self.mockResponse(
                 request, status: 502, body: Data(Self.unsupportedMaxTokensBody.utf8),
             )
@@ -638,7 +946,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         } catch let ProtocolError.httpError(status, _) {
             XCTAssertEqual(status, 502)
         }
-        XCTAssertEqual(recorder.count, 1, "only an explicit 400 refusal may retry")
+        XCTAssertEqual(recorder.bodies.count, 1, "only an explicit 400 refusal may retry")
     }
 
     func testGenerateDiarizedDoesNotThrow() async throws {
@@ -1131,4 +1439,9 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         XCTAssertTrue(result.contains("Ä Ö Ü ß"))
         XCTAssertTrue(result.contains("\"quotes\""))
     }
+}
+
+/// The decoded request bodies a `MockURLProtocol` handler saw, in order.
+private final class RequestRecorder: @unchecked Sendable {
+    var bodies: [[String: Any]] = []
 }
