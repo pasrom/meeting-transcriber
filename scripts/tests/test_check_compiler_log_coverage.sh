@@ -24,7 +24,11 @@
 #   - An empty log or an empty source tree is a usage error, never a pass.
 #   - A checkout path or file name with a space, `|`, `(` or `+` is matched
 #     literally (xcodebuild writes a space as backslash-space), and a file
-#     missing from such a tree is still named.
+#     missing from such a tree is still named. A root made only of regex
+#     metacharacters (`rt+(x).y`) must still match itself, which a prefix test
+#     built as a regex from the root would not.
+#   - A swiftlint summary above the repository's file count fails too, not only
+#     a smaller one.
 #   - The prune removes this repository's intermediates and products and keeps
 #     the dependency ones.
 
@@ -155,6 +159,37 @@ test_special_characters_in_paths_are_matched_literally() {
     printf '%s' "$out" | grep -qF 'missing: app/MeetingTranscriber/Sources/My File.swift' || { echo; echo "  file not named: $out"; return 1; }
 }
 
+test_root_made_of_regex_metacharacters_is_matched_literally() {
+    # As a pattern, `rt+(x).y` matches "rtxxy" and never its own text, so a
+    # prefix test built as a regex from the root finds no entry for any file in
+    # this tree, while a literal comparison finds all of them. (The pipe case
+    # above cannot pin this: a regex with a pipe still matches the start of the
+    # path through its first alternative.)
+    local t2 r2 rc out
+    t2="$(mktemp -d)"
+    r2="$t2/rt+(x).y"
+    mkdir -p "$r2"
+    r2="$(cd "$r2" && pwd -P)"
+    make_tree "$r2"
+    full_log "$r2" > "$t2/log"
+    out=$(run_check "$t2/log" "$r2"); rc=$?
+    rm -rf "$t2"
+    [ "$rc" -eq 0 ] || { echo; echo "  expected exit 0, got $rc: $out"; return 1; }
+    printf '%s' "$out" | grep -q 'covers all 3 Swift files' || { echo; echo "  count wrong: $out"; return 1; }
+}
+
+test_analysed_count_above_the_repository_fails() {
+    # swiftlint reporting more files than the repository has means it analysed
+    # something the guard did not expect (or counted a file twice), so the
+    # comparison has to be an inequality in both directions.
+    setup
+    printf 'Done analyzing! Found 0 violations, 0 serious in 4 files.\n' > "$T/big"
+    out=$(run_check --analyzed "$T/big" "$ROOT"); rc=$?
+    teardown
+    [ "$rc" -eq 1 ] || { echo; echo "  larger count: expected 1, got $rc: $out"; return 1; }
+    printf '%s' "$out" | grep -q 'analyzed 4 files, the repository builds 3' || { echo; echo "  message wrong: $out"; return 1; }
+}
+
 test_analysed_count() {
     setup
     printf 'Analyzing Swift files in current working directory\nDone analyzing! Found 0 violations, 0 serious in 3 files.\n' > "$T/ok"
@@ -220,6 +255,8 @@ run_test test_each_module_missing_fails_and_is_named
 run_test test_build_with_nothing_to_do_fails
 run_test test_a_path_in_a_timing_line_is_not_coverage
 run_test test_special_characters_in_paths_are_matched_literally
+run_test test_root_made_of_regex_metacharacters_is_matched_literally
+run_test test_analysed_count_above_the_repository_fails
 run_test test_analysed_count
 run_test test_empty_inputs_are_usage_errors
 run_test test_prune_removes_own_output_and_keeps_dependencies
