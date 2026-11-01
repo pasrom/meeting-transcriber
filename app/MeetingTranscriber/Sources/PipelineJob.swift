@@ -160,6 +160,13 @@ struct PipelineJob: Identifiable, Codable {
         protocolPath != nil || hasCompletedNotionExport
     }
 
+    /// Whether a failed export has a Markdown backup recorded to retry from.
+    /// State only, never the file system, so a view body can ask it; a file
+    /// removed behind the app's back is found, and reported, by the retry.
+    var hasRetryableNotionBackup: Bool {
+        state == .done && notionExportStatus == .failed && protocolPath != nil
+    }
+
     var hasPendingNotionExport: Bool {
         notionExportStatus == .inProgress || notionExportStatus == .failed
     }

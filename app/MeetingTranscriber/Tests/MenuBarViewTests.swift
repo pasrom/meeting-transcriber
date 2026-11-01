@@ -1245,6 +1245,43 @@ final class MenuBarViewTests: XCTestCase {
         XCTAssertEqual(receivedPageIDs, ["page-1"])
     }
 
+    /// The row is enabled from the job's recorded state alone. The backup path
+    /// here does not exist, so a view that asked the file system would disable
+    /// the row, and a view body must not do that: the output folder can be a
+    /// network volume. The retry re-checks the file itself when it runs.
+    func testFailedNotionJobRetryRowIsEnabledWithoutAskingTheFileSystem() throws {
+        let queue = try makeIsolatedQueue()
+        var job = PipelineJob(
+            meetingTitle: "Sprint", appName: "Zoom", mixPath: nil,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .done
+        job.protocolPath = URL(fileURLWithPath: "/nonexistent-volume/protocols/sprint.md")
+        job.beginNotionExport(speakerNames: [])
+        job.finishNotionExport(succeeded: false)
+        queue.insertJobForTesting(job)
+
+        let view = try makeView(pipelineQueue: queue, notionExportEnabled: true)
+        let button = try view.inspect().find(viewWithAccessibilityIdentifier: A11yID.jobNotionRetryButton(0)).button()
+        XCTAssertFalse(button.isDisabled())
+    }
+
+    func testFailedNotionJobWithoutBackupRetryRowIsDisabled() throws {
+        let queue = try makeIsolatedQueue()
+        var job = PipelineJob(
+            meetingTitle: "Sprint", appName: "Zoom", mixPath: nil,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .done
+        job.beginNotionExport(speakerNames: [])
+        job.finishNotionExport(succeeded: false)
+        queue.insertJobForTesting(job)
+
+        let view = try makeView(pipelineQueue: queue, notionExportEnabled: true)
+        let button = try view.inspect().find(viewWithAccessibilityIdentifier: A11yID.jobNotionRetryButton(0)).button()
+        XCTAssertTrue(button.isDisabled())
+    }
+
     func testDismissIsDisabledWhileNotionExportIsInProgress() throws {
         let queue = try makeIsolatedQueue()
         var job = PipelineJob(
