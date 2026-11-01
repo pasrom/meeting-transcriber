@@ -124,6 +124,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - **Commit body:** document the WHY for non-trivial changes (architecture decisions, rejected alternatives)
 - **Never push to main directly.** Always create a branch, open a PR, and merge via `gh pr merge --rebase --delete-branch`. Only exception: version bumps in `VERSION` file.
 - **Rebase merge only.** Squash and merge commits are disabled by repo policy.
+- **Contributor workflow:** before committing, read `CONTRIBUTING.md` if you haven't this session.
 
 ## Conventions
 
