@@ -207,6 +207,7 @@ fail_on_host_skips() {
 #   rpc_is <f> [a]        a poll_rpc predicate: HTTP 200 and jq -e <f> [a]
 #   rpc_field <f> [a]     jq -r <f> [a] on the last answer, only if it was a 200
 #   metrics_snapshot      one usable /metrics snapshot into RPC_BODY
+#   rpc_ready             poll_until predicate: token loaded, /healthz answers 200
 #   rpc_why <rc> <path> <msg>
 #                         the failure message for an rpc_read / poll_rpc status
 #
@@ -374,6 +375,17 @@ rpc_why() {
         5) echo "the app answered $2 with a code this wait cannot get past (an unknown id, a bad request or a server error): $3$last" ;;
         *) echo "$3" ;;
     esac
+}
+
+# rpc_ready — a poll_until predicate for the app's RPC server coming up: the
+# driver's RPC_TOKEN_FILE exists, RPC_TOKEN is loaded from it (for every read
+# after), and GET /healthz answers 200 within 5 s. It asks the server, never
+# just the file: the token file outlives every run on the host, so the file
+# alone once let "RPC up" be logged 70 ms after launch with nothing listening.
+rpc_ready() {
+    [ -f "$RPC_TOKEN_FILE" ] || return 1
+    RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")"
+    RPC_READ_BOUND_S=5 rpc_read /healthz 2>/dev/null && [ "$RPC_STATUS" = 200 ]
 }
 
 # metrics_snapshot — one GET /metrics into RPC_BODY. 0: a usable snapshot. 1:

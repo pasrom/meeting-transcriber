@@ -73,7 +73,9 @@ FIXTURES_DIR="$ROOT/scripts/fixtures"
 KEEPER="$FIXTURES_DIR/jitsi-keeper.mjs"
 CDP_PORT=9222
 KEEPER_PID=""
+# shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
+# shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_BASE="http://127.0.0.1:9876"
 RECORDINGS_DIR="$HOME/Downloads/MeetingTranscriber/recordings"
 # Resolve the target browser. All four are Chromium forks sharing one detection
@@ -138,6 +140,7 @@ require_command() { command -v "$1" >/dev/null || fail "missing command: $1"; }
 
 # Read by the /state helpers (state_read in scripts/lib/e2e-helpers.sh) once
 # the token file appears.
+# shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_TOKEN=""
 
 # Quit only the fixture Chrome instance (its argv carries our profile dir) —
@@ -277,17 +280,7 @@ trap 'on_exit; exit 130' INT
 trap 'on_exit; exit 143' TERM
 
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
-# See e2e-app.sh: `rpc` ends in `|| true`, so probing through it reports success
-# even for a refused connection, leaving the token file (which outlives every
-# run on the host) as the only real condition. Ask curl directly instead.
-_rpc_ready() {
-    [ -f "$RPC_TOKEN_FILE" ] || return 1
-    RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")"
-    curl --silent --fail --max-time 5 \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        "$RPC_BASE/healthz" >/dev/null 2>&1
-}
-poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
+poll_until "$RPC_READY_TIMEOUT_S" 1 rpc_ready || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
 log "RPC up"
 
 # Same reasoning as in e2e-app.sh: a preference write that misses the domain the
