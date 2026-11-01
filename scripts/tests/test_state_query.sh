@@ -487,6 +487,21 @@ status=0; poll_rpc /v1/jobs/j --each _each_log 3 0 rpc_is '.state == "done"' 2>/
     && ok rpc_poll_each_runs_on_every_tick || bad rpc_poll_each_runs_on_every_tick "status $status, hook saw reads:$EACH_SEEN"
 fake_clock_off
 
+# --- rpc_ready --------------------------------------------------------------
+
+# The server, not the token file, decides: no file is not ready, a file with a
+# server that is not up yet (503, no answer) is not ready, a 200 is, and the
+# token is loaded for the reads after it.
+RPC_TOKEN_FILE="$TMP/token"
+saved_token="$RPC_TOKEN"
+script 'http 503 {}' fail 'http 200 ok'
+rpc_ready && bad rpc_ready_asks_the_server "ready without a token file"
+printf 'fromfile' >"$RPC_TOKEN_FILE"
+! rpc_ready && ! rpc_ready && rpc_ready && [ "$RPC_TOKEN" = fromfile ] \
+    && grep -qx 'Authorization: Bearer fromfile' "$TMP/curl-args" && grep -qx 'http://127.0.0.1:1/healthz' "$TMP/curl-args" \
+    && ok rpc_ready_asks_the_server || bad rpc_ready_asks_the_server "after $(calls) reads, token '$RPC_TOKEN'"
+RPC_TOKEN="$saved_token"
+
 # Neither transport configured: no answer with a reason, not a crash.
 status=0; ( MTCLI="" RPC_TOKEN=""; state_query . ) >/dev/null 2>"$TMP/err" || status=$?
 [ "$status" -eq 2 ] && grep -q 'neither RPC_TOKEN nor MTCLI' "$TMP/err" \

@@ -56,7 +56,9 @@ DEV_BUNDLE_DEPLOY="$HOME/Applications/MeetingTranscriber-Dev.app"
 SIMULATOR_PKG="$ROOT/tools/meeting-simulator"
 SIMULATOR_BIN="$SIMULATOR_PKG/.build/release/meeting-simulator"
 DEFAULT_FIXTURE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav"
+# shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
+# shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_BASE="http://127.0.0.1:9876"
 # shellcheck source=lib/bundle-ids.sh
 source "$ROOT/scripts/lib/bundle-ids.sh"
@@ -90,6 +92,7 @@ require_command() {
     command -v "$1" >/dev/null || fail "missing command: $1"
 }
 
+# shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_TOKEN=""
 
 # --- preflight ------------------------------------------------------------
@@ -183,20 +186,7 @@ log "Launching $DEV_BUNDLE_DEPLOY"
 open "$DEV_BUNDLE_DEPLOY"
 
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
-# Assigns RPC_TOKEN in caller scope on success so the /state reads below
-# (state_read in scripts/lib/e2e-helpers.sh) carry the bearer token.
-# See the shared note in e2e-app.sh: its `rpc` ends in `|| true`, so probing
-# through it reports success for a refused connection and leaves the token
-# file, which outlives every run on the host, as the only real condition.
-# Ask curl directly and let its exit status decide.
-_rpc_ready() {
-    [ -f "$RPC_TOKEN_FILE" ] || return 1
-    RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")"
-    curl --silent --fail --max-time 5 \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        "$RPC_BASE/healthz" >/dev/null 2>&1
-}
-poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready \
+poll_until "$RPC_READY_TIMEOUT_S" 1 rpc_ready \
     || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
 log "RPC up"
 

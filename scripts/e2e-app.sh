@@ -708,6 +708,7 @@ _pp_cleanup() {
     return "$status"
 }
 
+# shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_TOKEN_FILE="$APP_HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 RPC_BASE="http://127.0.0.1:9876"
 
@@ -1972,21 +1973,7 @@ else
 fi
 
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
-# Assigns RPC_TOKEN in caller scope on success so subsequent RPC reads carry
-# the bearer token.
-# This once went through a reader ending in `|| true`, which reported success
-# for a refused connection. That made this check "the token file exists", and
-# the token file survives every previous run on the host, so "RPC up" could be
-# logged 70 ms after launch with nothing listening yet. Ask curl directly and
-# let its exit status decide.
-_rpc_ready() {
-    [ -f "$RPC_TOKEN_FILE" ] || return 1
-    RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")"
-    curl --silent --fail --max-time 5 \
-        --header "Authorization: Bearer $RPC_TOKEN" \
-        "$RPC_BASE/healthz" >/dev/null 2>&1
-}
-poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready \
+poll_until "$RPC_READY_TIMEOUT_S" 1 rpc_ready \
     || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
 log "RPC up"
 # Record which app this driver started, for the provenance guard above.
@@ -2843,7 +2830,7 @@ run_crash_recovery() {
     # 6. Relaunch — recovery runs at the launch queue-build.
     log "$label: relaunching $DEV_BUNDLE_DEPLOY"
     open "$DEV_BUNDLE_DEPLOY"
-    poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || fail "$label: RPC did not come back after relaunch"
+    poll_until "$RPC_READY_TIMEOUT_S" 1 rpc_ready || fail "$label: RPC did not come back after relaunch"
     log "$label: RPC back up after relaunch"
 
     # 7. Assert recovery: the recovered recording enters the pipeline. The
@@ -4101,7 +4088,7 @@ _ug_relaunch_and_assert() {
         2) _ug_fail "$label: the app had to be ended by signal, without its own quit (see the Automation error above), so the relaunch would not test what a quit leaves" ;;
     esac
     _ug_launch
-    poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || _ug_fail "$label: RPC did not come back after the relaunch"
+    poll_until "$RPC_READY_TIMEOUT_S" 1 rpc_ready || _ug_fail "$label: RPC did not come back after the relaunch"
     _record_launched_app
     _ug_await_model "$label"
     _ug_expect_fingerprint "$label" "$_UG_VARIANT in the app's folder (the second launch must not move or rewrite it)" \
@@ -4939,7 +4926,7 @@ _qf_relaunch() {
     if [ -z "$opened" ]; then
         open -n "$DEV_BUNDLE_DEPLOY" || fail "$label: could not relaunch $DEV_BUNDLE_DEPLOY"
     fi
-    poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || fail "$label: RPC did not come back after the relaunch"
+    poll_until "$RPC_READY_TIMEOUT_S" 1 rpc_ready || fail "$label: RPC did not come back after the relaunch"
     _launched_app="$(_qf_app_pid)"
     printf '%s launched' "$_launched_app" >"$_E2E_APP_MARKER"
     log "$label: relaunched (pid $_launched_app)"
