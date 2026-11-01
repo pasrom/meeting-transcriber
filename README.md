@@ -185,10 +185,10 @@ The app uses an animated waveform icon in the menu bar that reflects the current
 <img src="docs/menu-bar-recording.gif" width="80" alt="Recording">&nbsp;&nbsp;
 <img src="docs/menu-bar-transcribing.gif" width="80" alt="Transcribing">&nbsp;&nbsp;
 <img src="docs/menu-bar-diarizing.gif" width="80" alt="Diarizing">&nbsp;&nbsp;
-<img src="docs/menu-bar-protocol.gif" width="80" alt="Protocol">
+<img src="docs/menu-bar-protocol.gif" width="80" alt="Meeting Notes">
 </p>
 
-**Idle** → **Recording** (bars bounce) → **Transcribing** (bars morph to text) → **Diarizing** (bars split into groups) → **Protocol** (lines appear sequentially)
+**Idle** → **Recording** (bars bounce) → **Transcribing** (bars morph to text) → **Diarizing** (bars split into groups) → **Meeting Notes** (lines appear sequentially)
 
 ### Permission problem badge
 
@@ -253,7 +253,7 @@ Open Settings via the menu bar item or ⌘,.
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
 | **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model incl. a custom WhisperKit model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
 | **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
-| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, protocol language, output folder, custom prompt |
+| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, notes language, output folder, custom prompt |
 | **Advanced** | Permissions status, diagnostics, version info |
 
 ### Custom WhisperKit models
@@ -273,10 +273,10 @@ Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`
 
 In **Settings → Output**, both transcript options default to enabled for backward compatibility:
 
-- **Include full transcript in protocol** appends the verbatim transcript to generated Markdown.
+- **Include full transcript in meeting notes** appends the verbatim transcript to generated Markdown.
 - **Save raw transcript separately** retains the standalone `.txt` file.
 
-Disable both to retain only the generated meeting minutes. The recording follows its own retention policy and is not deleted by either setting. To avoid data loss, a raw transcript is retained if protocol generation is disabled, fails, or the job ends with an error.
+Disable both to retain only the generated meeting notes. The recording follows its own retention policy and is not deleted by either setting. To avoid data loss, a raw transcript is retained if meeting notes generation is disabled, fails, or the job ends with an error.
 
 **Protocol structure:** Summary, Participants, Topics Discussed, Decisions, Tasks (with responsible person, deadline, priority), Open Questions, and optionally the Full Transcript.
 
