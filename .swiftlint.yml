@@ -166,3 +166,25 @@ file_name:
     - TestHelpers.swift
     - WhisperKitDualSourceTests.swift
     - main.swift
+
+custom_rules:
+  # A test suite opened with a plain name keeps its plist in ~/Library/Preferences,
+  # and cfprefsd writes that file back seconds after the test process exits, so no
+  # teardown can remove it. DefaultsSuite.open files the suite in a scratch folder
+  # of the process's own instead; see Tests/DefaultsSuite.swift. Only the app's
+  # tests: the tools packages' tests (audiotap, mt-cli) open no defaults suite
+  # and have no DefaultsSuite to point at.
+  scratch_defaults_suite:
+    name: "Scratch defaults suite"
+    regex: '(UserDefaults\??|\.init)\(\s*suiteName\s*:'
+    included: '/app/MeetingTranscriber/Tests/'
+    excluded: '/Tests/DefaultsSuite\.swift$'
+    excluded_match_kinds:
+      - comment
+      - comment.mark
+      - comment.url
+      - doccomment
+      - doccomment.field
+      - string
+    message: "Open test suites with DefaultsSuite.open(_:), which keeps their file out of ~/Library/Preferences"
+    severity: error
