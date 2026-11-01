@@ -83,10 +83,11 @@ jobs:
   # scripts/ci/check-merge-commits.sh carries the reason. What it protects is the
   # review of the open PR, which a merge commit makes unreadable commit by commit.
   #
-  # Two deliberate deviations from the house pattern in the jobs below:
-  #   - No `Cancel run on failure` step. A check that blocks nothing must not take
-  #     the macOS jobs down with it: the contributor still needs to see whether
-  #     their actual change builds and passes.
+  # Two deliberate choices, compared with the build and test jobs below:
+  #   - No `Cancel run on failure` step (`lint` and `analyze` have none either).
+  #     A check that blocks nothing must not take the macOS jobs down with it:
+  #     the contributor still needs to see whether their actual change builds
+  #     and passes.
   #   - Not gated on `changes`. A merge commit is worth reporting whichever files
   #     the PR touches, and this costs seconds on a free runner.
   merge-commit-check:
@@ -128,9 +129,12 @@ jobs:
       # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     timeout-minutes: 10
+    # No `Cancel run on failure` step, and so no `actions: write`: a required
+    # check that blocks the merge on its own, and a red lint says nothing about
+    # the build or tests the cancel would throw away (see that action's
+    # description).
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@v7
       # Both linters are pinned to an exact release *and* an exact checksum,
@@ -164,9 +168,6 @@ jobs:
             echo "==> $t"
             bash "$t"
           done
-      - name: Cancel run on failure
-        if: failure()
-        uses: ./.github/actions/cancel-on-failure
 
   analyze:
     needs: changes
