@@ -37,10 +37,10 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
         let outcome = confirm(matcher, name: "Bob")
 
         let quarantined = try db.quarantinedFiles()
-        XCTAssertEqual(quarantined.count, 1, "undecodable DB must be moved aside, not overwritten")
-        let movedTo = try XCTUnwrap(quarantined.first)
-        XCTAssertEqual(try Data(contentsOf: movedTo), original)
-        XCTAssertEqual(log.problems, [.movedAside(dbPath.deletingLastPathComponent().appendingPathComponent(movedTo.lastPathComponent))])
+        XCTAssertEqual(quarantined.count, 1, "undecodable DB must be copied aside, not overwritten")
+        let copiedTo = try XCTUnwrap(quarantined.first)
+        XCTAssertEqual(try Data(contentsOf: copiedTo), original)
+        XCTAssertEqual(log.problems, [.copiedAside(dbPath.deletingLastPathComponent().appendingPathComponent(copiedTo.lastPathComponent))])
         // The confirmation itself still lands in a fresh DB.
         XCTAssertEqual(matcher.loadDB().map(\.name), ["Bob"])
         XCTAssertEqual(outcome.stored, ["Bob"])
@@ -69,7 +69,7 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
 
         let contents = try Set(db.quarantinedFiles().map { try Data(contentsOf: $0) })
         XCTAssertEqual(contents, [first, second])
-        XCTAssertEqual(log.problems.count, 2, "each quarantine moved a different file, so each is reported")
+        XCTAssertEqual(log.problems.count, 2, "each quarantine copied a different file, so each is reported")
     }
 
     /// A sync tool caught mid-write leaves a file that decodes a moment later.
@@ -105,7 +105,7 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
         XCTAssertEqual(try db.quarantinedFiles().count, 1)
     }
 
-    /// A file that stayed undecodable and could not be moved is not going to
+    /// A file that stayed undecodable and could not be copied is not going to
     /// settle; waiting again would stall every (mostly main-actor) caller.
     func testUnmovableUndecodableDBIsNotWaitedOnTwice() throws {
         try XCTSkipIf(geteuid() == 0, "root writes into a mode-0555 directory, so the move would succeed")
@@ -172,7 +172,7 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
 
     func testDBThatFailsToReadIsLeftInPlaceAndNotWritten() throws {
         // A read error (here: no permission) says nothing about the contents,
-        // so the file may be intact and must be neither moved nor replaced.
+        // so the file may be intact and must be neither copied nor replaced.
         let (matcher, log) = db.makeMatcher()
         matcher.saveDB([StoredSpeaker(name: "Alice", embeddings: [[1, 0, 0]])])
         let original = try Data(contentsOf: dbPath)
@@ -226,13 +226,13 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
 
         XCTAssertEqual(outcome.persistence, .writeFailed)
         XCTAssertTrue(outcome.stored.isEmpty)
-        XCTAssertEqual(log.problems, [.saveFailed(movedAside: nil)])
+        XCTAssertEqual(log.problems, [.saveFailed(copiedTo: nil)])
         XCTAssertEqual(try Data(contentsOf: dbPath), original)
     }
 
-    /// The quarantine has already moved the only copy aside when the fresh
-    /// write fails, so that copy must survive and the user must be told where
-    /// it is, rather than learning nothing while `speakers.json` is gone.
+    /// The quarantine has already copied the original aside when the fresh
+    /// write fails. The original stays in place (the atomic replace never ran),
+    /// the copy survives, and the user is told where it is.
     func testSaveFailureAfterQuarantineKeepsTheCorruptCopyAndNamesIt() throws {
         let original = Data("not json".utf8)
         try original.write(to: dbPath)
@@ -243,10 +243,29 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
 
         let quarantined = try XCTUnwrap(db.quarantinedFiles().first)
         XCTAssertEqual(try Data(contentsOf: quarantined), original)
+        XCTAssertEqual(try Data(contentsOf: dbPath), original, "the original stays in place")
         let expected = dbPath.deletingLastPathComponent().appendingPathComponent(quarantined.lastPathComponent)
-        XCTAssertEqual(log.problems, [.saveFailed(movedAside: expected)])
+        XCTAssertEqual(log.problems, [.saveFailed(copiedTo: expected)])
         XCTAssertEqual(outcome.persistence, .writeFailed)
         XCTAssertTrue(outcome.stored.isEmpty)
+    }
+
+    /// The original stays in place after a failed write, so every later write
+    /// finds the same undecodable file. While it is unchanged, that must not
+    /// stall the caller for the re-read, copy it again, or notify again.
+    func testWriteThatKeepsFailingOnAnUndecodableDBDoesNotRepeatItself() throws {
+        try Data("not json".utf8).write(to: dbPath)
+        try db.blockDBWrites()
+        var settles = 0
+        let (matcher, log) = db.makeMatcher { settles += 1 }
+
+        confirm(matcher, name: "Bob")
+        confirm(matcher, name: "Carol")
+        confirm(matcher, name: "Dave")
+
+        XCTAssertEqual(settles, 1)
+        XCTAssertEqual(try db.quarantinedFiles().count, 1)
+        XCTAssertEqual(log.problems.count, 1)
     }
 
     // MARK: - Reporting
@@ -282,14 +301,14 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
         try db.blockDBWrites()
         confirm(matcher, name: "Bob")
         confirm(matcher, name: "Bob")
-        XCTAssertEqual(log.problems, [.saveFailed(movedAside: nil)])
+        XCTAssertEqual(log.problems, [.saveFailed(copiedTo: nil)])
 
         try FileManager.default.removeItem(at: blocker)
         confirm(matcher, name: "Bob")
         try db.blockDBWrites()
         confirm(matcher, name: "Bob")
 
-        XCTAssertEqual(log.problems, [.saveFailed(movedAside: nil), .saveFailed(movedAside: nil)])
+        XCTAssertEqual(log.problems, [.saveFailed(copiedTo: nil), .saveFailed(copiedTo: nil)])
     }
 
     /// `dbLock` is not recursive. A callback that runs under it and reaches a
@@ -322,9 +341,9 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
 
     func testMovedAsideNotificationNamesTheQuarantineFile() throws {
         let notifier = RecordingNotifier()
-        let moved = tmpDir.appendingPathComponent("speakers.json.corrupt-20260101-120000")
+        let copy = tmpDir.appendingPathComponent("speakers.json.corrupt-20260101-120000")
 
-        SpeakerMatcher.notifyDBProblem(.movedAside(moved), via: notifier)
+        SpeakerMatcher.notifyDBProblem(.copiedAside(copy), via: notifier)
 
         let call = try XCTUnwrap(notifier.calls.first)
         XCTAssertEqual(notifier.calls.count, 1)
@@ -345,10 +364,10 @@ final class SpeakerMatcherPersistenceTests: XCTestCase { // swiftlint:disable:th
 
     func testSaveFailedNotificationNamesTheQuarantineFileWhenThereIsOne() {
         let notifier = RecordingNotifier()
-        let moved = tmpDir.appendingPathComponent("speakers.json.corrupt-20260101-120000")
+        let copy = tmpDir.appendingPathComponent("speakers.json.corrupt-20260101-120000")
 
-        SpeakerMatcher.notifyDBProblem(.saveFailed(movedAside: moved), via: notifier)
-        SpeakerMatcher.notifyDBProblem(.saveFailed(movedAside: nil), via: notifier)
+        SpeakerMatcher.notifyDBProblem(.saveFailed(copiedTo: copy), via: notifier)
+        SpeakerMatcher.notifyDBProblem(.saveFailed(copiedTo: nil), via: notifier)
 
         XCTAssertEqual(notifier.calls.map(\.title), Array(repeating: "Voice profiles could not be saved", count: 2))
         XCTAssertTrue(notifier.calls[0].body.contains("speakers.json.corrupt-20260101-120000"))

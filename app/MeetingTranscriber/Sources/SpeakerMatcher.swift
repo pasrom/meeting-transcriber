@@ -63,15 +63,18 @@ class SpeakerMatcher {
     /// callers can't lose updates. Use this for every mutating operation;
     /// raw `loadDB` + `saveDB` paired by hand reintroduces the race.
     ///
-    /// A DB that exists but cannot be used is never overwritten. Treating it
-    /// as empty and saving would replace every enrolled voice with just this
-    /// one change. An undecodable DB is moved aside first
-    /// (`quarantineUndecodableDB`) and the block runs against an empty DB, so
-    /// the caller's change still lands. A DB that failed to *read* may be
-    /// intact, so it stays in place and nothing is written; so does an
-    /// undecodable one that cannot be moved. The block still runs in that
-    /// case, because callers need its result; `persistence` says whether the
-    /// change reached the disk.
+    /// A DB that exists but cannot be used is never overwritten blind.
+    /// Treating it as empty and saving would replace every enrolled voice
+    /// with just this one change. A damaged DB is first copied aside
+    /// unchanged (`quarantineDamagedDB`), and the block runs against the
+    /// entries that could be salvaged (`.salvaged`; none if the file is not a
+    /// JSON array). Only then is the new array swapped in by an atomic
+    /// replace, so the original stays in place until the new file takes its
+    /// path: a failed write leaves it untouched, and a reader never finds the
+    /// path empty. A DB that failed to *read* may be intact, so it stays in
+    /// place and nothing is written; so does a damaged one that cannot be
+    /// copied. The block still runs in that case, because callers need its
+    /// result; `persistence` says whether the change reached the disk.
     @discardableResult
     func mutateDB<R>(_ block: (inout [StoredSpeaker]) -> R) -> Mutation<R> {
         var mayQuarantine = false
@@ -98,55 +101,52 @@ class SpeakerMatcher {
     private func lockedMutate<R>(
         _ block: (inout [StoredSpeaker]) -> R, mayQuarantine: Bool,
     ) -> (Mutation<R>, DBProblem?)? {
-        var stored: [StoredSpeaker] = []
-        var movedAside: URL?
-        var writable = true
-        switch Self.readDB(at: dbPath) {
-        case let .loaded(speakers):
-            stored = speakers
-
-        case .missing:
-            break
-
-        // Unless this very file was already found undecodable and could not
-        // be moved: it has stopped changing, and every caller (most on the
-        // main actor) would otherwise wait out the delay again.
-        case .undecodable where !mayQuarantine
-            && Self.problemReports[dbPath] != ProblemReport(problem: .leftInPlace, file: FileState(of: dbPath)):
+        let outcome = Self.readDB(at: dbPath)
+        // The problem already reported for this very file, if it has not
+        // changed since: it was left in place, or its write failed after the
+        // copy. Such a file has stopped changing.
+        let known = Self.problemReports[dbPath].flatMap { $0.file == FileState(of: dbPath) ? $0.problem : nil }
+        // Only a file that is not even a JSON array can be a sync tool caught
+        // mid-write, and one already reported need not be waited on again by
+        // the (mostly main-actor) callers.
+        if case .undecodable = outcome, !mayQuarantine, known == nil {
             return nil
-
-        case let .undecodable(error):
-            logger.error("Speaker DB undecodable: \(error.localizedDescription, privacy: .public)")
-            movedAside = Self.quarantineUndecodableDB(at: dbPath)
-            writable = movedAside != nil
-
-        case let .unreadable(error):
-            logger.error("Speaker DB unreadable, not writing: \(error.localizedDescription, privacy: .public)")
-            writable = false
         }
+        var plan = Self.writePlan(for: outcome)
+        // The copy must exist before anything is written: the entries a
+        // salvage drops survive only in it. An unchanged file whose write
+        // failed already has one, so a write that keeps failing makes no more.
+        var copiedTo: URL?
+        if let damage = plan.damage {
+            copiedTo = Self.existingCopy(after: known, of: dbPath)
+                ?? Self.quarantineDamagedDB(at: dbPath, damage: damage)
+            if copiedTo == nil { plan.writable = false }
+        }
+        var stored = plan.stored
         let value = block(&stored)
 
         let persistence: Persistence
         let problem: DBProblem?
-        if writable {
+        if plan.writable {
             do {
                 try Self.writeDB(stored, to: dbPath)
                 persistence = .saved
-                problem = movedAside.map(DBProblem.movedAside)
+                problem = copiedTo.flatMap { plan.damage?.problem(copiedTo: $0) }
                 Self.problemReports[dbPath] = nil
             } catch {
-                // After a quarantine the moved-aside copy is the only one left;
-                // it stays where it is and the report names it.
+                // The atomic replace never happened, so the original is still
+                // in place, untouched; the copy stays too, is named, and is
+                // reused by the next attempt while the file is unchanged.
                 logger.error("Failed to save speaker DB: \(error.localizedDescription, privacy: .public)")
                 persistence = .writeFailed
-                problem = .saveFailed(movedAside: movedAside)
+                problem = .saveFailed(copiedTo: copiedTo)
             }
         } else {
             persistence = .dbUnavailable
             problem = .leftInPlace
         }
         let toReport = problem.flatMap { Self.shouldReport($0, at: dbPath, reports: &Self.problemReports) ? $0 : nil }
-        let replaced = persistence == .saved ? movedAside : nil
+        let replaced = persistence == .saved ? copiedTo : nil
         return (Mutation(value: value, persistence: persistence, replacedCorruptDB: replaced), toReport)
     }
 
@@ -481,11 +481,11 @@ class SpeakerMatcher {
     }
 
     /// Stored speakers for read-only use. An unreadable DB reads as empty
-    /// here and is left in place; only `mutateDB` moves it aside, under the
-    /// lock, before it would write.
+    /// here, a partly undecodable one as the entries that can be salvaged,
+    /// and either is left in place; only `mutateDB` copies it aside, under
+    /// the lock, before it would write.
     func loadDB() -> [StoredSpeaker] {
-        guard case let .loaded(speakers) = readDB() else { return [] }
-        return speakers
+        readDB().usableSpeakers
     }
 
     /// Names of all stored speakers, ordered for picker display: most recently
