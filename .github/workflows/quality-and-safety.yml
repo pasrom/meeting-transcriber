@@ -394,6 +394,11 @@ jobs:
     permissions:
       contents: read
       actions: write
+    # What sanitizer-gate reads to tell a sanitizer finding from a failed
+    # setup: `skipped` when the leg died before the test step, `failure` when
+    # the test step itself failed.
+    outputs:
+      tests-outcome: ${{ steps.tests.outcome }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/verify-xcode
@@ -459,6 +464,9 @@ jobs:
     permissions:
       contents: read
       actions: write
+    # Read by sanitizer-gate; see test-asan.
+    outputs:
+      tests-outcome: ${{ steps.tests.outcome }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/verify-xcode
@@ -532,6 +540,8 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           ASAN_RESULT: ${{ needs.test-asan.result }}
           TSAN_RESULT: ${{ needs.test-tsan.result }}
+          ASAN_TESTS: ${{ needs.test-asan.outputs.tests-outcome }}
+          TSAN_TESTS: ${{ needs.test-tsan.outputs.tests-outcome }}
           TSAN_RELEVANT: ${{ needs.changes.outputs.tsan-relevant }}
           TSAN_REASON: ${{ needs.changes.outputs.tsan-reason }}
         run: |
@@ -611,21 +621,33 @@ jobs:
           fi
 
           failed=0
-          # describe <leg> <result> <expected> <why> -> appends one table row
-          # and records a failure where the row is not a pass or a legitimate
-          # skip.
+          # describe <leg> <result> <expected> <why> <tests-outcome> -> appends
+          # one table row and records a failure where the row is not a pass or
+          # a legitimate skip. The test step's outcome only words a failed row.
           describe() {
-            local leg="$1" result="$2" expected="$3" why="$4" cell
+            local leg="$1" result="$2" expected="$3" why="$4" tests="$5" cell
             case "$result" in
               success)
                 cell="passed ($why)"
                 ;;
               failure)
-                cell="FAILED"
+                case "$tests" in
+                  failure) cell="FAILED: the sanitizer tests failed" ;;
+                  skipped) cell="FAILED in setup, before the sanitizer tests ran: no sanitizer verdict, rerun the leg" ;;
+                  *) cell="FAILED (test step outcome: ${tests:-not reported})" ;;
+                esac
                 failed=1
                 ;;
               cancelled)
-                cell="CANCELLED: a sanitizer failure cancels the run, so this counts as a failure, not as a cancel by a person"
+                # The leg whose tests failed usually ends up cancelled by its
+                # own cancel step; it is named when its output survived. Any
+                # other cancel (the other leg's cancel step, a job timeout, a
+                # person) cannot be told apart here, so it is worded neutrally.
+                if [ "$tests" = "failure" ]; then
+                  cell="CANCELLED after its own sanitizer tests failed: this leg is the culprit"
+                else
+                  cell="CANCELLED: counted as a failure; cause not reported. Check the run summary for a culprit annotation (this leg's own may have lost its output), whether the other leg failed, a newer push or a person cancelled the run, or this job hit its time budget"
+                fi
                 failed=1
                 ;;
               skipped)
@@ -654,8 +676,8 @@ jobs:
             printf '| changes | %s: the legs were skipped through needs, nothing was checked |\n' "$CHANGES_RESULT" | tee -a "$GITHUB_STEP_SUMMARY"
             failed=1
           fi
-          describe "ASan" "$ASAN_RESULT" "$expect_asan" "runs on every same-repo PR and on push, schedule and dispatch"
-          describe "TSan" "$TSAN_RESULT" "$expect_tsan" "$tsan_why"
+          describe "ASan" "$ASAN_RESULT" "$expect_asan" "runs on every same-repo PR and on push, schedule and dispatch" "$ASAN_TESTS"
+          describe "TSan" "$TSAN_RESULT" "$expect_tsan" "$tsan_why" "$TSAN_TESTS"
           {
             echo
             echo "A leg listed as not run is absent evidence, not passing evidence. ASan finds memory errors, not data races; only TSan does, and TSan is asked on the run-quality label, on concurrency primitives in the changed source lines, and on package manifest or workflow changes (issue #688)."
