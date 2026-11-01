@@ -172,21 +172,34 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
 
     /// The real tick entry reads the track's ages once and hands them to both
     /// the observer and the watchdog, and the watchdog reads its clock once.
+    ///
+    /// The observer's zero-run probe is held, so its in-flight read makes the
+    /// watchdog skip its own. A check of its own would read outside the tick:
+    /// concluding it reads the clock, and a rebuild's main-queue re-check reads
+    /// the ages and the clock again, neither of which is what is counted here.
     func testTheTickReadsTheAgesOnceForBothConsumers() {
         let reads = CallCounter()
-        let rig = makeRig {
+        let rig = makeRig(hold: true) {
             reads.increment()
             return ages(energy: 61)
+        }
+        defer {
+            rig.state.hold = false
+            rig.state.release.signal()
         }
         _ = rig.capture.debugRMS.tick(intervalSeconds: 0)
 
         rig.capture.maybeReportDebugRMS(processes: processes)
-        settle(0.3)
+        XCTAssertEqual(rig.state.entered.wait(timeout: .now() + 2), .success, "precondition: the observer's read is stuck")
 
         XCTAssertEqual(reads.value, 1)
         XCTAssertEqual(rig.clock.reads, 1)
         XCTAssertEqual(rig.capture.silentTrackDiagnostics.watchdogCounters?.checks, 1, "the watchdog acted on them")
         XCTAssertEqual(rig.capture.silentTrackDiagnostics.counters.zeroRuns, 1, "and so did the observer")
+        // The held read is the observer's: the watchdog's check found it in
+        // flight and was dropped without asking the processes itself.
+        XCTAssertEqual(rig.capture.silentTrackDiagnostics.watchdogCounters?.dropped, 1)
+        XCTAssertEqual(rig.state.readCount, 1)
     }
 
     /// Off, the tick still reads the ages once, for the observer, and the
