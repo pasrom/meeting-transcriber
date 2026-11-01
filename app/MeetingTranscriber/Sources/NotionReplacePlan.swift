@@ -23,6 +23,12 @@ import Foundation
 /// exist, keeps the interrupted run's version of those parts. Refusing blocks
 /// that have children would close that gap but disable the recognition for
 /// typical protocols (transcript toggles, tables), so the gap is accepted.
+///
+/// Only root blocks of a type the export writes take part: a sub-page, a
+/// database, an image or an embed the user added under the page is listed as a
+/// root block too, but no protocol produces it, so a replace never deletes it
+/// and one added after the copy does not hide an interrupted replace. Kept
+/// blocks end up above the new content, since that is appended at the end.
 struct NotionReplacePlan: Equatable {
     /// Root blocks to delete once the new content is on the page.
     let staleBlockIDs: [String]
@@ -30,6 +36,7 @@ struct NotionReplacePlan: Equatable {
     let needsAppend: Bool
 
     init(existing: [NotionBlockSummary], replacement: [NotionBlock]) {
+        let existing = existing.filter { $0.type.map(MarkdownToNotionBlocks.rootBlockTypes.contains) == true }
         // The cheap length test comes first: the first export and a plain
         // re-export never reach the per-block encode.
         if existing.count > replacement.count,

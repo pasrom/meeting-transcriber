@@ -3,6 +3,27 @@ import Foundation
 import XCTest
 
 final class MarkdownToNotionBlocksTests: XCTestCase {
+    func testEveryRootBlockTypeTheConverterWritesIsReplaceable() {
+        // A replace deletes only `rootBlockTypes`; a type missing there would
+        // pile up on the page with every re-export.
+        let markdown = """
+        # H1
+        ## H2
+        ### H3
+        > quote
+        - bullet
+        1. numbered
+        ---
+        | a | b |
+        |---|---|
+        | 1 | 2 |
+
+        text
+        """
+        let blocks = MarkdownToNotionBlocks.convert(markdown: markdown, transcript: "Speaker: hello")
+        XCTAssertEqual(Set(blocks.map(\.type)), MarkdownToNotionBlocks.rootBlockTypes)
+    }
+
     func testHeadingsConversion() {
         let md = """
         # Heading 1

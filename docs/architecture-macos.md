@@ -640,9 +640,12 @@ so retries and protocol re-exports can use the same destination. Re-export after
 speaker renaming replaces the page's root content with the current protocol. New
 content is appended before prior root blocks are archived: a failed append keeps
 the previous content, and a retry reconciles any partial new content. A successful
-re-export replaces manual edits to the app-owned page. The client pins Notion API
-version `2022-06-28`; databases with multiple data sources are rejected rather
-than guessing which source should receive the meeting.
+re-export replaces manual edits to the app-owned page. Only root blocks of a type
+the converter writes are deleted (`MarkdownToNotionBlocks.rootBlockTypes`), so
+sub-pages, databases, images and embeds the user added are kept, above the new
+content. A delete that answers 404 counts as done once a fresh listing no longer
+shows the block; Notion answers 404 for lost access as well. The client pins Notion API version `2022-06-28`; databases with multiple
+data sources are rejected rather than guessing which source should receive the meeting.
 
 A failed export retains the completed job and its local Markdown backup across
 queue cleanup and app restarts, even if the original audio is no longer present.

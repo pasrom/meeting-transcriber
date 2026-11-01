@@ -2,6 +2,14 @@ import Foundation
 
 /// Converts markdown strings into Notion block structures for API export.
 enum MarkdownToNotionBlocks {
+    /// Every root block type `convert` can produce. A replace deletes only
+    /// these, so blocks the user added in Notion (sub-pages, images, embeds)
+    /// survive a re-export; a type added to the converter must be added here.
+    static let rootBlockTypes: Set<String> = [
+        "paragraph", "heading_1", "heading_2", "heading_3", "quote",
+        "bulleted_list_item", "numbered_list_item", "divider", "toggle", "table",
+    ]
+
     /// Notion's limit for one rich text item, counted here in UTF-16 units.
     private static let maxTextLength = NotionRequestBatches.maxTextUnits
     private static let maxRichTextElements = NotionRequestBatches.maxArrayCount

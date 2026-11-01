@@ -135,6 +135,44 @@ final class NotionClientReplaceTests: XCTestCase {
         XCTAssertEqual(page.deleteAttempts, 3)
     }
 
+    // MARK: - Blocks the export did not write
+
+    func testAReplaceKeepsBlocksTheUserAddedUnderThePage() async throws {
+        // Notion lists a sub-page, an inline database or an image added under
+        // the page as one of its root blocks. No protocol produces them, so
+        // they are the user's, and a replace must not delete them.
+        let page = FakeNotionPage(initial: [
+            .init(type: "paragraph", text: "Old paragraph 1."),
+            .init(type: "child_page", text: ""),
+            .init(type: "paragraph", text: "Old paragraph 2."),
+            .init(type: "child_database", text: ""),
+            .init(type: "image", text: ""),
+        ])
+        let client = page.makeClient(databaseID: databaseID)
+
+        _ = try await export(client, markdown: markdown("New", count: 2))
+        XCTAssertEqual(page.types, ["child_page", "child_database", "image", "paragraph", "paragraph"])
+        XCTAssertEqual(page.texts.filter { !$0.isEmpty }, texts("New", count: 2))
+        XCTAssertEqual(page.deleteAttempts, 2, "Only the old export blocks are deleted")
+    }
+
+    func testAChildPageAfterTheCopyDoesNotHideAnInterruptedReplace() async throws {
+        // Leftovers, the complete copy, then a sub-page the user added: the
+        // sub-page is not part of the comparison, so the copy is still
+        // recognised and not appended a second time.
+        let page = FakeNotionPage(
+            initial: [.init(type: "paragraph", text: "Old paragraph 1.")]
+                + texts("New", count: 2).map { .init(type: "paragraph", text: $0) }
+                + [.init(type: "child_page", text: "")],
+        )
+        let client = page.makeClient(databaseID: databaseID)
+
+        _ = try await export(client, markdown: markdown("New", count: 2))
+        XCTAssertEqual(page.appends, 0)
+        XCTAssertEqual(page.types, ["paragraph", "paragraph", "child_page"])
+        XCTAssertEqual(page.texts.filter { !$0.isEmpty }, texts("New", count: 2))
+    }
+
     // MARK: - Tolerant delete loop
 
     func testAFailedDeleteDoesNotStopTheRemainingDeletes() async {
@@ -171,6 +209,48 @@ final class NotionClientReplaceTests: XCTestCase {
         await assertFails(client, markdown: markdown("New", count: 2))
         XCTAssertEqual(page.deleteAttempts, 6, "A success between failures keeps the loop going")
         XCTAssertEqual(page.texts, ["Old paragraph 1.", "Old paragraph 3.", "Old paragraph 4."] + texts("New", count: 2))
+    }
+
+    func testADeleteOfABlockThatIsAlreadyGoneCountsAsDone() async throws {
+        // Three 404s in a row: neither a failure of the export nor a run of
+        // failures that ends the loop, so the blocks after them still go. One
+        // listing after the loop confirms they are gone.
+        let page = FakeNotionPage(initial: texts("Old", count: 5))
+        let client = page.makeClient(databaseID: databaseID)
+        page.deletePlan = .goneBlocks(containing: ["Old paragraph 1.", "Old paragraph 2.", "Old paragraph 3."])
+
+        let result = try await export(client, markdown: markdown("New", count: 2))
+        XCTAssertTrue(result.updatedExistingPage)
+        XCTAssertEqual(page.deleteAttempts, 5)
+        XCTAssertEqual(page.listCalls, 2, "The plan's listing and the confirming one")
+        XCTAssertEqual(page.texts, texts("New", count: 2))
+    }
+
+    func testA404ForABlockThatIsStillThereFailsTheExport() async {
+        // Lost access answers 404 too, while the block stays on the page: the
+        // confirming listing still shows it, so the export must not report success.
+        let page = FakeNotionPage(initial: texts("Old", count: 3))
+        let client = page.makeClient(databaseID: databaseID)
+        page.deletePlan = .hiddenBlocks(containing: ["Old paragraph 2."])
+
+        do {
+            _ = try await export(client, markdown: markdown("New", count: 2))
+            XCTFail("A 404 for a block that is still listed must fail the export")
+        } catch {
+            XCTAssertEqual((error as? NotionClientError)?.httpStatusCode, 404)
+        }
+        XCTAssertEqual(page.deleteAttempts, 3)
+        XCTAssertEqual(page.texts, ["Old paragraph 2."] + texts("New", count: 2))
+    }
+
+    func testA404DoesNotResetTheRunOfFailures() async {
+        // Failures with 404s between them are still a run: the outage bound holds.
+        let page = FakeNotionPage(initial: texts("Old", count: 8))
+        let client = page.makeClient(databaseID: databaseID)
+        page.deletePlan = .alternateFailAndGone
+
+        await assertFails(client, markdown: markdown("New", count: 2))
+        XCTAssertEqual(page.deleteAttempts, 5, "fail, 404, fail, 404, fail ends the loop")
     }
 
     // MARK: - Listing more than one page of root blocks
@@ -229,6 +309,12 @@ private final class FakeNotionPage: @unchecked Sendable {
         /// The first `successes` deletes of the pass work, every later one fails.
         case succeedThenFail(successes: Int)
         case failBlocks(containing: Set<String>)
+        /// Blocks with these texts vanish before their delete, which then answers 404.
+        case goneBlocks(containing: Set<String>)
+        /// Deletes of blocks with these texts answer 404 while the blocks stay, as with lost access.
+        case hiddenBlocks(containing: Set<String>)
+        /// Odd deletes of the pass fail with 500, even ones answer 404 for a block that is gone.
+        case alternateFailAndGone
     }
 
     struct Seed {
@@ -364,19 +450,23 @@ private final class FakeNotionPage: @unchecked Sendable {
         deleteAttempts += 1
         deletesThisPlan += 1
         let id = path.components(separatedBy: "/").last ?? ""
-        let fails: Bool = switch deletePlan {
-        case .alwaysSucceed: false
-        case let .succeedThenFail(successes): deletesThisPlan > successes
-        case let .failBlocks(texts): blocks.first { $0.id == id }.map { texts.contains($0.text) } ?? false
+        let text = blocks.first { $0.id == id }?.text
+        let status = switch deletePlan {
+        case .alwaysSucceed: 200
+        case let .succeedThenFail(successes): deletesThisPlan > successes ? 500 : 200
+        case let .failBlocks(texts): text.map(texts.contains) == true ? 500 : 200
+        case let .goneBlocks(texts), let .hiddenBlocks(texts): text.map(texts.contains) == true ? 404 : 200
+        case .alternateFailAndGone: deletesThisPlan.isMultiple(of: 2) ? 404 : 500
         }
-        if fails {
-            return respond(
-                request,
-                json: #"{"object":"error","status":500,"code":"internal_server_error","message":"boom"}"#,
-                status: 500,
-            )
+        // A gone block has vanished before its delete arrives, as Notion would see it.
+        let vanishes = switch deletePlan {
+        case .hiddenBlocks: status == 200
+        default: status != 500
         }
-        blocks.removeAll { $0.id == id }
+        if vanishes { blocks.removeAll { $0.id == id } }
+        guard status == 200 else {
+            return respond(request, json: #"{"object":"error","status":\#(status),"message":"boom"}"#, status: status)
+        }
         return respond(request, json: "{}")
     }
 }

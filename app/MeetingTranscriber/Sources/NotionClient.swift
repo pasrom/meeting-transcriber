@@ -278,7 +278,8 @@ actor NotionClient: NotionExporting {
     /// (when a retry cannot tell, it is, and the page can grow until a pass
     /// deletes cleanly) and which blocks go. The old blocks go one request at
     /// a time and a failed delete does not stop the rest (`deleteBlocks`).
-    /// Re-export replaces manual edits on this app-owned page as well.
+    /// Re-export replaces manual edits on this app-owned page as well, except
+    /// for blocks of a type the export never writes.
     private func recoverExistingPage(
         _ pageID: String,
         properties: [String: NotionPropertyValue],
@@ -298,7 +299,7 @@ actor NotionClient: NotionExporting {
         if plan.needsAppend {
             try await appendBlocks(blocks, to: pageID)
         }
-        try await deleteBlocks(plan.staleBlockIDs)
+        try await deleteBlocks(plan.staleBlockIDs, on: pageID)
         return NotionPageResult(
             pageID: pageID,
             url: page.url,
@@ -496,13 +497,22 @@ extension NotionClient {
     /// failed while the page still holds leftovers. A run of consecutive failures
     /// means Notion is refusing everything, and ends the loop: each failed
     /// request can already spend its rate-limit retries.
-    private func deleteBlocks(_ blockIDs: [String]) async throws {
+    ///
+    /// A 404 usually means the block is already gone, but Notion answers the
+    /// same when the integration has lost access to the page. It neither fails
+    /// nor resets the run of failures; once the loop ends, one fresh listing
+    /// decides: blocks absent from it are done, and a listing that fails or
+    /// still shows one of them fails the export.
+    private func deleteBlocks(_ blockIDs: [String], on pageID: String) async throws {
         var firstFailure: (any Error)?
         var consecutiveFailures = 0
+        var notFound: [(blockID: String, error: NotionClientError)] = []
         for blockID in blockIDs {
             do {
                 _ = try await performData("DELETE", path: "blocks/\(blockID)")
                 consecutiveFailures = 0
+            } catch let error as NotionClientError where error.httpStatusCode == 404 {
+                notFound.append((blockID, error))
             } catch {
                 try Task.checkCancellation()
                 firstFailure = firstFailure ?? error
@@ -511,5 +521,9 @@ extension NotionClient {
             }
         }
         if let firstFailure { throw firstFailure }
+        guard let firstNotFound = notFound.first else { return }
+        logger.info("Notion delete answered 404 for \(notFound.count, privacy: .public) block(s); confirming they are gone")
+        let remaining = try await Set(childBlocks(pageID).map(\.id))
+        if notFound.contains(where: { remaining.contains($0.blockID) }) { throw firstNotFound.error }
     }
 }
