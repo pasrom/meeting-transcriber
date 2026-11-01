@@ -406,13 +406,19 @@ jobs:
         timeout-minutes: 20
         with:
           prewarm: "true"
-      - uses: ./.github/actions/sanitizer-tests
+      - id: tests
+        uses: ./.github/actions/sanitizer-tests
         timeout-minutes: 20
         with:
           sanitizer-flag: "--sanitize=address"
           user-home: ${{ steps.home.outputs.home }}
+      # Cancels the run only on a sanitizer verdict, which needs a new push, so
+      # stopping the other leg frees a Mini sooner (TSan holds one ~15 min). A
+      # setup failure (toolchain check, model pre-warm) wants a rerun of this
+      # leg, and must not turn the other leg `cancelled`, which the gate counts
+      # as a failure.
       - name: Cancel run on failure
-        if: failure()
+        if: failure() && steps.tests.outcome == 'failure'
         uses: ./.github/actions/cancel-on-failure
         with:
           job-name: sanitizers (asan)
@@ -462,13 +468,15 @@ jobs:
         timeout-minutes: 20
         with:
           prewarm: "true"
-      - uses: ./.github/actions/sanitizer-tests
+      - id: tests
+        uses: ./.github/actions/sanitizer-tests
         timeout-minutes: 20
         with:
           sanitizer-flag: "--sanitize=thread"
           user-home: ${{ steps.home.outputs.home }}
+      # Scoped to the test step for the reasons in test-asan.
       - name: Cancel run on failure
-        if: failure()
+        if: failure() && steps.tests.outcome == 'failure'
         uses: ./.github/actions/cancel-on-failure
         with:
           job-name: sanitizers (tsan)
@@ -484,7 +492,8 @@ jobs:
   # `if:` and this job disagree and the workflow is misconfigured.
   #
   # `cancelled` counts as failure on purpose. The cancel-on-failure step
-  # cancels the whole run when a leg fails, and the run-level cancellation
+  # cancels the whole run when a leg's sanitizer tests fail, and the
+  # run-level cancellation
   # races the failing job's own conclusion, so the culprit usually ends up
   # marked `cancelled` like its victims (the push run for #684 on 2026-09-06
   # is one: `test (tsan)` cancelled, `test (asan)` success). A gate that
@@ -723,7 +732,7 @@ jobs:
       # and sanitizer-gate counts a cancelled leg as a sanitizer failure, so a
       # quality regression or a transport error here read as a red sanitizer
       # check. A failure here stays this job's. (The reverse still holds: a
-      # failing sanitizer leg cancels the run, this job included.)
+      # leg whose sanitizer tests fail cancels the run, this job included.)
       #
       # The upload is best-effort for the same reason: a failed upload (e.g.
       # the artifact service unreachable) is no quality verdict, so it warns
