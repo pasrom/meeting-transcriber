@@ -356,8 +356,38 @@ final class PipelineQueueRetryTests: XCTestCase {
             state: .error, error: Self.duplicateRunError,
         )
 
-        XCTAssertFalse(queue.canRetryJob(id: duplicateID), "offered a retry on audio that is gone")
-        XCTAssertFalse(queue.retryJob(id: duplicateID))
+        XCTAssertFalse(queue.retryJob(id: duplicateID), "retried a job whose audio is gone")
+        XCTAssertEqual(queue.jobs.first { $0.id == duplicateID }?.state, .error)
+    }
+
+    /// The menu's Retry row is a hint from the queue's state, never a file
+    /// check, so audio removed behind the app's back is only found when the
+    /// retry runs. It must then refuse and say why on the job, once. The offer
+    /// stays, because a volume that was unmounted may come back, and the
+    /// retry then has to work.
+    func testARetryOnAudioRemovedBehindTheAppsBackSaysSoAndWorksOnceItIsBack() throws {
+        let queue = PipelineQueue(logDir: tmpDir)
+        let mixPath = try touch("vanishing_mix.wav")
+        let failedID = queue.insertJobForTesting(mixPath: mixPath, state: .error, error: "Transcription failed.")
+        XCTAssertTrue(queue.canRetryJob(id: failedID), "test premise: offered while the audio is there")
+        try FileManager.default.removeItem(at: mixPath)
+
+        XCTAssertFalse(queue.retryJob(id: failedID), "retried a job whose audio was removed")
+
+        let job = try XCTUnwrap(queue.jobs.first { $0.id == failedID })
+        XCTAssertEqual(job.state, .error)
+        XCTAssertEqual(job.error, "Transcription failed. The recording is no longer there, so there is nothing to retry.")
+        XCTAssertTrue(queue.canRetryJob(id: failedID), "the offer is a hint from state, not from the last click")
+        XCTAssertFalse(queue.retryJob(id: failedID))
+        XCTAssertEqual(
+            queue.jobs.first { $0.id == failedID }?.error, job.error,
+            "a second click appended the note again",
+        )
+
+        try Data().write(to: mixPath)
+
+        XCTAssertTrue(queue.retryJob(id: failedID), "a recording that came back stayed unretryable")
+        XCTAssertNil(queue.jobs.first { $0.id == failedID }?.error, "the retry kept the failed run's error text")
     }
 
     /// The registry holds a run by its job ID as well as its audio, and a run
