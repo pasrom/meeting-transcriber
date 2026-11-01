@@ -106,6 +106,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
         notionExportConfiguration: NotionExportConfiguration? = nil,
         notionExportResolution: NotionExportResolution? = nil,
+        notionExportResolutionProvider: (() -> NotionExportResolution)? = nil,
     ) throws -> (Harness, TransitionCollector) {
         let engine = MockEngine()
         engine.segmentsToReturn = [
@@ -126,7 +127,7 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         let protocolGen = MockProtocolGen()
         let collector = TransitionCollector()
-        let exportConfigurationProvider: () -> NotionExportResolution = {
+        let exportConfigurationProvider: () -> NotionExportResolution = notionExportResolutionProvider ?? {
             notionExportResolution ?? notionExportConfiguration.map(NotionExportResolution.ready) ?? .disabled
         }
 
@@ -960,6 +961,36 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertTrue(finished.warnings.contains(PipelineQueue.notionExportUnconfiguredWarning))
         XCTAssertNotNil(finished.protocolPath)
         XCTAssertNil(finished.notionExportStatus)
+    }
+
+    func testSuccessfulExportAfterTheConfigurationIsFixedDropsTheSkippedWarning() async throws {
+        let exporter = StubNotionExporter(result: NotionPageResult(pageID: "page-1"))
+        var resolution = NotionExportResolution.unconfigured
+        let provider = { resolution }
+        let (harness, _) = try makeHarness(notionExportResolutionProvider: provider)
+        var job = makeJob(audioPath: harness.audioPath)
+        job.warnings = ["Unrelated warning"]
+        harness.queue.enqueue(job)
+        await harness.queue.awaitProcessing()
+        XCTAssertTrue(try XCTUnwrap(harness.queue.jobs.first).warnings.contains(PipelineQueue.notionExportUnconfiguredWarning))
+
+        // The token and database are added, then the protocol is generated again.
+        resolution = .ready(NotionExportConfiguration(exporter: exporter, databaseID: "database-1"))
+        let finished = try XCTUnwrap(harness.queue.jobs.first)
+        let transcriptPath = try XCTUnwrap(finished.transcriptPath)
+        try await harness.queue.generateProtocol(
+            jobID: job.id, transcript: "again", title: job.meetingTitle,
+            protocolsDir: transcriptPath.deletingLastPathComponent(),
+        )
+        // The job is already done, so nothing else hands the queued export over.
+        harness.queue.startPendingNotionExport(jobID: job.id)
+        await harness.queue.awaitNotionExports()
+
+        let exports = await exporter.exports
+        XCTAssertEqual(exports.count, 1)
+        let exported = try XCTUnwrap(harness.queue.jobs.first)
+        XCTAssertEqual(exported.notionExportStatus, .completed)
+        XCTAssertEqual(exported.warnings, ["Unrelated warning"], "a saved page leaves no warning that says the export was skipped")
     }
 
     func testDisabledExportAddsNoWarning() async throws {

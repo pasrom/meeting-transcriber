@@ -240,6 +240,7 @@ extension PipelineQueue {
             jobs[index].finishNotionExport(succeeded: true)
             jobs[index].warnings.removeAll { warning in
                 warning.hasPrefix(Self.notionExportFailurePrefix)
+                    || warning == Self.notionExportUnconfiguredWarning
                     || warning == Self.notionRetryConfigurationWarning
                     || warning == Self.notionRetryReadWarning
                     || warning == Self.notionRetryTranscriptWarning
