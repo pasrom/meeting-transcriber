@@ -179,9 +179,11 @@ jobs:
       # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     timeout-minutes: 30
+    # No `Cancel run on failure` step, and so no `actions: write`, as in `lint`.
+    # A compile error, the one failure this shares with `test`, fails the `test`
+    # legs by itself.
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@v7
       - name: Install pinned SwiftLint
@@ -229,9 +231,6 @@ jobs:
         if: success() || failure()
         continue-on-error: true
         run: bash scripts/ci/type-check-timings.sh report /tmp/xcodebuild.log --root "$GITHUB_WORKSPACE"
-      - name: Cancel run on failure
-        if: failure()
-        uses: ./.github/actions/cancel-on-failure
 
   test:
     needs: changes
