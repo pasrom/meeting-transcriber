@@ -106,8 +106,9 @@ jobs:
       # A release cache of its own. It used to share the test matrix's key, so
       # a release build restored a debug build tree it could not reuse and
       # compiled every dependency again. Restored only for the exact
-      # `Package.resolved` and compiler build (no fallback to an older cache); the
-      # app's own sources are newer than the cache and are always recompiled.
+      # manifests, `Package.resolved` and compiler build (no fallback to an older
+      # cache); the app's own sources are newer than the cache and are always
+      # recompiled.
       # build_release.sh builds the App Store variant in `.build-appstore`.
       # A `v*` tag build, the one that is published, always builds cold: it
       # neither restores nor saves this cache.

@@ -19,9 +19,9 @@ inputs:
   cache-restore-fallback:
     description: >
       Fall back to the newest cache of the same suffix when the exact key
-      (suffix + `Package.resolved` hash) misses. Anything but `true` restores
-      the exact dependency set or nothing, never objects built against older
-      ones.
+      (suffix + manifests and `Package.resolved` hash) misses. Anything but
+      `true` restores the exact dependency set or nothing, never objects built
+      against older ones.
     required: false
     default: "true"
   cache-spm:
@@ -103,12 +103,19 @@ runs:
         fi
         echo "id=$id" >> "$GITHUB_OUTPUT"
 
+    # Keyed off the manifests as well as `Package.resolved`: a changed binary
+    # target (URL or checksum) leaves `Package.resolved` alone, so the key
+    # would still hit exactly, SwiftPM would fetch the new artifact, and the
+    # entry would never be saved again. These are the two manifests of the
+    # packages that go into this build tree: the app and its local dependency
+    # AudioTapLib. The simulator and mt-cli are separate packages with trees
+    # of their own.
     - name: Cache SPM dependencies
       if: inputs.cache-spm == 'true'
       uses: actions/cache@v5
       with:
         path: ${{ inputs.cache-path }}
-        key: spm-${{ runner.os }}-${{ steps.toolchain.outputs.id }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
+        key: spm-${{ runner.os }}-${{ steps.toolchain.outputs.id }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Package.swift', 'tools/audiotap/Package.swift') }}
         restore-keys: ${{ inputs.cache-restore-fallback == 'true' && format('spm-{0}-{1}-{2}-', runner.os, steps.toolchain.outputs.id, inputs.cache-key-suffix) || '' }}
 
     # Cache the WhisperKit (HuggingFace) + FluidAudio model files. The
