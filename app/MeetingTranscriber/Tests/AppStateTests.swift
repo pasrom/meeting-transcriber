@@ -782,7 +782,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         state.pipeline.queue.onJobStateChange?(job, .transcribing, .done)
 
         XCTAssertEqual(notifier.calls.count, 1)
-        XCTAssertEqual(notifier.calls[0].title, "Protocol Ready")
+        XCTAssertEqual(notifier.calls[0].title, "Meeting Notes Ready")
         XCTAssertEqual(notifier.calls[0].body, "Sprint Review")
     }
 

@@ -52,6 +52,7 @@ extension SpeakerNamingSession {
             // Reachable when the transcript was moved or deleted between the
             // pipeline writing it and the user resolving naming: the caller's
             // readiness probe only checks that `transcriptPath` is non-nil.
+            // Matched by /v1 clients and persisted jobs; keep the text stable.
             delegate.addWarning(id: jobID, "Protocol not generated — transcript file is missing")
             finishIfUnresolved(jobID: jobID, delegate: delegate)
             return

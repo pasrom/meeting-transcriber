@@ -260,7 +260,7 @@ struct GeneralSettingsView: View {
                     .font(.callout.weight(.semibold))
                 Text(
                     "Files land in `\(display)`. Each recording gets a `<timestamp>_meta.json` " +
-                        "sidecar next to its WAVs. No transcription, diarization, or protocol " +
+                        "sidecar next to its WAVs. No transcription, diarization, or meeting notes " +
                         "generation runs on this device.",
                 )
                 .font(.caption)

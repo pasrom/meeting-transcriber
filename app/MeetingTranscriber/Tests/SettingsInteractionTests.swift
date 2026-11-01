@@ -75,7 +75,7 @@ final class SettingsInteractionTests: XCTestCase {
         let view = OutputSettingsView(settings: settings)
 
         let picker = try view.inspect().find(ViewType.Picker.self) { picker in
-            try picker.labelView().text().string() == "Protocol Language"
+            try picker.labelView().text().string() == "Notes Language"
         }
         // `select(value:)` only writes the binding and never checks the tags, so
         // the option's presence has to be asserted separately.
@@ -92,7 +92,7 @@ final class SettingsInteractionTests: XCTestCase {
         let view = OutputSettingsView(settings: settings)
 
         let picker = try view.inspect().find(ViewType.Picker.self) { picker in
-            try picker.labelView().text().string() == "Protocol Language"
+            try picker.labelView().text().string() == "Notes Language"
         }
 
         XCTAssertNoThrow(try picker.find(text: "Thai"))

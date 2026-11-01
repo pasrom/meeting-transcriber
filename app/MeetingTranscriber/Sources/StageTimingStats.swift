@@ -25,7 +25,7 @@ enum StageKind: String, Codable, CaseIterable {
         case .echoCancelling: "Echo cancellation"
         case .transcribing: "Transcribing"
         case .diarizing: "Diarizing"
-        case .generatingProtocol: "Protocol"
+        case .generatingProtocol: "Generating notes"
         }
     }
 

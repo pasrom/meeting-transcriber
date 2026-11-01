@@ -22,7 +22,7 @@ enum JobState: String, Codable {
         case .waiting: "Waiting..."
         case .transcribing: "Transcribing..."
         case .diarizing: "Diarizing..."
-        case .generatingProtocol: "Generating Protocol..."
+        case .generatingProtocol: "Generating Meeting Notes..."
         case .speakerNamingPending: "Name Speakers..."
         case .done: "Done"
         case .error: "Error"

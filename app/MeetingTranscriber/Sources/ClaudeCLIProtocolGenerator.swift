@@ -10,7 +10,7 @@
         let claudeBin: String
         let language: String
 
-        /// User-supplied key from Settings → Protocol Generation (`AppSettings.claudeAPIKey`),
+        /// User-supplied key from Settings → Meeting Notes (`AppSettings.claudeAPIKey`),
         /// injected only when the user has explicitly typed one in. Not
         /// auto-discovered: an implicit switch away from the CLI's own OAuth
         /// login would silently move a healthy subscription session onto
@@ -397,8 +397,8 @@
         /// already set in `baseEnvironment`, is injected so the subprocess
         /// can authenticate via API key instead of the CLI's own OAuth
         /// session. The key is never auto-discovered — it only arrives here
-        /// when the user has explicitly typed one into Settings → Protocol
-        /// Generation (`AppSettings.claudeAPIKey`), so a healthy OAuth
+        /// when the user has explicitly typed one into Settings → Meeting
+        /// Notes (`AppSettings.claudeAPIKey`), so a healthy OAuth
         /// session is never silently switched to metered billing and a bad
         /// key can never silently break a previously-working install.
         static func buildEnvironment(

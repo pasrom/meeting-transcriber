@@ -193,7 +193,7 @@ final class NotificationManagerSchedulingTests: XCTestCase {
     func testPlainNotifyStaysActive() {
         let (manager, fake) = makeManager()
         manager.setUp()
-        manager.notify(title: "Protocol Ready", body: "x")
+        manager.notify(title: "Meeting Notes Ready", body: "x")
         XCTAssertEqual(fake.added.first?.content.interruptionLevel, .active)
     }
 
