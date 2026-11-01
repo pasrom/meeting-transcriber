@@ -33,7 +33,7 @@ final class SingleFlightTests: XCTestCase {
         let second = Task { @MainActor in
             await flight.run { runCount += 1 }
         }
-        await Task.yield() // let `second` reach its `await existing.value`
+        await Task.yield() // let `second` reach the join on the in-flight task
         release?()
         await first.value
         await second.value
@@ -96,5 +96,54 @@ final class SingleFlightTests: XCTestCase {
             secondOutcome, "first",
             "The joiner must be told what the run it waited on attempted, not what its own body would have said",
         )
+    }
+
+    /// A cancelled `runUnlessCancelled` caller stops waiting while the run is
+    /// still parked; the run goes on, uncancelled, and a caller still waiting
+    /// gets its outcome.
+    func test_cancelledJoiner_stopsWaitingWhileTheRunGoesOn() async {
+        let flight = SingleFlight<String>()
+        let gate = MainActorGate()
+        var runCount = 0
+        var runSawACancel = false
+        let body: @MainActor () async -> String = {
+            runCount += 1
+            await gate.wait()
+            runSawACancel = Task.isCancelled
+            return "loaded"
+        }
+        let cancelled = Task { @MainActor in
+            await outcome { _ = try await flight.runUnlessCancelled(body) }
+        }
+        await waitFor(gate.hasWaiter, timeout: regressionCeiling)
+        let waiting = Task { @MainActor in try await flight.runUnlessCancelled(body) }
+
+        cancelled.cancel()
+        let cancelledOutcome = await value(of: cancelled)
+        XCTAssertEqual(cancelledOutcome, "cancelled", "the cancelled caller waited for the run")
+
+        gate.open()
+        let outcome = try? await waiting.value
+        XCTAssertEqual(outcome, "loaded")
+        XCTAssertEqual(runCount, 1)
+        XCTAssertFalse(runSawACancel, "the caller's cancel reached the shared run")
+    }
+
+    /// A caller already cancelled still starts the run, so it is under way for
+    /// whoever comes next; it only does not wait for it.
+    func test_alreadyCancelledCaller_startsTheRunWithoutWaiting() async {
+        let flight = SingleFlight<Void>()
+        let gate = MainActorGate()
+        let caller = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await outcome { try await flight.runUnlessCancelled { await gate.wait() } }
+        }
+
+        let callerOutcome = await value(of: caller)
+        await waitFor(gate.hasWaiter, timeout: regressionCeiling)
+
+        XCTAssertEqual(callerOutcome, "cancelled")
+        XCTAssertTrue(gate.hasWaiter, "a cancelled caller did not start the run")
+        gate.open()
     }
 }
