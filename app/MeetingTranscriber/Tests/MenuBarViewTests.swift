@@ -657,6 +657,26 @@ final class MenuBarViewTests: XCTestCase {
         )
     }
 
+    /// The Retry row is shown from the job's recorded state and the queue's
+    /// bookkeeping alone. The audio path here does not exist, so a view that
+    /// asked the file system would hide the row, and a view body must not do
+    /// that: the recording can sit on a network volume. The retry re-checks
+    /// the file itself when it runs.
+    func testFailedJobRetryRowIsOfferedWithoutAskingTheFileSystem() throws {
+        let queue = try makeIsolatedQueue()
+        queue.insertJobForTesting(
+            mixPath: URL(fileURLWithPath: "/nonexistent-volume/recordings/gone_mix.wav"),
+            state: .error, error: "Failed",
+        )
+
+        let body = try makeView(status: makeStatus(), pipelineQueue: queue).inspect()
+
+        XCTAssertNoThrow(
+            try body.find(viewWithAccessibilityIdentifier: A11yID.jobRetryButton(0)),
+            "the Retry row was decided by a file system check in the view body",
+        )
+    }
+
     private func emptyFile(_ name: String, in dir: URL) throws -> URL {
         let url = dir.appendingPathComponent(name)
         try Data().write(to: url)

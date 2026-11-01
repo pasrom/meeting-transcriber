@@ -24,6 +24,9 @@ Concurrency, audio loading, job restore, protocol generation, record-only mode a
 - **A Notion retry sends the page it would have sent the first time, from the local backup alone.** With the transcript option on, the export appended the transcript under `## Full Transcript` in the file it saved, and `MarkdownToNotionBlocks` reads that section back into the same toggles, so the retry passes no separate transcript. The retry replaces the page's blocks, so a job whose option was on and whose backup has lost that heading is refused with a fixed warning and stays failed: sending it would swap a page that has the transcript for one that has none.
 - Why it is not merely a saving: a late confirm transits `.generatingProtocol` too, so a full run there re-diarizes, discards the names the user just confirmed and parks the job back in the dialog they just closed.
 
+**Retrying a failed job:**
+- **The menu offers Retry from state alone, never from a file check.** `canRetryJob` runs in the view body on every render, and the recording can sit on a network or removable volume where `fileExists` blocks the main thread. `retryJob` checks the file itself on every click; one that finds it gone adds a fixed sentence to the job's error text (once) and changes nothing else, and the offer stays, so a volume that comes back is retryable. See the comments on `canRetryJob`.
+
 **Protocol generation:**
 - `ProtocolGenerating` protocol with two implementations: `ClaudeCLIProtocolGenerator` and `OpenAIProtocolGenerator`.
 - `AppSettings.protocolProvider` enum (`.claudeCLI` / `.openAICompatible` / `.none`) selects the provider. `.none` skips LLM generation and saves the transcript only.

@@ -428,6 +428,10 @@ extension PipelineQueue {
     @discardableResult
     func retryJob(id: UUID) -> Bool {
         guard canRetryJob(id: id), let index = jobs.firstIndex(where: { $0.id == id }) else { return false }
+        guard Self.sourceAudioExists(for: jobs[index]) else {
+            noteRetryAudioMissing(at: index)
+            return false
+        }
         naming.removeNamingData(
             jobID: id, slug: jobs[index].namingSlug, in: allSidecarDirs(of: jobs[index]),
         )
@@ -440,8 +444,12 @@ extension PipelineQueue {
         return true
     }
 
-    /// Whether `retryJob` would accept this job now. The menu shows Retry only
-    /// where this holds, so a click is never a silent no-op.
+    /// Whether the menu offers Retry for this job: a hint from the queue's
+    /// state, never a file check. It stands for what the menu shows on every
+    /// render, and the recording can sit on a network or removable volume,
+    /// where a `fileExists` can block the main thread. `retryJob` looks at the
+    /// file itself on every click, and one that finds it gone says so on the
+    /// job. The offer stays, so a volume that comes back is retryable again.
     ///
     /// Decided live, never from the error text. A job refused because another
     /// run held its audio is a duplicate only while that run holds it: once the
@@ -450,20 +458,35 @@ extension PipelineQueue {
     /// finished keeps blocking for as long as it is listed, since retrying then
     /// would write the same meeting a second time.
     ///
-    /// The job's own audio must still be there. That also covers the owner
-    /// that moved it: stage 3 relocates a staged recording into the output
-    /// folder, after which the two jobs name different paths and the hold
-    /// check below cannot match them, but the duplicate's path is empty.
+    /// The job must name an audio file. After the owner moved the recording
+    /// (stage 3 relocates a staged one into the output folder) the duplicate
+    /// still names the staging path, so it is offered, and the click reports the
+    /// file gone.
     func canRetryJob(id: UUID) -> Bool {
-        guard let job = jobs.first(where: { $0.id == id }), job.state == .error else { return false }
-        return Self.sourceAudioExists(for: job) && !audioIsHeldElsewhere(for: job)
+        guard let job = jobs.first(where: { $0.id == id }), job.state == .error,
+              Self.sourceAudio(for: job) != nil else { return false }
+        return !audioIsHeldElsewhere(for: job)
+    }
+
+    private static let retryAudioMissingNote = "The recording is no longer there, so there is nothing to retry."
+
+    /// The retry found nothing to run on. The menu shows an error job's error
+    /// text, so the reason goes there, once; the failure it had stays in front.
+    private func noteRetryAudioMissing(at index: Int) {
+        let failure = jobs[index].error ?? ""
+        guard !failure.hasSuffix(Self.retryAudioMissingNote) else { return }
+        jobs[index].error = failure.isEmpty ? Self.retryAudioMissingNote : "\(failure) \(Self.retryAudioMissingNote)"
+        saveSnapshot()
     }
 
     /// The file a run reads first: the mix, or for a paired import without
     /// one, the app track.
+    private static func sourceAudio(for job: PipelineJob) -> URL? {
+        job.mixPath ?? job.appPath
+    }
+
     private static func sourceAudioExists(for job: PipelineJob) -> Bool {
-        guard let source = job.mixPath ?? job.appPath else { return false }
-        return FileManager.default.fileExists(atPath: source.path)
+        sourceAudio(for: job).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
     }
 
     /// Whether a run is claimed for this job or its mix file on any queue, or
