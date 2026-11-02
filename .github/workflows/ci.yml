@@ -352,9 +352,13 @@ jobs:
       # the checkout stamps the sources with new modification times, so mt-cli
       # itself is rebuilt either way. What a hit saves is the dependency
       # checkout and its build. Uncached, this step took 31 to 58 s.
-      - name: Cache mt-cli build
+      #
+      # Only restored here; the `Save mt-cli build` step at the end of the job
+      # saves it, on `main` only (see there).
+      - name: Restore mt-cli build
+        id: mt-cli-cache
         if: matrix.variant == 'homebrew'
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: tools/mt-cli/.build
           key: mt-cli-spm-${{ runner.os }}-${{ steps.setup.outputs.toolchain }}-${{ hashFiles('tools/mt-cli/Package.swift', 'tools/mt-cli/Package.resolved') }}-${{ hashFiles('tools/mt-cli/Sources/**', 'tools/mt-cli/Tests/**') }}
@@ -371,6 +375,22 @@ jobs:
           package-dir: app/MeetingTranscriber
           flag: ${{ matrix.variant }}
           codecov-token: ${{ secrets.CODECOV_TOKEN }}
+      # The mt-cli tree is saved here, at the end of the job, so that only a
+      # green job saves it, and only for a run on `main` (push or
+      # workflow_dispatch; `github.ref` of a pull request is
+      # `refs/pull/<n>/merge`). A pull request would otherwise add an entry to
+      # its own scope on every push that changes mt-cli, which no other ref
+      # can read and which counts against the repository's cache budget. A
+      # run on `main` that restored the exact key has nothing new to save.
+      - name: Save mt-cli build
+        if: >-
+          success() && matrix.variant == 'homebrew' &&
+          github.ref == 'refs/heads/main' &&
+          steps.mt-cli-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: tools/mt-cli/.build
+          key: ${{ steps.mt-cli-cache.outputs.cache-primary-key }}
       # Cancels the run only when this leg's own build or tests failed, since
       # that is when the run is known red for a reason that needs a new push,
       # and the remaining legs are spent effort. A failure in setup (cache,
@@ -415,8 +435,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # No ML model dependencies — a plain SPM cache keyed off the
-      # manifest is enough to drop cold-compile cost on repeat runs.
-      - uses: actions/cache@v6
+      # manifest is enough to drop cold-compile cost on repeat runs. Only
+      # restored here; `Save audiotap build` at the end of the job saves it, on
+      # `main` only.
+      - name: Restore audiotap build
+        id: audiotap-cache
+        uses: actions/cache/restore@v6
         with:
           path: tools/audiotap/.build
           key: audiotap-spm-${{ runner.os }}-${{ hashFiles('tools/audiotap/Package.swift') }}
@@ -432,6 +456,18 @@ jobs:
           package-dir: tools/audiotap
           flag: audiotap
           codecov-token: ${{ secrets.CODECOV_TOKEN }}
+      # Saved at the end of the job so that only a green job saves, and only
+      # for a run on `main` (see `Save mt-cli build` in `test` for why). A hit
+      # on a restore-keys fallback is not an exact hit, so the entry for the
+      # new manifest is still saved then.
+      - name: Save audiotap build
+        if: >-
+          success() && github.ref == 'refs/heads/main' &&
+          steps.audiotap-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: tools/audiotap/.build
+          key: ${{ steps.audiotap-cache.outputs.cache-primary-key }}
       # Load-bearing, unlike in `lint` and `analyze`: this job is NOT a required
       # check, so cancelling the still-running required `test` legs is the only
       # way a failing AudioTapLib test blocks the merge (see the mt-cli step in
