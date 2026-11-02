@@ -26,10 +26,10 @@ inputs:
     default: "true"
   cache-spm:
     description: >
-      Restore and save the SPM build cache. Anything but `true` skips both, so
-      the build starts cold and leaves no cache behind (a malformed value fails
-      toward the cold build, not toward a warm one). Does not affect the model
-      cache.
+      Restore and save the SPM build cache (saved on `main` only, see the
+      cache steps). Anything but `true` skips both, so the build starts cold
+      and leaves no cache behind (a malformed value fails toward the cold
+      build, not toward a warm one). Does not affect the model cache.
     required: false
     default: "true"
   cache-path:
@@ -103,28 +103,40 @@ runs:
         fi
         echo "id=$id" >> "$GITHUB_OUTPUT"
 
-    # Keyed off the manifests as well as `Package.resolved`: a changed binary
-    # target (URL or checksum) leaves `Package.resolved` alone, so the key
-    # would still hit exactly, SwiftPM would fetch the new artifact, and the
-    # entry would never be saved again. These are the two manifests of the
-    # packages that go into this build tree: the app and its local dependency
-    # AudioTapLib. The simulator and mt-cli are separate packages with trees
-    # of their own.
-    - name: Cache SPM dependencies
-      if: inputs.cache-spm == 'true'
-      uses: actions/cache@v5
-      with:
-        path: ${{ inputs.cache-path }}
-        key: spm-${{ runner.os }}-${{ steps.toolchain.outputs.id }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Package.swift', 'tools/audiotap/Package.swift') }}
-        restore-keys: ${{ inputs.cache-restore-fallback == 'true' && format('spm-{0}-{1}-{2}-', runner.os, steps.toolchain.outputs.id, inputs.cache-key-suffix) || '' }}
-
-    # Cache the WhisperKit (HuggingFace) + FluidAudio model files. The
-    # HuggingFace download client races on cold-cache concurrent loads of
-    # the same variant; pre-warming sequentially populates the cache so
-    # the parallel run can hit it. After the first successful CI run the
-    # cache is populated and the preload step is skipped.
+    # Only runs on `main` write caches. A pull request restores what `main`
+    # saved (a run may read its own ref and the default branch) and never
+    # saves: each push to a PR would otherwise add an entry of 1 to 3 GB to
+    # the PR's own scope, which no other ref can read and which counts against
+    # the repository's 10 GB budget until it ages out, pushing the models and
+    # the entries `main` uses out of it. `github.ref` is `refs/heads/main` for
+    # push, schedule and workflow_dispatch runs on main and
+    # `refs/pull/<n>/merge` for a pull request, so this one test also keeps
+    # fork PRs read-only.
     #
-    # The cache key also hashes `ModelPreloadTests.swift` so that adding a
+    # Saving stays with the combined `actions/cache`: its post step runs at the
+    # end of the JOB, and only if every step succeeded and the exact key was
+    # not restored. A save step in this action would run before the caller's
+    # tests, and a composite action cannot hold a post step of its own. The
+    # post step of a skipped step does not run, so on a pull request the
+    # combined step never saves, whatever the job does later. Each cache
+    # therefore has two steps, restore-only and restore-and-save, exactly one
+    # of which runs, and both take their key from the step below, so they
+    # cannot drift apart.
+    #
+    # Consequence: a key no run on `main` has saved yet misses on every pull
+    # request, and a pull request that changes it (a dependency bump, a new
+    # pre-warm test) builds from the nearest older entry, or cold where
+    # `cache-restore-fallback` is off, on every push until it merges.
+    #
+    # The SPM key is built from the manifests as well as `Package.resolved`: a
+    # changed binary target (URL or checksum) leaves `Package.resolved` alone,
+    # so the key would still hit exactly, SwiftPM would fetch the new artifact,
+    # and the entry would never be saved again. These are the two manifests of
+    # the packages that go into this build tree: the app and its local
+    # dependency AudioTapLib. The simulator and mt-cli are separate packages
+    # with trees of their own.
+    #
+    # The model key also hashes `ModelPreloadTests.swift` so that adding a
     # new pre-warm test (a new model FluidAudio downloads from a separate
     # HF repo, e.g. Silero VAD, or the Parakeet EOU 320ms streaming model)
     # invalidates the cache and forces a fresh pre-warm. Without that, a
@@ -135,16 +147,65 @@ runs:
     # (bumped to v2 when the EOU 320ms streaming model was added to
     # `ModelPreloadTests.testPreloadEouStreaming`, to v3 when WhisperKit
     # models moved out of ~/Documents/huggingface, issue #640).
+    - name: Resolve the cache keys
+      id: keys
+      shell: bash
+      env:
+        SPM_KEY: spm-${{ runner.os }}-${{ steps.toolchain.outputs.id }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Package.swift', 'tools/audiotap/Package.swift') }}
+        SPM_RESTORE_KEYS: ${{ inputs.cache-restore-fallback == 'true' && format('spm-{0}-{1}-{2}-', runner.os, steps.toolchain.outputs.id, inputs.cache-key-suffix) || '' }}
+        MODELS_KEY: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Tests/ModelPreloadTests.swift') }}-v3
+        MODELS_RESTORE_KEYS: ml-models-${{ runner.os }}-
+      run: |
+        {
+          echo "spm=$SPM_KEY"
+          echo "spm-restore=$SPM_RESTORE_KEYS"
+          echo "models=$MODELS_KEY"
+          echo "models-restore=$MODELS_RESTORE_KEYS"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore SPM dependencies
+      if: inputs.cache-spm == 'true' && github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ inputs.cache-path }}
+        key: ${{ steps.keys.outputs.spm }}
+        restore-keys: ${{ steps.keys.outputs.spm-restore }}
+
+    - name: Cache SPM dependencies
+      if: inputs.cache-spm == 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache@v5
+      with:
+        path: ${{ inputs.cache-path }}
+        key: ${{ steps.keys.outputs.spm }}
+        restore-keys: ${{ steps.keys.outputs.spm-restore }}
+
+    # Cache the WhisperKit (HuggingFace) + FluidAudio model files. The
+    # HuggingFace download client races on cold-cache concurrent loads of
+    # the same variant; pre-warming sequentially populates the cache so
+    # the parallel run can hit it. After the first successful run on `main`
+    # the cache is populated and the preload step is skipped. The keys and
+    # the reason for two steps are explained above.
+    - name: Restore ML models
+      id: model-restore
+      if: inputs.cache-models == 'true' && github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          ~/Library/Application Support/MeetingTranscriber/huggingface
+          ~/Library/Application Support/FluidAudio
+        key: ${{ steps.keys.outputs.models }}
+        restore-keys: ${{ steps.keys.outputs.models-restore }}
+
     - name: Cache ML models
       id: model-cache
-      if: inputs.cache-models == 'true'
+      if: inputs.cache-models == 'true' && github.ref == 'refs/heads/main'
       uses: actions/cache@v5
       with:
         path: |
           ~/Library/Application Support/MeetingTranscriber/huggingface
           ~/Library/Application Support/FluidAudio
-        key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Tests/ModelPreloadTests.swift') }}-v3
-        restore-keys: ml-models-${{ runner.os }}-
+        key: ${{ steps.keys.outputs.models }}
+        restore-keys: ${{ steps.keys.outputs.models-restore }}
 
     # Pre-warm step has no per-step `timeout-minutes` — composite actions
     # don't support it. Callers should set `timeout-minutes` on the
@@ -154,9 +215,14 @@ runs:
     # The script (shared with runner-home) retries a transient download
     # failure once, with a warning, and fails without a retry if
     # `ModelPreloadTests` is renamed or removed; see its header. No marker:
-    # the cache above decides when this runs.
+    # the cache above decides when this runs. Exactly one of the two model
+    # steps ran and the other one's output is empty, so both comparisons hold
+    # only when neither found the exact key.
     - name: Pre-warm model cache (cache miss only)
-      if: inputs.cache-models == 'true' && steps.model-cache.outputs.cache-hit != 'true'
+      if: >-
+        inputs.cache-models == 'true' &&
+        steps.model-restore.outputs.cache-hit != 'true' &&
+        steps.model-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         SWIFT_FLAGS: ${{ inputs.swift-flags }}
