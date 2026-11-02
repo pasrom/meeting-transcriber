@@ -18,6 +18,7 @@ runs:
       shell: bash
       env:
         TOOL_CACHE: ${{ runner.tool_cache }}
+        KEY_PLATFORM: ${{ runner.os }}-${{ runner.arch }}
         BINARY_SHA256: 6d175a4743ca50256e89a8cdd731100f9cee33bd79aeea46894d209410dc6617
       run: |
         if [ "$RUNNER_OS" != macOS ] || [ "$RUNNER_ARCH" != ARM64 ]; then
@@ -26,15 +27,31 @@ runs:
         fi
         echo "sha256=$BINARY_SHA256" >> "$GITHUB_OUTPUT"
         echo "dir=$TOOL_CACHE/meetingtranscriber-ffmpeg/$BINARY_SHA256" >> "$GITHUB_OUTPUT"
+        echo "key=ffmpeg-$KEY_PLATFORM-$BINARY_SHA256" >> "$GITHUB_OUTPUT"
 
     # Hosted only: a self-hosted runner keeps its tool cache on disk, where a
     # restore would only download what is already there.
+    #
+    # Saved by runs on `main` only; a pull request restores and never saves.
+    # The combined `actions/cache` saves in a post step at the end of the job,
+    # and the post step of a skipped step does not run, so exactly one of the
+    # two steps below runs and only the `main` one can save. Both take the
+    # key from the step above. A new pin therefore misses on pull requests
+    # (and downloads the wheel, as on any miss) until a run on `main` has
+    # saved it.
+    - name: Restore ffmpeg
+      if: runner.environment == 'github-hosted' && github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.pin.outputs.dir }}
+        key: ${{ steps.pin.outputs.key }}
+
     - name: Cache ffmpeg
-      if: runner.environment == 'github-hosted'
+      if: runner.environment == 'github-hosted' && github.ref == 'refs/heads/main'
       uses: actions/cache@v5
       with:
         path: ${{ steps.pin.outputs.dir }}
-        key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.sha256 }}
+        key: ${{ steps.pin.outputs.key }}
 
     # Why this source: PyPI files are immutable once uploaded, and this build
     # links only system frameworks yet carries every demuxer and decoder the
