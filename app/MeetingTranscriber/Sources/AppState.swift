@@ -203,12 +203,10 @@ final class AppState {
         // inject their own, so none of them touch the real domains.
         LegacyDefaultsMigration.run(into: .standard)
         let settings = AppSettings()
-        // Once, here, rather than from `customOutputDir` — that getter is read
-        // during view updates, and repairing there would write observed state
-        // mid-`body`.
-        settings.repairStaleCustomOutputDirBookmark()
-        settings.repairStaleCustomVocabularyBookmark()
-        settings.repairStaleWhisperKitCustomModelFolderBookmark()
+        // Once, here, rather than from `customOutputDir` or
+        // `terminologyRulesFile` — those getters are read during view updates,
+        // and repairing there would write observed state mid-`body`.
+        settings.repairStaleBookmarks()
         return settings
     }
 

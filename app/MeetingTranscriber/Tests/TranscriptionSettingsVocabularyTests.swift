@@ -43,6 +43,39 @@ final class TranscriptionSettingsVocabularyTests: XCTestCase {
         )
     }
 
+    func testATerminologyRulesFileReplacesTheEditorWithItsReadOnlyContents() throws {
+        let file = try makeTempDirectory(prefix: "terminology-view").appendingPathComponent("rules.txt")
+        try "Aster => Astor\n".write(to: file, atomically: true, encoding: .utf8)
+        let settings = AppSettings(defaults: defaults)
+        settings.setTerminologyRulesFile(file)
+
+        let view = try makeView(settings: settings).inspect()
+
+        XCTAssertThrowsError(try view.find(viewWithAccessibilityIdentifier: A11yID.terminologyRulesEditor))
+        let preview = try view.find(viewWithAccessibilityIdentifier: A11yID.terminologyRulesFilePreview)
+        XCTAssertEqual(try preview.find(ViewType.Text.self).string(), "Aster => Astor\n")
+        XCTAssertNoThrow(try view.find(text: "1 active terminology rule."))
+    }
+
+    func testTerminologyRulesFilePathFieldWritesBackThroughTheBookmarkSafeSetter() throws {
+        let directory = try makeTempDirectory(prefix: "terminology-path-field")
+        let selected = directory.appendingPathComponent("rules.txt")
+        try "Aster => Astor\n".write(to: selected, atomically: true, encoding: .utf8)
+        let typed = directory.appendingPathComponent("typed.txt").path
+        let settings = AppSettings(defaults: defaults)
+        settings.setTerminologyRulesFile(selected)
+        XCTAssertNotNil(settings.terminologyRulesFileBookmark)
+        let field = try makeView(settings: settings).inspect().find(ViewType.TextField.self) { field in
+            try field.accessibilityIdentifier() == A11yID.terminologyRulesFilePathField
+        }
+
+        try field.setInput(typed)
+
+        XCTAssertEqual(settings.terminologyRulesFilePath, typed)
+        XCTAssertNil(settings.terminologyRulesFileBookmark)
+        XCTAssertEqual(settings.terminologyRulesValidation, .fileUnavailable)
+    }
+
     func testVocabularyControlsRemainAvailableForBothEngines() throws {
         for engine in [TranscriptionEngineSetting.parakeet, .whisperKit] {
             let settings = AppSettings(defaults: defaults)
