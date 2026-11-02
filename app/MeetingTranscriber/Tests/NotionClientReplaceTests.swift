@@ -207,6 +207,36 @@ final class NotionClientReplaceTests: XCTestCase {
         XCTAssertEqual(page.deleteAttempts, 4)
     }
 
+    func testAccessLostDuringTheDeletesFailsTheExportAndKeepsItsCause() async {
+        let page = FakeNotionPage(initial: texts("Old", count: 5))
+        let client = page.makeClient(databaseID: databaseID)
+        page.revokesAccessOnFirstDelete = true
+
+        await assertFails(client, markdown: markdown("New", count: 2), status: 404)
+        XCTAssertEqual(page.deleteAttempts, 5)
+    }
+
+    func testADelete404ForABlockStillOnThePageFailsTheExport() async {
+        let page = FakeNotionPage(initial: texts("Old", count: 3))
+        let client = page.makeClient(databaseID: databaseID)
+        page.stillListedAfter404 = ["Old paragraph 2."]
+
+        await assertFails(client, markdown: markdown("New", count: 2), status: 404)
+        XCTAssertEqual(page.texts, ["Old paragraph 2."] + texts("New", count: 2))
+    }
+
+    func testThePageIsListedAgainOnlyAfterA404() async throws {
+        let page = FakeNotionPage(initial: texts("Old", count: 3))
+        let client = page.makeClient(databaseID: databaseID)
+
+        _ = try await export(client, markdown: markdown("New", count: 2))
+        let listsWithout404 = page.listCalls
+
+        page.alreadyGone = Set(texts("New", count: 1))
+        _ = try await export(client, markdown: markdown("Newer", count: 2))
+        XCTAssertEqual(page.listCalls, 2 * listsWithout404 + 1)
+    }
+
     // MARK: - Listing more than one page of root blocks
 
     func testEveryRootBlockOfALongPageIsReplaced() async throws {
@@ -245,12 +275,12 @@ final class NotionClientReplaceTests: XCTestCase {
         )
     }
 
-    private func assertFails(_ client: NotionClient, markdown: String, line: UInt = #line) async {
+    private func assertFails(_ client: NotionClient, markdown: String, status: Int = 500, line: UInt = #line) async {
         do {
             _ = try await export(client, markdown: markdown)
             XCTFail("Expected the replace to fail", line: line)
         } catch {
-            XCTAssertEqual((error as? NotionClientError)?.httpStatusCode, 500, line: line)
+            XCTAssertEqual((error as? NotionClientError)?.httpStatusCode, status, line: line)
         }
     }
 }
@@ -285,6 +315,13 @@ private final class FakeNotionPage: @unchecked Sendable {
     /// Blocks in the listing that are gone by the time their delete arrives: it
     /// answers 404, ahead of `deletePlan`.
     var alreadyGone: Set<String> = []
+
+    /// Blocks whose delete answers 404 although they stay on the page.
+    var stillListedAfter404: Set<String> = []
+
+    /// The first delete and every request after it answer 404, with the blocks in place.
+    var revokesAccessOnFirstDelete = false
+    private var accessRevoked = false
 
     private(set) var creates = 0
     private(set) var appends = 0
@@ -349,9 +386,22 @@ private final class FakeNotionPage: @unchecked Sendable {
         return (response, Data(json.utf8))
     }
 
+    private func notFound(_ request: URLRequest) -> (HTTPURLResponse, Data) {
+        respond(
+            request,
+            json: #"{"object":"error","status":404,"code":"object_not_found","message":"gone"}"#,
+            status: 404,
+        )
+    }
+
     private func handle(_ request: URLRequest) -> (HTTPURLResponse, Data) {
         let path = request.url?.path ?? ""
         let method = request.httpMethod ?? "GET"
+        if method == "DELETE" { accessRevoked = accessRevoked || revokesAccessOnFirstDelete }
+        if accessRevoked {
+            if method == "DELETE" { deleteAttempts += 1 }
+            return notFound(request)
+        }
         if path.contains("/databases/") {
             return respond(request, json: #"{"id":"11111111222233334444555555555555","properties":{"Name":{"type":"title"}}}"#)
         }
@@ -401,13 +451,12 @@ private final class FakeNotionPage: @unchecked Sendable {
     private func delete(_ request: URLRequest, path: String) -> (HTTPURLResponse, Data) {
         deleteAttempts += 1
         let id = path.components(separatedBy: "/").last ?? ""
+        if blocks.first(where: { $0.id == id }).map({ stillListedAfter404.contains($0.text) }) ?? false {
+            return notFound(request)
+        }
         if blocks.first(where: { $0.id == id }).map({ alreadyGone.contains($0.text) }) ?? false {
             blocks.removeAll { $0.id == id }
-            return respond(
-                request,
-                json: #"{"object":"error","status":404,"code":"object_not_found","message":"gone"}"#,
-                status: 404,
-            )
+            return notFound(request)
         }
         deletesThisPlan += 1
         let fails: Bool = switch deletePlan {

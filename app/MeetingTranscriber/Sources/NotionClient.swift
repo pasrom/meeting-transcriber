@@ -298,7 +298,7 @@ actor NotionClient: NotionExporting {
         if plan.needsAppend {
             try await appendBlocks(blocks, to: pageID)
         }
-        try await deleteBlocks(plan.staleBlockIDs)
+        try await deleteBlocks(plan.staleBlockIDs, onPage: pageID)
         return NotionPageResult(
             pageID: pageID,
             url: page.url,
@@ -497,15 +497,21 @@ extension NotionClient {
     /// means Notion is refusing everything, and ends the loop: each failed
     /// request can already spend its rate-limit retries. A 404 means the block is
     /// already gone (an interrupted run deleted it just before the listing), so it
-    /// counts as a successful delete.
-    private func deleteBlocks(_ blockIDs: [String]) async throws {
+    /// counts as a successful delete. Notion answers the same when the integration
+    /// lost access, so after any 404 the page is listed again: a failed listing or
+    /// a block still on the page marks the export failed.
+    private func deleteBlocks(_ blockIDs: [String], onPage pageID: String) async throws {
         var firstFailure: (any Error)?
+        var firstNotFound: NotionClientError?
+        var notFoundIDs: Set<String> = []
         var consecutiveFailures = 0
         for blockID in blockIDs {
             do {
                 _ = try await performData("DELETE", path: "blocks/\(blockID)")
                 consecutiveFailures = 0
             } catch let error as NotionClientError where error.httpStatusCode == 404 {
+                firstNotFound = firstNotFound ?? error
+                notFoundIDs.insert(blockID)
                 consecutiveFailures = 0
             } catch {
                 try Task.checkCancellation()
@@ -515,5 +521,8 @@ extension NotionClient {
             }
         }
         if let firstFailure { throw firstFailure }
+        guard let firstNotFound else { return }
+        let remaining = try await childBlocks(pageID)
+        if remaining.contains(where: { notFoundIDs.contains($0.id) }) { throw firstNotFound }
     }
 }
