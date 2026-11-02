@@ -318,7 +318,7 @@ final class PipelineController {
             vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
             recognitionStatsLog: RecognitionStatsLog(path: queueEnvironment.recognitionStatsLog),
             terminologyNormalizer: { [weak settings] in
-                TerminologyNormalizer(rulesText: settings?.terminologyRulesText ?? "")
+                settings?.terminologyNormalizerForJob() ?? TerminologyNormalizer()
             },
             stageTimingLog: StageTimingLog(path: queueEnvironment.stageTimingLog),
             notionExportConfigurationProvider: { [settings] in NotionExportConfiguration.resolve(settings: settings) },

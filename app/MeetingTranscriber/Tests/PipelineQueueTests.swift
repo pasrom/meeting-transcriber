@@ -1250,6 +1250,46 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(transcript.contains("Aster reviewed Northstar."), transcript)
     }
 
+    /// The rules file is read in the per-job snapshot: an edit between two
+    /// jobs reaches the second one without a relaunch.
+    func testATerminologyRulesFileEditIsPickedUpByTheNextJob() async throws {
+        let suiteName = "PipelineQueueTests-terminology-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(DefaultsSuite.open(suiteName))
+        defer { DefaultsSuite.remove(suiteName) }
+        let settings = AppSettings(defaults: defaults)
+        let rulesFile = tmpDir.appendingPathComponent("terminology.txt")
+        try "Aster => Astor\n".write(to: rulesFile, atomically: true, encoding: .utf8)
+        settings.setTerminologyRulesFile(rulesFile)
+
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Astor reviewed northstar."),
+        ]
+        let (queue, _) = makeMockProcessingQueue(engine: engine) {
+            settings.terminologyNormalizerForJob()
+        }
+        let audioPath = try createTestAudioFile(in: tmpDir)
+
+        queue.enqueue(PipelineJob(
+            meetingTitle: "First", appName: "File",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        ))
+        await queue.processNext()
+        try "Aster => Astor\nNorthstar => northstar\n".write(to: rulesFile, atomically: true, encoding: .utf8)
+        queue.enqueue(PipelineJob(
+            meetingTitle: "Second", appName: "File",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        ))
+        await queue.processNext()
+
+        let transcripts = try ["First", "Second"].map { title in
+            let job = try XCTUnwrap(queue.jobs.first { $0.meetingTitle == title })
+            return try String(contentsOf: XCTUnwrap(job.transcriptPath), encoding: .utf8)
+        }
+        XCTAssertTrue(transcripts[0].contains("Aster reviewed northstar."), transcripts[0])
+        XCTAssertTrue(transcripts[1].contains("Aster reviewed Northstar."), transcripts[1])
+    }
+
     // MARK: - Concurrent runs of the same job (issue #558)
 
     /// A work directory derived from the job ID alone is shared by every run of

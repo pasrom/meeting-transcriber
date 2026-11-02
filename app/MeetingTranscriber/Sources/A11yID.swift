@@ -104,6 +104,8 @@ enum A11yID {
     static let whisperKitCustomVariantField = "whisperKitCustomVariantField"
     static let whisperKitCustomModelFolderField = "whisperKitCustomModelFolderField"
     static let terminologyRulesEditor = "terminologyRulesEditor"
+    static let terminologyRulesFilePathField = "terminologyRulesFilePathField"
+    static let terminologyRulesFilePreview = "terminologyRulesFilePreview"
 
     /// Settings sidebar row for one tab (`settings-tab-<rawValue>`). The detail
     /// pane renders only the selected tab, so a control in another tab is absent
