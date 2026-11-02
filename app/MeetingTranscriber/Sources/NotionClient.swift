@@ -299,7 +299,7 @@ actor NotionClient: NotionExporting {
         if plan.needsAppend {
             try await appendBlocks(blocks, to: pageID)
         }
-        try await deleteBlocks(plan.staleBlockIDs)
+        try await deleteBlocks(plan.staleBlockIDs, on: pageID)
         return NotionPageResult(
             pageID: pageID,
             url: page.url,
@@ -497,13 +497,31 @@ extension NotionClient {
     /// failed while the page still holds leftovers. A run of consecutive failures
     /// means Notion is refusing everything, and ends the loop: each failed
     /// request can already spend its rate-limit retries.
-    private func deleteBlocks(_ blockIDs: [String]) async throws {
+    ///
+    /// A 404, or a 400 for a block already archived, usually means the block
+    /// is gone, but Notion answers 404 as well when the integration has lost
+    /// access to the page. Such an answer neither fails nor resets the run of
+    /// failures; a fresh listing decides instead, once the loop ends or as soon
+    /// as a run of them suggests lost access: blocks absent from it are done,
+    /// and a listing that fails or still shows one of them fails the export.
+    private func deleteBlocks(_ blockIDs: [String], on pageID: String) async throws {
         var firstFailure: (any Error)?
         var consecutiveFailures = 0
+        var maybeGone: [(blockID: String, error: NotionClientError)] = []
+        var consecutiveMaybeGone = 0
         for blockID in blockIDs {
             do {
                 _ = try await performData("DELETE", path: "blocks/\(blockID)")
                 consecutiveFailures = 0
+                consecutiveMaybeGone = 0
+            } catch let error as NotionClientError where Self.mayMeanAlreadyDeleted(error) {
+                maybeGone.append((blockID, error))
+                consecutiveMaybeGone += 1
+                if consecutiveMaybeGone >= Self.maxConsecutiveDeleteFailures {
+                    try await confirmDeleted(maybeGone, on: pageID)
+                    maybeGone = []
+                    consecutiveMaybeGone = 0
+                }
             } catch {
                 try Task.checkCancellation()
                 firstFailure = firstFailure ?? error
@@ -512,5 +530,19 @@ extension NotionClient {
             }
         }
         if let firstFailure { throw firstFailure }
+        try await confirmDeleted(maybeGone, on: pageID)
+    }
+
+    private static func mayMeanAlreadyDeleted(_ error: NotionClientError) -> Bool {
+        guard case let .httpError(statusCode, code, _) = error else { return false }
+        return statusCode == 404 || (statusCode == 400 && code == "validation_error")
+    }
+
+    /// Lists the page once and throws the answer of the first block it still shows.
+    private func confirmDeleted(_ blocks: [(blockID: String, error: NotionClientError)], on pageID: String) async throws {
+        guard !blocks.isEmpty else { return }
+        logger.info("Notion delete of \(blocks.count, privacy: .public) block(s) found nothing to delete; confirming")
+        let remaining = try await Set(childBlocks(pageID).map(\.id))
+        if let stillListed = blocks.first(where: { remaining.contains($0.blockID) }) { throw stillListed.error }
     }
 }
