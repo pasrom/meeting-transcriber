@@ -3,6 +3,29 @@ import Foundation
 import XCTest
 
 final class MarkdownToNotionBlocksTests: XCTestCase {
+    func testTheConverterNeverWritesABlockTypeAReplaceKeeps() {
+        // A replace never deletes `NotionReplacePlan.keptTypes`; an export
+        // block of such a type would pile up on the page with every re-export.
+        let markdown = """
+        # H1
+        ## H2
+        ### H3
+        > quote
+        - bullet
+        1. numbered
+        ---
+        | a | b |
+        |---|---|
+        | 1 | 2 |
+
+        text
+        """
+        let blocks = MarkdownToNotionBlocks.convert(markdown: markdown, transcript: "Speaker: hello")
+        let types = Set(blocks.map(\.type))
+        XCTAssertEqual(types.count, 10, "The sample covers every block type the converter writes")
+        XCTAssertTrue(types.isDisjoint(with: NotionReplacePlan.keptTypes))
+    }
+
     func testHeadingsConversion() {
         let md = """
         # Heading 1

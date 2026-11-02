@@ -23,13 +23,29 @@ import Foundation
 /// exist, keeps the interrupted run's version of those parts. Refusing blocks
 /// that have children would close that gap but disable the recognition for
 /// typical protocols (transcript toggles, tables), so the gap is accepted.
+///
+/// A sub-page, a database, a media file, an embed or a link the user added
+/// under the page is listed as a root block too. No protocol produces those
+/// types (`keptTypes`), so a replace leaves them out of both the deletes and
+/// the comparison: it never removes them, and one added after the copy does
+/// not hide an interrupted replace. Kept blocks end up above the new content,
+/// since that is appended at the end. Every other type, including ones Notion
+/// adds later and blocks the user rearranged into columns or turned into a
+/// callout, can hold protocol text and is replaced, so old text cannot pile up.
 struct NotionReplacePlan: Equatable {
     /// Root blocks to delete once the new content is on the page.
     let staleBlockIDs: [String]
     /// False when the page already ends with a complete copy of the new content.
     let needsAppend: Bool
 
+    /// Root block types that hold the user's own content, never protocol text.
+    static let keptTypes: Set<String> = [
+        "child_page", "child_database", "link_to_page", "synced_block",
+        "image", "video", "audio", "file", "pdf", "embed", "bookmark", "link_preview",
+    ]
+
     init(existing: [NotionBlockSummary], replacement: [NotionBlock]) {
+        let existing = existing.filter { !Self.keptTypes.contains($0.type ?? "") }
         // The cheap length test comes first: the first export and a plain
         // re-export never reach the per-block encode.
         if existing.count > replacement.count,

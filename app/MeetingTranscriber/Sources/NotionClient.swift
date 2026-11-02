@@ -278,7 +278,8 @@ actor NotionClient: NotionExporting {
     /// (when a retry cannot tell, it is, and the page can grow until a pass
     /// deletes cleanly) and which blocks go. The old blocks go one request at
     /// a time and a failed delete does not stop the rest (`deleteBlocks`).
-    /// Re-export replaces manual edits on this app-owned page as well.
+    /// Re-export replaces manual edits on this app-owned page as well, except
+    /// for blocks of a type the export never writes.
     private func recoverExistingPage(
         _ pageID: String,
         properties: [String: NotionPropertyValue],
