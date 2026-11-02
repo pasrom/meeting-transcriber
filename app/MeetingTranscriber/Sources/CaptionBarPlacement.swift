@@ -5,7 +5,7 @@ import AppKit
 /// One attached screen as the caption bar's placement sees it: the whole
 /// frame decides which screen a bar belongs to, the visible frame (without
 /// menu bar and Dock) is where a bar that has to move is pushed into.
-struct CaptionScreen {
+struct CaptionScreen: Equatable {
     var frame: CGRect
     var visibleFrame: CGRect
 }
