@@ -10,7 +10,8 @@ enum VocabularyFileAccess {
     /// instead of blocking the caller while the share is contacted, which is the
     /// only acceptable form for a read on the main actor. Used by the custom
     /// model folder's validation in `AppSettings`, which runs in `init` and on the
-    /// view path; the RPC settings snapshot passes its own fail-fast options. A
+    /// view path, and by the terminology rules file, read at every job start; the
+    /// RPC settings snapshot passes its own fail-fast options. A
     /// load itself resolves with the default and may wait; it runs off the view
     /// path and needs the folder, not an answer.
     static let failFastScopedResolution: URL.BookmarkResolutionOptions = [.withSecurityScope, .withoutUI, .withoutMounting]
@@ -48,11 +49,14 @@ enum VocabularyFileAccess {
     /// For a bookmark macOS reports stale (its target moved or was renamed): the
     /// target's current location and a new bookmark for it. Nil while the
     /// bookmark is current, or when it cannot be resolved or re-created.
-    static func refreshedStaleBookmark(_ bookmark: Data) -> (url: URL, bookmark: Data)? {
+    static func refreshedStaleBookmark(
+        _ bookmark: Data,
+        options: URL.BookmarkResolutionOptions = .withSecurityScope,
+    ) -> (url: URL, bookmark: Data)? {
         var isStale = false
         let resolved = try? URL(
             resolvingBookmarkData: bookmark,
-            options: .withSecurityScope,
+            options: options,
             relativeTo: nil,
             bookmarkDataIsStale: &isStale,
         )
