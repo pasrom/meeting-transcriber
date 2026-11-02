@@ -642,9 +642,11 @@ content is appended before prior root blocks are archived: a failed append keeps
 the previous content, and a retry reconciles any partial new content. A successful
 re-export replaces manual edits to the app-owned page, except blocks of a type
 that never holds protocol text (`NotionReplacePlan.keptTypes`: sub-pages,
-databases, media, embeds, links), which stay, above the new content. The client
-pins Notion API version `2022-06-28`; databases with multiple data sources are
-rejected rather than guessing which source should receive the meeting.
+databases, media, embeds, links), which stay, above the new content. A delete
+that answers 404, or 400 for an archived block, counts as done once a fresh
+listing no longer shows the block; Notion answers 404 for lost access as well.
+The client pins Notion API version `2022-06-28`; databases with multiple data
+sources are rejected rather than guessing which source should receive the meeting.
 
 A failed export retains the completed job and its local Markdown backup across
 queue cleanup and app restarts, even if the original audio is no longer present.
