@@ -495,13 +495,17 @@ extension NotionClient {
     /// the first failure is thrown once the loop ends, which marks the export
     /// failed while the page still holds leftovers. A run of consecutive failures
     /// means Notion is refusing everything, and ends the loop: each failed
-    /// request can already spend its rate-limit retries.
+    /// request can already spend its rate-limit retries. A 404 means the block is
+    /// already gone (an interrupted run deleted it just before the listing), so it
+    /// counts as a successful delete.
     private func deleteBlocks(_ blockIDs: [String]) async throws {
         var firstFailure: (any Error)?
         var consecutiveFailures = 0
         for blockID in blockIDs {
             do {
                 _ = try await performData("DELETE", path: "blocks/\(blockID)")
+                consecutiveFailures = 0
+            } catch let error as NotionClientError where error.httpStatusCode == 404 {
                 consecutiveFailures = 0
             } catch {
                 try Task.checkCancellation()

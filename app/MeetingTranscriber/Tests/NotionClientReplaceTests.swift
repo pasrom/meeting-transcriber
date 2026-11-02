@@ -173,6 +173,40 @@ final class NotionClientReplaceTests: XCTestCase {
         XCTAssertEqual(page.texts, ["Old paragraph 1.", "Old paragraph 3.", "Old paragraph 4."] + texts("New", count: 2))
     }
 
+    func testDeletesThatAnswer404CountAsDoneAndTheExportSucceeds() async throws {
+        // More than the failure limit in a row: none of them may end the loop.
+        let page = FakeNotionPage(initial: texts("Old", count: 5))
+        let client = page.makeClient(databaseID: databaseID)
+        page.alreadyGone = Set(texts("Old", count: 4))
+
+        let result = try await export(client, markdown: markdown("New", count: 2))
+        XCTAssertTrue(result.updatedExistingPage)
+        XCTAssertEqual(page.deleteAttempts, 5)
+        XCTAssertEqual(page.texts, texts("New", count: 2))
+    }
+
+    func testA404DeleteResetsTheConsecutiveFailureCountLikeASuccess() async {
+        let page = FakeNotionPage(initial: texts("Old", count: 6))
+        let client = page.makeClient(databaseID: databaseID)
+        page.alreadyGone = ["Old paragraph 3."]
+        page.deletePlan = .failBlocks(containing: [
+            "Old paragraph 1.", "Old paragraph 2.", "Old paragraph 4.", "Old paragraph 5.",
+        ])
+
+        await assertFails(client, markdown: markdown("New", count: 2))
+        XCTAssertEqual(page.deleteAttempts, 6)
+    }
+
+    func testOtherFailuresAfterA404StillEndTheLoopAtTheLimit() async {
+        let page = FakeNotionPage(initial: texts("Old", count: 30))
+        let client = page.makeClient(databaseID: databaseID)
+        page.alreadyGone = ["Old paragraph 1."]
+        page.deletePlan = .succeedThenFail(successes: 0)
+
+        await assertFails(client, markdown: markdown("New", count: 2))
+        XCTAssertEqual(page.deleteAttempts, 4)
+    }
+
     // MARK: - Listing more than one page of root blocks
 
     func testEveryRootBlockOfALongPageIsReplaced() async throws {
@@ -247,6 +281,10 @@ private final class FakeNotionPage: @unchecked Sendable {
     var deletePlan = DeletePlan.alwaysSucceed {
         didSet { deletesThisPlan = 0 }
     }
+
+    /// Blocks in the listing that are gone by the time their delete arrives: it
+    /// answers 404, ahead of `deletePlan`.
+    var alreadyGone: Set<String> = []
 
     private(set) var creates = 0
     private(set) var appends = 0
@@ -362,8 +400,16 @@ private final class FakeNotionPage: @unchecked Sendable {
 
     private func delete(_ request: URLRequest, path: String) -> (HTTPURLResponse, Data) {
         deleteAttempts += 1
-        deletesThisPlan += 1
         let id = path.components(separatedBy: "/").last ?? ""
+        if blocks.first(where: { $0.id == id }).map({ alreadyGone.contains($0.text) }) ?? false {
+            blocks.removeAll { $0.id == id }
+            return respond(
+                request,
+                json: #"{"object":"error","status":404,"code":"object_not_found","message":"gone"}"#,
+                status: 404,
+            )
+        }
+        deletesThisPlan += 1
         let fails: Bool = switch deletePlan {
         case .alwaysSucceed: false
         case let .succeedThenFail(successes): deletesThisPlan > successes
