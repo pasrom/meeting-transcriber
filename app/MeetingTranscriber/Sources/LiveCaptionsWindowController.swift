@@ -60,18 +60,29 @@ final class LiveCaptionsWindowController {
     private let buttonPressed: () -> Bool
     private let now: () -> TimeInterval
 
+    /// The attached screens and the main one, read on every placement.
+    /// Production passes nothing and gets the real displays; tests pin a
+    /// geometry so their expected origins do not depend on the host's
+    /// display arrangement. Not private, so a test can check the defaults.
+    let screens: () -> [CaptionScreen]
+    let mainScreen: () -> CaptionScreen?
+
     init(
         state: LiveCaptionsState,
         size: LiveCaptionsSize = .medium,
         defaults: UserDefaults = .standard,
         buttonPressed: @escaping () -> Bool = { NSEvent.pressedMouseButtons & 1 != 0 },
         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        screens: @escaping () -> [CaptionScreen] = { NSScreen.screens.map(CaptionScreen.init) },
+        mainScreen: @escaping () -> CaptionScreen? = { NSScreen.main.map(CaptionScreen.init) },
     ) {
         self.state = state
         self.size = size
         self.defaults = defaults
         self.buttonPressed = buttonPressed
         self.now = now
+        self.screens = screens
+        self.mainScreen = mainScreen
         state.setSize(size)
     }
 
@@ -125,7 +136,7 @@ final class LiveCaptionsWindowController {
         }
         if let panel {
             let resized = Self.resizedFrame(panel.frame, to: size).origin
-            let origin = CaptionBarPlacement.restoredOrigin(resized, size: size, screens: Self.attachedScreens())
+            let origin = CaptionBarPlacement.restoredOrigin(resized, size: size, screens: screens())
                 ?? defaultBottomCentreOrigin()
             place(panel, at: origin)
         }
@@ -193,7 +204,7 @@ final class LiveCaptionsWindowController {
     /// is not saved (see `place`).
     private func positionAtSavedOrDefault(_ panel: NSPanel) {
         let saved = storedOrigin().flatMap { stored in
-            CaptionBarPlacement.restoredOrigin(stored, size: size, screens: Self.attachedScreens())
+            CaptionBarPlacement.restoredOrigin(stored, size: size, screens: screens())
         }
         place(panel, at: saved ?? defaultBottomCentreOrigin())
     }
@@ -205,13 +216,8 @@ final class LiveCaptionsWindowController {
         panel.setFrame(NSRect(origin: origin, size: size.panelSize), display: true)
     }
 
-    private static func attachedScreens() -> [CaptionScreen] {
-        NSScreen.screens.map { CaptionScreen(frame: $0.frame, visibleFrame: $0.visibleFrame) }
-    }
-
     private func defaultBottomCentreOrigin() -> CGPoint {
-        guard let screen = NSScreen.main else { return .zero }
-        let visible = screen.visibleFrame
+        guard let visible = mainScreen()?.visibleFrame else { return .zero }
         return CGPoint(
             x: visible.midX - size.panelSize.width / 2,
             y: visible.minY + Self.bottomMargin,
@@ -318,5 +324,12 @@ final class LiveCaptionsWindowController {
                 self.persistOrigin(panel.frame.origin)
             }
         }
+    }
+}
+
+extension CaptionScreen {
+    /// A real display as the caption bar's placement sees it.
+    init(_ screen: NSScreen) {
+        self.init(frame: screen.frame, visibleFrame: screen.visibleFrame)
     }
 }
