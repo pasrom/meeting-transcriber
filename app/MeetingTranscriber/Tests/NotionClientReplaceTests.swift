@@ -135,6 +135,45 @@ final class NotionClientReplaceTests: XCTestCase {
         XCTAssertEqual(page.deleteAttempts, 3)
     }
 
+    // MARK: - Blocks the export did not write
+
+    func testAReplaceKeepsBlocksTheUserAddedUnderThePage() async throws {
+        // Notion lists a sub-page, an inline database or an image added under
+        // the page as one of its root blocks. No protocol produces them, so
+        // they are the user's, and a replace must not delete them. Old protocol
+        // text the user moved into columns is still replaced.
+        let page = FakeNotionPage(initial: [
+            .init(type: "paragraph", text: "Old paragraph 1."),
+            .init(type: "child_page", text: ""),
+            .init(type: "column_list", text: ""),
+            .init(type: "child_database", text: ""),
+            .init(type: "image", text: ""),
+        ])
+        let client = page.makeClient(databaseID: databaseID)
+
+        _ = try await export(client, markdown: markdown("New", count: 2))
+        XCTAssertEqual(page.types, ["child_page", "child_database", "image", "paragraph", "paragraph"])
+        XCTAssertEqual(page.texts.filter { !$0.isEmpty }, texts("New", count: 2))
+        XCTAssertEqual(page.deleteAttempts, 2, "The old paragraph and the column list are deleted")
+    }
+
+    func testAChildPageAfterTheCopyDoesNotHideAnInterruptedReplace() async throws {
+        // Leftovers, the complete copy, then a sub-page the user added: the
+        // sub-page is not part of the comparison, so the copy is still
+        // recognised and not appended a second time.
+        let page = FakeNotionPage(
+            initial: [.init(type: "paragraph", text: "Old paragraph 1.")]
+                + texts("New", count: 2).map { .init(type: "paragraph", text: $0) }
+                + [.init(type: "child_page", text: "")],
+        )
+        let client = page.makeClient(databaseID: databaseID)
+
+        _ = try await export(client, markdown: markdown("New", count: 2))
+        XCTAssertEqual(page.appends, 0)
+        XCTAssertEqual(page.types, ["paragraph", "paragraph", "child_page"])
+        XCTAssertEqual(page.texts.filter { !$0.isEmpty }, texts("New", count: 2))
+    }
+
     // MARK: - Tolerant delete loop
 
     func testAFailedDeleteDoesNotStopTheRemainingDeletes() async {
