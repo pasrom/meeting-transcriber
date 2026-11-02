@@ -447,11 +447,41 @@ final class AppSettings { // swiftlint:disable:this type_body_length
     var terminologyRulesText: String {
         didSet {
             defaults.set(terminologyRulesText, forKey: "terminologyRulesText")
-            terminologyRulesValidation = TerminologyNormalizer(rulesText: terminologyRulesText).diagnostics
+            guard terminologyRulesFilePath.isEmpty else { return }
+            terminologyRulesValidation = .rules(TerminologyNormalizer(rulesText: terminologyRulesText).diagnostics)
         }
     }
 
-    var terminologyRulesValidation: TerminologyNormalizer.Diagnostics
+    /// Optional rules file that replaces the text area as the source of the
+    /// terminology rules. Like the vocabulary file, the plain path is for
+    /// display; reads go through the bookmark.
+    private(set) var terminologyRulesFilePath: String {
+        didSet { defaults.set(terminologyRulesFilePath, forKey: "terminologyRulesFilePath") }
+    }
+
+    private(set) var terminologyRulesFileBookmark: Data? {
+        didSet { defaults.set(terminologyRulesFileBookmark, forKey: "terminologyRulesFileBookmark") }
+    }
+
+    func updateTerminologyRulesFileSelection(path: String, bookmark: Data?) {
+        terminologyRulesFilePath = path
+        terminologyRulesFileBookmark = bookmark
+    }
+
+    /// Every persisted bookmark's stale repair, for the one launch-time call
+    /// in `AppState` (see there for why it is not done from the getters).
+    func repairStaleBookmarks() {
+        repairStaleCustomOutputDirBookmark()
+        repairStaleCustomVocabularyBookmark()
+        repairStaleTerminologyRulesFileBookmark()
+        repairStaleWhisperKitCustomModelFolderBookmark()
+    }
+
+    var terminologyRulesValidation: TerminologyRulesStatus
+
+    /// Ephemeral read-only preview of the selected rules file, refreshed with
+    /// its status. Empty while the text area is the source.
+    var terminologyRulesFileContents: String
 
     /// Ephemeral UI status; recalculated when the selected vocabulary changes.
     var customVocabularyValidation: CustomVocabularyValidation
@@ -824,7 +854,10 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         whisperKitVocabularyPromptEnabled = defaults.bool(forKey: "whisperKitVocabularyPromptEnabled", default: false)
         let savedTerminologyRules = defaults.string(forKey: "terminologyRulesText") ?? ""
         terminologyRulesText = savedTerminologyRules
-        terminologyRulesValidation = TerminologyNormalizer(rulesText: savedTerminologyRules).diagnostics
+        terminologyRulesFilePath = defaults.string(forKey: "terminologyRulesFilePath") ?? ""
+        terminologyRulesFileBookmark = defaults.data(forKey: "terminologyRulesFileBookmark")
+        terminologyRulesValidation = .rules(TerminologyNormalizer(rulesText: savedTerminologyRules).diagnostics)
+        terminologyRulesFileContents = ""
         customVocabularyValidation = .notConfigured
         diarize = defaults.bool(forKey: "diarize", default: true)
         vadEnabled = defaults.bool(forKey: "vadEnabled", default: false)
@@ -888,6 +921,7 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         checkForUpdates = defaults.bool(forKey: "checkForUpdates", default: true)
         includePreReleases = defaults.bool(forKey: "includePreReleases", default: false)
         refreshCustomVocabularyValidation()
+        refreshTerminologyRulesValidation()
         refreshWhisperKitCustomModelValidation()
     }
 
