@@ -28,6 +28,11 @@
 # Disabling them is what lets the pin track the current release.
 --disable wrapIfStatementBodies
 --disable wrapIfExpressionBodies
+# New in 0.64. It folds consecutive `guard`s with the same body into one
+# comma-separated guard. The code deliberately keeps one guard per precondition
+# (each reads as its own early exit and can be commented or reordered on its
+# own), and applying it would touch dozens of sites for no behavioural gain.
+--disable repeatedGuard
 
 # File scope
 --exclude FluidAudio,.build,app/MeetingTranscriber/.build,app/MeetingTranscriber/.build-appstore,tools/audiotap/.build,tools/meeting-simulator/.build

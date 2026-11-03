@@ -63,13 +63,13 @@ extension XCTestCase {
 
 // MARK: - Async Polling Helper
 
+@MainActor
 extension XCTestCase {
     /// Yields repeatedly until `condition()` is true or `timeout` elapses.
     /// Needed for tests that await operations spawning a `Task { @MainActor in … }`
     /// (e.g. AppState's `withObservationTracking` re-arm, AVCaptureDevice
     /// permission prompts) — a single `Task.yield()` isn't always enough to
     /// drain the runloop before the assertion fires.
-    @MainActor
     func waitFor(
         _ condition: @autoclosure () -> Bool,
         timeout: Duration = .milliseconds(500),
@@ -83,7 +83,6 @@ extension XCTestCase {
     /// Async-condition overload for conditions that must `await` (e.g. reading
     /// actor-isolated test-double state). Polls with a short sleep instead of
     /// a bare yield so the awaited actor gets real scheduling windows.
-    @MainActor
     func waitFor(
         _ condition: () async -> Bool,
         timeout: Duration = .seconds(5),
@@ -140,7 +139,7 @@ extension XCTestCase {
     func requireLocalVQEModel() throws -> String {
         switch LocalVQEModel.resolve() {
         case let .found(path):
-            return path
+            path
 
         case let .overrideMissing(path):
             // The resolver knows the difference between unset and dangling, so
@@ -554,6 +553,7 @@ actor MockEouManager: EouStreamingAsrManaging {
     }
 }
 
+@MainActor
 extension XCTestCase {
     /// Build an `AppState` over a per-call unique, volatile `UserDefaults` suite
     /// that is torn down after the test. Shared by the RPC-snapshot test classes
@@ -561,7 +561,6 @@ extension XCTestCase {
     /// …) to exercise `rpcStateSnapshot()` without touching the real defaults
     /// domain or leaking a preference domain across runs. Captures only the
     /// Sendable suite name in the teardown block.
-    @MainActor
     func makeRPCTestState() throws -> AppState {
         let suite = "RPCTestState-\(getpid())-\(UUID().uuidString)"
         guard let defaults = DefaultsSuite.open(suite) else {

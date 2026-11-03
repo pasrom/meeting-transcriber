@@ -148,7 +148,7 @@
         nonisolated static func loadOrCreateToken(at url: URL = tokenFileURL) -> String {
             if let data = try? Data(contentsOf: url),
                let existing = String(data: data, encoding: .utf8)?
-               .trimmingCharacters(in: .whitespacesAndNewlines),
+                   .trimmingCharacters(in: .whitespacesAndNewlines),
                !existing.isEmpty {
                 return existing
             }

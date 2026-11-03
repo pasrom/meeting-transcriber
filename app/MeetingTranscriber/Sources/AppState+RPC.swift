@@ -3,11 +3,11 @@
     import Foundation
     import UserNotifications
 
+    @MainActor
     extension RPCStateSnapshot.WindowInfo {
         /// Project an `NSWindow`'s pinning-relevant properties for the RPC
         /// snapshot. `id` is passed in (the caller already resolved it from the
         /// window identifier) so this stays a pure value mapping.
-        @MainActor
         init(window: NSWindow, id: String) {
             let behavior = window.collectionBehavior
             self.init(

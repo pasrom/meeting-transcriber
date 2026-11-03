@@ -220,7 +220,7 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         let full = try await DiarizerModels.load()
         guard
             let segShape = full.segmentationModel.modelDescription
-            .outputDescriptionsByName["segments"]?.multiArrayConstraint?.shape,
+                .outputDescriptionsByName["segments"]?.multiArrayConstraint?.shape,
             segShape.count >= 2
         else {
             throw LiveSpeakerMatcherError.modelShapeUnavailable
