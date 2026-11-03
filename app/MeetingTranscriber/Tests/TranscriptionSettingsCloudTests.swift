@@ -48,6 +48,19 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
             .tap()
     }
 
+    // MARK: - Placement
+
+    func testCloudControlsHaveTheirOwnSectionAndRecordOnlyDisablesIt() throws {
+        let settings = makeSettings()
+        settings.recordOnly = true
+        let body = try makeView(settings).inspect()
+        let cloud = try body.find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionSection)
+        XCTAssertNoThrow(try cloud.find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionToggle))
+        XCTAssertTrue(cloud.isDisabled())
+        let local = try body.find(viewWithAccessibilityIdentifier: A11yID.transcriptionSection)
+        XCTAssertThrowsError(try local.find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionToggle))
+    }
+
     // MARK: - Toggle and consent alert
 
     func testFirstEnableAsksAndCancelLeavesCloudOff() throws {

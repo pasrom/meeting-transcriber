@@ -66,6 +66,7 @@ struct TranscriptionSettingsView: View {
     var body: some View {
         Form {
             transcriptionSection
+            cloudTranscriptionSection
             vocabularySection
             liveTranscriptionSection
             legacyModelsSection
@@ -111,13 +112,17 @@ struct TranscriptionSettingsView: View {
         .disabled(legacyModels?.isRemoving == true)
     }
 
-    /// The cloud controls share this child with the picker so that no control
-    /// after it moves.
-    @ViewBuilder
-    private var enginePicker: some View { // swiftlint:disable:this attributes
-        CloudTranscriptionControls(
-            settings: settings, consent: cloudConsent, connectionTest: cloudConnectionTest, drafts: cloudEndpointDrafts,
-        )
+    private var cloudTranscriptionSection: some View {
+        Section("Cloud Transcription") {
+            CloudTranscriptionControls(
+                settings: settings, consent: cloudConsent, connectionTest: cloudConnectionTest, drafts: cloudEndpointDrafts,
+            )
+        }
+        .accessibilityIdentifier(A11yID.cloudTranscriptionSection)
+        .recordOnlyDisabled(settings.recordOnly)
+    }
+
+    private var enginePicker: some View {
         Picker("Engine", selection: $settings.transcriptionEngine) {
             ForEach(TranscriptionEngineSetting.availableCases, id: \.self) { engine in
                 Text(engine.label).tag(engine)
