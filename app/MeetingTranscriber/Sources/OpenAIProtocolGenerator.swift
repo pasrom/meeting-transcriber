@@ -495,14 +495,15 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         return chat.deletingLastPathComponent()
     }
 
-    /// Test connection to the API by querying available models.
-    /// Returns model names on success.
+    /// Test connection to the API by querying available models; returns their names, sorted.
+    /// `refuseCrossOriginRedirects` refuses a hop off the origin whatever the key placement.
     static func testConnection(
         endpoint: String,
         model _: String,
         apiKey: String?,
         apiKeyPlacement: OpenAIAPIKeyPlacement = .bearerToken,
         apiKeyHeaderName: String = OpenAIAPIKeyPlacement.defaultHeaderName,
+        refuseCrossOriginRedirects: Bool = false,
         session: URLSession = .shared,
     ) async -> Result<[String], any Error> {
         // Accept either the API base URL (.../v1) or the full chat-completions
@@ -516,7 +517,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         var request = URLRequest(url: modelsURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 10
-        let redirectGuard: CrossOriginRedirectRefuser?
+        var redirectGuard: CrossOriginRedirectRefuser?
         do {
             redirectGuard = try setAPIKeyHeader(
                 apiKey,
@@ -526,6 +527,9 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
             )
         } catch {
             return .failure(error)
+        }
+        if refuseCrossOriginRedirects, redirectGuard == nil {
+            redirectGuard = CrossOriginRedirectRefuser()
         }
 
         do {
@@ -561,7 +565,8 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
 /// there. Hops within the origin are followed unchanged. A request without a
 /// custom header keeps URLSession's default redirect handling.
 /// `CloudTranscriptionEngine` passes it on every upload for the same reason:
-/// a followed 307 would replay the recording to another host.
+/// a followed 307 would replay the recording to another host. `CloudModelList`
+/// uses it too, so its key stays on the configured host.
 final class CrossOriginRedirectRefuser: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(
         _: URLSession,

@@ -22,6 +22,7 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        KeychainHelper.delete(key: keyAccount + ".alternate")
         KeychainHelper.delete(key: keyAccount)
         DefaultsSuite.remove(suiteName)
         defaults = nil
@@ -289,6 +290,44 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         XCTAssertEqual(settings.cloudTranscriptionModel, "whisper-large-v3")
     }
 
+    /// The previous endpoint's green check and model list describe nothing now.
+    func testEditingTheEndpointDropsTheConnectionResultAndModelList() async throws {
+        let settings = makeSettings()
+        settings.cloudTranscriptionEnabled = true
+        settings.cloudTranscriptionBaseURL = "https://cloud.test/v1"
+        MockURLProtocol.handler = { request in
+            let body = request.url?.path.hasSuffix("/models") == true
+                ? #"{"data":[{"id":"whisper-1"}]}"# : #"{"segments":[]}"#
+            // swiftlint:disable:next force_unwrapping
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(body.utf8))
+        }
+        defer { MockURLProtocol.handler = nil }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: sessionConfig)
+        let test = CloudConnectionTest(session: session)
+        let list = CloudModelList(session: session)
+        let drafts = CloudEndpointDrafts()
+        drafts.load(from: settings)
+        let controls = CloudTranscriptionControls(
+            settings: settings, drafts: drafts, connectionTest: test, modelList: list, localFallback: "",
+        )
+        test.run(drafts.configuration(from: settings))
+        list.fetch(baseURL: drafts.baseURL, apiKey: "")
+        await test.task?.value
+        await list.task?.value
+        XCTAssertEqual(test.result, .success, "test premise")
+        XCTAssertEqual(list.models, ["whisper-1"], "test premise")
+
+        try controls.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionBaseURLField)
+            .find(ViewType.TextField.self)
+            .setInput("https://other.test/v1")
+
+        XCTAssertNil(test.result)
+        XCTAssertEqual(list.models, [])
+    }
+
     // MARK: - Live captions note
 
     func testLiveCaptionsNoteShowsOnlyWhenCloudTurnsCaptionsOff() throws {
@@ -338,7 +377,7 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         let drafts = CloudEndpointDrafts()
         drafts.load(from: settings)
         let controls = CloudTranscriptionControls(
-            settings: settings, drafts: drafts, connectionTest: test, localFallback: "",
+            settings: settings, drafts: drafts, connectionTest: test, modelList: CloudModelList(), localFallback: "",
         )
 
         try controls.inspect()

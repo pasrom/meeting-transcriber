@@ -121,6 +121,7 @@ struct CloudTranscriptionControls: View {
     @Bindable var settings: AppSettings
     var drafts: CloudEndpointDrafts
     var connectionTest: CloudConnectionTest
+    var modelList: CloudModelList
     /// e.g. "Run Locally uses WhisperKit · Large V3 Turbo".
     var localFallback: String
 
@@ -133,9 +134,7 @@ struct CloudTranscriptionControls: View {
         TextField("Base URL", text: endpointDraft(\.baseURL), prompt: Text("https://api.openai.com/v1"))
             .textFieldStyle(.roundedBorder)
             .accessibilityIdentifier(A11yID.cloudTranscriptionBaseURLField)
-        TextField("Model", text: $settings.cloudTranscriptionModel, prompt: Text("whisper-1"))
-            .textFieldStyle(.roundedBorder)
-            .accessibilityIdentifier(A11yID.cloudTranscriptionModelField)
+        CloudModelRow(settings: settings, drafts: drafts, modelList: modelList, onModelChange: connectionTest.invalidate)
         SecureField("API key", text: endpointDraft(\.apiKey))
             .textFieldStyle(.roundedBorder)
             .accessibilityIdentifier(A11yID.cloudTranscriptionAPIKeyField)
@@ -168,6 +167,7 @@ struct CloudTranscriptionControls: View {
                 guard newValue != drafts[keyPath: keyPath] else { return }
                 drafts[keyPath: keyPath] = newValue
                 connectionTest.invalidate()
+                modelList.invalidate()
             },
         )
     }

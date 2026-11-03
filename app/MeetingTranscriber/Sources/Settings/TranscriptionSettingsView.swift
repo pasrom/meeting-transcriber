@@ -22,6 +22,7 @@ struct TranscriptionSettingsView: View {
     @State private var cloudConsent: CloudTranscriptionConsent
     private let cloudEndpointDrafts: CloudEndpointDrafts
     @State private var cloudConnectionTest: CloudConnectionTest
+    @State private var cloudModelList: CloudModelList
 
     /// WhisperKit models earlier builds left in `Documents`. Nil leaves the row
     /// out, so a view built without one (as most view tests do) is never bound
@@ -35,6 +36,7 @@ struct TranscriptionSettingsView: View {
         captionWarmup: LiveCaptionsWarmup = .idle,
         legacyModels: LegacyWhisperModelsState? = nil,
         cloudEndpointDrafts: CloudEndpointDrafts = CloudEndpointDrafts(),
+        cloudModelList: CloudModelList? = nil,
     ) {
         self.settings = settings
         self.whisperKitEngine = whisperKitEngine
@@ -48,6 +50,7 @@ struct TranscriptionSettingsView: View {
         _cloudConsent = State(initialValue: CloudTranscriptionConsent())
         self.cloudEndpointDrafts = cloudEndpointDrafts
         _cloudConnectionTest = State(initialValue: CloudConnectionTest())
+        _cloudModelList = State(initialValue: cloudModelList ?? CloudModelList())
         _legacyModels = State(initialValue: legacyModels)
     }
 
@@ -109,6 +112,7 @@ struct TranscriptionSettingsView: View {
                 settings: settings,
                 drafts: cloudEndpointDrafts,
                 connectionTest: cloudConnectionTest,
+                modelList: cloudModelList,
                 localFallback: Self.localFallbackDescription(for: settings),
             )
         } else {

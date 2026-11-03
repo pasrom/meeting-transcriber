@@ -19,7 +19,7 @@ final class CustomVocabularyTests: XCTestCase {
             return
         }
         defaults = suite
-        settings = AppSettings(defaults: defaults)
+        settings = AppSettings(defaults: defaults, cloudTranscriptionAPIKeyAccount: testSuiteName)
     }
 
     override func tearDown() {
