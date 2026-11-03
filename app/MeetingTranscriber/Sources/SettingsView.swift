@@ -6,6 +6,8 @@ struct SettingsView: View {
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
     var updateChecker: UpdateChecker?
+    /// Backs the Launch at Login toggle. Nil hides the row, which is what tests get.
+    var loginItem: LoginItemController?
 
     /// Notification visibility from `PermissionsController`, forwarded to the
     /// General tab so it can warn when browser-meeting consent cannot reach the
@@ -66,6 +68,7 @@ struct SettingsView: View {
             GeneralSettingsView(
                 settings: settings,
                 notificationVisibility: notificationVisibility,
+                loginItem: loginItem,
             )
 
         case .audio:
