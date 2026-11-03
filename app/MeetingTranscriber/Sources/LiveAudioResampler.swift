@@ -112,16 +112,16 @@ final class LiveAudioResampler {
         }
 
         guard let input = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: Double(buffer.sampleRate),
-            channels: AVAudioChannelCount(buffer.channelCount),
-            interleaved: true,
-        ),
-            let output = AVAudioFormat(
-                standardFormatWithSampleRate: Self.targetSampleRate,
-                channels: Self.targetChannels,
-            ),
-            let conv = AVAudioConverter(from: input, to: output)
+                  commonFormat: .pcmFormatFloat32,
+                  sampleRate: Double(buffer.sampleRate),
+                  channels: AVAudioChannelCount(buffer.channelCount),
+                  interleaved: true,
+              ),
+              let output = AVAudioFormat(
+                  standardFormatWithSampleRate: Self.targetSampleRate,
+                  channels: Self.targetChannels,
+              ),
+              let conv = AVAudioConverter(from: input, to: output)
         else {
             logger.error("Failed to build resampler for \(buffer.sampleRate) Hz × \(buffer.channelCount)ch")
             return nil

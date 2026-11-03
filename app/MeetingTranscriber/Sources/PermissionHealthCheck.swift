@@ -247,16 +247,16 @@ enum PermissionHealthCheck {
     ) -> PermissionStatus {
         switch authStatus {
         case .notDetermined:
-            return .notDetermined
+            .notDetermined
 
         case .denied, .restricted:
-            return .denied
+            .denied
 
         case .authorized:
-            return probeSucceeds ? .healthy : .broken
+            probeSucceeds ? .healthy : .broken
 
         @unknown default:
-            return .denied
+            .denied
         }
     }
 
