@@ -1047,6 +1047,10 @@ class PipelineQueue {
         }
     }
 
+    @ObservationIgnored var logDroppedTrack: (_ publicSummary: String, _ privateDetail: String) -> Void = { summary, detail in
+        logger.warning("\(summary, privacy: .public) detail=\(detail, privacy: .private)")
+    }
+
     func addWarning(id: UUID, _ message: String) {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         guard !jobs[index].warnings.contains(message) else { return }

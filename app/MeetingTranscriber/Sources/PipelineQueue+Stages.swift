@@ -327,7 +327,9 @@ extension PipelineQueue {
             if !isStillQueued(ctx.jobID) {
                 logger.info("Job \(ctx.jobID) cancelled")
             } else {
-                logger.error("Pipeline error for job \(ctx.jobID): \(error.localizedDescription, privacy: .public)")
+                logger.error(
+                    "Pipeline error for job \(ctx.jobID): \(CloudTranscriptionError.publicLogDescription(of: error), privacy: .public)",
+                )
                 updateJobState(id: ctx.jobID, to: .error, error: error.localizedDescription)
             }
         }
@@ -427,8 +429,8 @@ extension PipelineQueue {
             setTrackViability(id: ctx.jobID, kept.viability)
         }
         for warning in kept.warnings {
-            logger.warning("[\(ctx.shortID, privacy: .public)] \(warning, privacy: .public)")
-            addWarning(id: ctx.jobID, warning)
+            logDroppedTrack("[\(ctx.shortID)] \(warning.publicSummary)", warning.detail)
+            addWarning(id: ctx.jobID, warning.detail)
         }
         if echoRemoved, !kept.viability.carriesAppAudio {
             // The canceller took the far end out of the microphone track

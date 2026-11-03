@@ -67,8 +67,8 @@ final class DualTrackTranscriptionTests: XCTestCase {
         XCTAssertTrue(kept.mic.isEmpty)
         XCTAssertEqual(kept.viability, .appOnly)
         XCTAssertEqual(kept.warnings.count, 1)
-        XCTAssertTrue(kept.warnings[0].contains("microphone track could not be transcribed"))
-        XCTAssertTrue(kept.warnings[0].contains(fileFailure.localizedDescription))
+        XCTAssertTrue(kept.warnings[0].detail.contains("microphone track could not be transcribed"))
+        XCTAssertTrue(kept.warnings[0].detail.contains(fileFailure.localizedDescription))
     }
 
     func testAFailedAppTrackIsDroppedAndDowngradesTheVerdict() throws {

@@ -16,6 +16,17 @@ import Foundation
 enum DualTrackTranscription {
     typealias Attempt = Result<[TimestampedSegment], any Error>
 
+    struct Warning {
+        let publicSummary: String
+        let detail: String
+
+        init(track: String, error: any Error, detail: String) {
+            let cloud = error as? CloudTranscriptionError
+            publicSummary = "dropped_track=\(track)" + (cloud.map { " \($0.logSummary)" } ?? "")
+            self.detail = detail
+        }
+    }
+
     struct Kept {
         let app: [TimestampedSegment]
         let mic: [TimestampedSegment]
@@ -23,7 +34,7 @@ enum DualTrackTranscription {
         /// that lost one track to a failure, otherwise the one passed in.
         let viability: DualTrackViability
         /// One per dropped track, for the job's warnings.
-        let warnings: [String]
+        let warnings: [Warning]
     }
 
     /// - Parameters:
@@ -45,18 +56,20 @@ enum DualTrackTranscription {
         }
 
         var kept = viability
-        var warnings: [String] = []
+        var warnings: [Warning] = []
         if case let .failure(error) = app {
             kept = .micOnly
-            warnings.append(
-                "The app-audio track could not be transcribed (\(error.localizedDescription)) — transcribed the microphone only",
-            )
+            warnings.append(Warning(
+                track: "app", error: error,
+                detail: "The app-audio track could not be transcribed (\(error.localizedDescription)) — transcribed the microphone only",
+            ))
         }
         if case let .failure(error) = mic {
             kept = .appOnly
-            warnings.append(
-                "The microphone track could not be transcribed (\(error.localizedDescription)) — transcribed the app audio only",
-            )
+            warnings.append(Warning(
+                track: "mic", error: error,
+                detail: "The microphone track could not be transcribed (\(error.localizedDescription)) — transcribed the app audio only",
+            ))
         }
         return Kept(app: appSegments, mic: micSegments, viability: kept, warnings: warnings)
     }

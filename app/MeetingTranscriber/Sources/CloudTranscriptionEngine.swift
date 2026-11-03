@@ -93,15 +93,18 @@ enum CloudTranscriptionError: LocalizedError, Equatable {
 }
 
 /// Transcribes through an OpenAI-compatible `/audio/transcriptions` endpoint.
-/// The whole 16 kHz WAV goes up in one request; diarization stays local.
+/// A recording up to `pieceDuration` goes up in one request; a longer one is
+/// cut into pieces (`CloudAudioSplitter`) sent one after another. Diarization
+/// stays local.
 @MainActor
 final class CloudTranscriptionEngine: TranscribingEngine {
     /// Nothing to download or load: the model runs at the provider.
     let modelState: EngineModelState = .loaded
     let downloadProgress: Double = 0
-    let transcriptionProgress: Double = 0
+    private(set) var transcriptionProgress: Double = 0
 
     private let configuration: @MainActor () -> CloudTranscriptionConfiguration
+    private let preparation = CloudUploadPreparation()
     private let session: URLSession
     /// Idle timeout between received bytes; an upload of a long recording can
     /// take minutes but keeps bytes moving.
@@ -113,6 +116,14 @@ final class CloudTranscriptionEngine: TranscribingEngine {
     static let maxRetryAfter: Duration = .seconds(60)
     /// Injected so tests do not wait; throws on cancellation.
     private let sleep: @MainActor (Duration) async throws -> Void
+    /// Longest piece sent in one request; injectable so tests use seconds.
+    private let pieceDuration: TimeInterval
+    /// Largest single-piece file uploaded unchanged, below the 25 MB cap that
+    /// OpenAI's endpoint sets once the multipart framing is added; injectable
+    /// so tests need no large file.
+    private let maxPassthroughBytes: Int
+    /// How far before a piece boundary a quiet cut point is searched for.
+    private let searchWindow: TimeInterval
 
     init(
         configuration: @escaping @MainActor () -> CloudTranscriptionConfiguration,
@@ -120,12 +131,18 @@ final class CloudTranscriptionEngine: TranscribingEngine {
         timeoutSeconds: TimeInterval = 600,
         retryDelays: [Duration] = [.seconds(2), .seconds(8)],
         sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        pieceDuration: TimeInterval = CloudAudioSplitter.defaultPieceDuration,
+        searchWindow: TimeInterval = CloudAudioSplitter.defaultSearchWindow,
+        maxPassthroughBytes: Int = 24_000_000,
     ) {
         self.configuration = configuration
         self.session = session
         self.timeoutSeconds = timeoutSeconds
         self.retryDelays = retryDelays
         self.sleep = sleep
+        self.pieceDuration = pieceDuration
+        self.searchWindow = searchWindow
+        self.maxPassthroughBytes = maxPassthroughBytes
     }
 
     func loadModel() async {} // swiftlint:disable:this async_without_await
@@ -138,10 +155,59 @@ final class CloudTranscriptionEngine: TranscribingEngine {
         }
         let url = base.appendingPathComponent("audio").appendingPathComponent("transcriptions")
 
+        transcriptionProgress = 0
+        // A file AVAudioFile cannot read goes up whole, so the provider's
+        // verdict (a 400, the track's own failure) decides as before.
+        guard let (pieces, sampleRate, sendOriginal) = try await preparation.planPieces(
+            of: audioPath, pieceDuration: pieceDuration, searchWindow: searchWindow, maxPassthroughBytes: maxPassthroughBytes,
+        ) else {
+            let segments = try await transcribeFile(audioPath, duration: nil, url: url, config: config)
+            transcriptionProgress = 1
+            return segments
+        }
+        // One piece goes up as it is unless its sample format makes it too large
+        // (Float32 is twice 16-bit); then it is rewritten as 16-bit like any piece.
+        if sendOriginal {
+            let segments = try await transcribeFile(
+                audioPath, duration: Double(pieces[0].count) / sampleRate, url: url, config: config,
+            )
+            transcriptionProgress = 1
+            return segments
+        }
+
+        if pieces.count > 1 { logger.info("cloud_transcription_split pieces=\(pieces.count)") }
+        let stem = audioPath.deletingPathExtension().lastPathComponent
+        var result: [TimestampedSegment] = []
+        for (index, range) in pieces.enumerated() {
+            try Task.checkCancellation()
+            let pieceURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(stem)_part\(index + 1)_\(UUID().uuidString).wav")
+            defer { try? FileManager.default.removeItem(at: pieceURL) }
+            try await preparation.writePiece(of: audioPath, range: range, to: pieceURL)
+            let offset = Double(range.lowerBound) / sampleRate
+            let duration = Double(range.count) / sampleRate
+            for segment in try await transcribeFile(pieceURL, duration: duration, url: url, config: config) {
+                var shifted = segment
+                shifted.start += offset
+                shifted.end += offset
+                result.append(shifted)
+            }
+            transcriptionProgress = Double(index + 1) / Double(pieces.count)
+        }
+        return result
+    }
+
+    /// One file in one request, through the retry loop. `duration` bounds the
+    /// timestamps the provider may return; nil when the file could not be read.
+    private func transcribeFile(
+        _ audioPath: URL, duration: TimeInterval?, url: URL, config: CloudTranscriptionConfiguration,
+    ) async throws -> [TimestampedSegment] {
         let boundary = "Boundary-\(UUID().uuidString)"
         let bodyFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("cloud_transcription_\(UUID().uuidString).multipart")
-        try Self.writeMultipartBody(to: bodyFile, boundary: boundary, audioPath: audioPath, model: config.model)
+        try await preparation.writeMultipartBody(
+            to: bodyFile, boundary: boundary, audioPath: audioPath, model: config.model, fields: [],
+        )
         defer { try? FileManager.default.removeItem(at: bodyFile) }
 
         var request = URLRequest(url: url)
@@ -156,7 +222,7 @@ final class CloudTranscriptionEngine: TranscribingEngine {
         var attempt = 0
         while true {
             try Task.checkCancellation()
-            switch try await send(request, bodyFile: bodyFile, config: config, duration: nil) {
+            switch try await send(request, bodyFile: bodyFile, config: config, duration: duration) {
             case let .done(segments):
                 return segments
 
@@ -257,32 +323,6 @@ final class CloudTranscriptionEngine: TranscribingEngine {
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
         guard let date = formatter.date(from: value) else { return nil }
         return .seconds(max(0, Int(date.timeIntervalSince(now).rounded(.up))))
-    }
-
-    /// Streams the multipart body to disk so a long recording is never held
-    /// in memory twice.
-    static func writeMultipartBody(to destination: URL, boundary: String, audioPath: URL, model: String) throws {
-        FileManager.default.createFile(atPath: destination.path, contents: nil)
-        let out = try FileHandle(forWritingTo: destination)
-        defer { try? out.close() }
-
-        func field(_ name: String, _ value: String) -> Data {
-            Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8)
-        }
-        try out.write(contentsOf: field("model", model))
-        try out.write(contentsOf: field("response_format", "verbose_json"))
-        try out.write(contentsOf: field("timestamp_granularities[]", "segment"))
-        try out.write(contentsOf: Data((
-            "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(audioPath.lastPathComponent)\"\r\n"
-                + "Content-Type: audio/wav\r\n\r\n"
-        ).utf8))
-
-        let input = try FileHandle(forReadingFrom: audioPath)
-        defer { try? input.close() }
-        while let chunk = try input.read(upToCount: 1 << 20), !chunk.isEmpty {
-            try out.write(contentsOf: chunk)
-        }
-        try out.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
     }
 
     private struct VerboseResponse: Decodable {
