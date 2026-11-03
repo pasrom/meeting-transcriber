@@ -310,6 +310,8 @@ final class PipelineController {
             // decided, so a fallback is reported here and not from `effectiveOutputDir`, which `body` reads on every render.
             outputDir: queueEnvironment.resolveOutputDir(outputDirectory),
             logDir: queueEnvironment.logDir,
+            engineResolver: settings.transcriptionEngineResolver(local: engine),
+            transcriptionTargetProvider: { [settings] in settings.transcriptionTarget },
             stagingDir: queueEnvironment.stagingDir,
             diarizeEnabled: settings.diarize,
             staleNamingMaxAge: { [settings] in settings.staleNamingTimeout.maxAge },

@@ -21,7 +21,7 @@ final class KeychainHelperTests: XCTestCase {
     // MARK: - Save: add path (item doesn't exist)
 
     func testSaveAddsNewItem() {
-        KeychainHelper.save(key: testKey, value: "secret123")
+        XCTAssertTrue(KeychainHelper.save(key: testKey, value: "secret123"))
         XCTAssertEqual(KeychainHelper.read(key: testKey), "secret123")
     }
 
@@ -29,7 +29,7 @@ final class KeychainHelperTests: XCTestCase {
 
     func testSaveUpdatesExistingItem() {
         KeychainHelper.save(key: testKey, value: "original")
-        KeychainHelper.save(key: testKey, value: "updated")
+        XCTAssertTrue(KeychainHelper.save(key: testKey, value: "updated"))
         XCTAssertEqual(KeychainHelper.read(key: testKey), "updated")
     }
 
@@ -61,8 +61,8 @@ final class KeychainHelperTests: XCTestCase {
 
     func testDoubleDeleteDoesNotCrash() {
         KeychainHelper.save(key: testKey, value: "toDelete")
-        KeychainHelper.delete(key: testKey)
-        KeychainHelper.delete(key: testKey)
+        XCTAssertTrue(KeychainHelper.delete(key: testKey))
+        XCTAssertTrue(KeychainHelper.delete(key: testKey))
         XCTAssertFalse(KeychainHelper.exists(key: testKey))
     }
 

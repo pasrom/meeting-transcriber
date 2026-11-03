@@ -560,7 +560,9 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
 /// all: URLSession then returns the 3xx response itself and nothing is sent
 /// there. Hops within the origin are followed unchanged. A request without a
 /// custom header keeps URLSession's default redirect handling.
-private final class CrossOriginRedirectRefuser: NSObject, URLSessionTaskDelegate, Sendable {
+/// `CloudTranscriptionEngine` passes it on every upload for the same reason:
+/// a followed 307 would replay the recording to another host.
+final class CrossOriginRedirectRefuser: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(
         _: URLSession,
         task _: URLSessionTask,

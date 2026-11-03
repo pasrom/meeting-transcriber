@@ -6,6 +6,8 @@ import Foundation
 /// restored from a snapshot written before this existed, is `.local`.
 enum TranscriptionTarget: String, Codable, Sendable {
     case local
+    /// An OpenAI-compatible endpoint (`CloudTranscriptionEngine`).
+    case cloud
 }
 
 /// Picks the engine that transcribes a job with the given target.

@@ -23,9 +23,9 @@ Meeting Transcriber runs the entire pipeline (recording, transcription, speaker 
 
 |                                | Cloud transcribers | **Meeting Transcriber** |
 |--------------------------------|:------------------:|:-----------------------:|
-| Audio leaves your machine      | Yes                | **No**                  |
+| Audio leaves your machine      | Yes                | **No**, unless you enable cloud transcription |
 | Recurring cost                 | $10–30 / month     | **Free**                |
-| Works offline                  | No                 | **Yes**                 |
+| Works offline                  | No                 | **Yes**, with local transcription and a local summary model |
 | Choice of summarization LLM    | Vendor-locked      | **Claude · Ollama · LM Studio · any OpenAI API** |
 | Per-source speaker separation  | Mixed track        | **Dual-track diarization** |
 | Source available               | No                 | **MIT licensed**        |

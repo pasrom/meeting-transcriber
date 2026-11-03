@@ -153,6 +153,11 @@ enum A11yID {
     static let terminologyRulesEditor = "terminologyRulesEditor"
     static let terminologyRulesFilePathField = "terminologyRulesFilePathField"
     static let terminologyRulesFilePreview = "terminologyRulesFilePreview"
+    static let cloudTranscriptionToggle = "cloudTranscriptionToggle"
+    static let cloudTranscriptionHostNote = "cloudTranscriptionHostNote"
+    static let cloudTranscriptionBaseURLField = "cloudTranscriptionBaseURLField"
+    static let cloudTranscriptionModelField = "cloudTranscriptionModelField"
+    static let cloudTranscriptionAPIKeyField = "cloudTranscriptionAPIKeyField"
 
     /// Settings sidebar row for one tab (`settings-tab-<rawValue>`). The detail
     /// pane renders only the selected tab, so a control in another tab is absent
