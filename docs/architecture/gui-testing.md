@@ -70,7 +70,10 @@ tree-visible;
 press-drivable *additionally* requires a `/ui/press` allowlist entry — never allowlist
 a control whose action opens a menu/popover/sheet/panel (a nested runloop wedges the
 app, see `DebugRPCServer+UIPress.swift`). Never widen the window allowlist to PII
-windows or expose control values (`DebugRPCServer+UITree.swift`).
+windows or expose control values (`DebugRPCServer+UITree.swift`). The launch-at-login
+toggle stays off the allowlist too, for a different reason: a live press (or any test
+that reaches `SMAppService`) registers a real login item for whatever binary hosts it,
+so its tests go through the `LoginItemRegistering` fake.
 
 **Live assertions:** assert the `/state` effect, never the returned `pressed` flag or
 tree structure (depth/frames/child counts). Assert the env-stable, load-bearing pin
