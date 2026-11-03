@@ -83,6 +83,9 @@ struct MeetingTranscriberApp: App {
     private var appDelegate // swiftlint:disable:this unused_declaration
     @State private var appState: AppState
     @State private var captionsWindow: LiveCaptionsWindowController?
+    // Launch at Login. Here rather than on `AppState` because only the Settings
+    // scene uses it; building it reads nothing from the system.
+    @State private var loginItem = LoginItemController()
     // Keeps the progress updater alive for the app's lifetime; it is seeded in
     // `init` and observes menu tracking on its own, so nothing reads it back and
     // the analyzer cannot see that use.
@@ -291,6 +294,7 @@ struct MeetingTranscriberApp: App {
                 whisperKitEngine: appState.engines.whisperKit,
                 parakeetEngine: appState.engines.parakeetEngine,
                 updateChecker: appState.updateChecker,
+                loginItem: loginItem,
                 notificationVisibility: appState.permissions.notificationVisibility,
                 // Share the pipeline's actor instance so both writers serialise on
                 // the same `recognition_log.jsonl` file. Fallback only fires in the
