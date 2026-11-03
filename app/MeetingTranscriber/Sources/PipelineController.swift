@@ -166,11 +166,11 @@ final class PipelineController {
     /// would pick that job up from the snapshot and run it a second time.
     ///
     /// So the queue is replaced only when every job it holds is finished. Note
-    /// this defers queue-captured settings (engine choice, diarization, VAD,
-    /// numSpeakers) to the next idle watch-start rather than refreshing them
-    /// automatically; live engine language/vocabulary still sync separately onto
-    /// the shared engine instances meanwhile. The output folder is the
-    /// exception, see `rebuildIfOutputFolderChanged()`.
+    /// this defers queue-captured settings (diarization, VAD, numSpeakers) to the
+    /// next idle watch-start rather than refreshing them automatically. The
+    /// selected local engine is resolved for each job, while live engine
+    /// language and vocabulary sync onto the shared engine instances. The output
+    /// folder is handled separately by `rebuildIfOutputFolderChanged()`.
     ///
     /// `recoversStagedRecordings: false` skips the staging-folder recovery; the
     /// reason is at its one caller, `rebuildIfOutputFolderChanged()`.
@@ -310,7 +310,7 @@ final class PipelineController {
             // decided, so a fallback is reported here and not from `effectiveOutputDir`, which `body` reads on every render.
             outputDir: queueEnvironment.resolveOutputDir(outputDirectory),
             logDir: queueEnvironment.logDir,
-            engineResolver: settings.transcriptionEngineResolver(local: engine),
+            engineResolver: settings.transcriptionEngineResolver { [weak self] in self?.engineProvider?() ?? engine },
             transcriptionTargetProvider: { [settings] in settings.transcriptionTarget },
             stagingDir: queueEnvironment.stagingDir,
             diarizeEnabled: settings.diarize,
@@ -407,7 +407,8 @@ final class PipelineController {
 
             case .error:
                 if let err = job.error {
-                    notifier.notify(title: "Error", body: err)
+                    // The cloud error names the cause; the title says where it failed.
+                    notifier.notify(title: job.isCloudFailure ? "Cloud Transcription Failed" : "Error", body: err)
                 }
 
             default:

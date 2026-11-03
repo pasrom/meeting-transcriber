@@ -51,6 +51,15 @@ enum A11yID {
         "jobRetryButton.\(index)"
     }
 
+    /// The two actions that replace Retry on a job whose cloud transcription failed.
+    static func jobRetryInCloudButton(_ index: Int) -> String {
+        "jobRetryInCloudButton.\(index)"
+    }
+
+    static func jobRunLocallyButton(_ index: Int) -> String {
+        "jobRunLocallyButton.\(index)"
+    }
+
     static func jobNotionRetryButton(_ index: Int) -> String {
         "jobNotionRetryButton.\(index)"
     }

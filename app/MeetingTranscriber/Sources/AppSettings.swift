@@ -444,16 +444,18 @@ final class AppSettings { // swiftlint:disable:this type_body_length
 
     /// Sends local jobs to `local` and cloud jobs to a `CloudTranscriptionEngine`
     /// that reads the endpoint when it transcribes; only the cloud-or-local
-    /// choice is captured per job.
+    /// choice is captured per job. `local` is read per job, so a local job (and
+    /// Run Locally after a cloud failure) uses the engine Settings names now,
+    /// not the one selected when the queue was built.
     @MainActor
     func transcriptionEngineResolver(
-        local: any TranscribingEngine,
+        local: @escaping @MainActor () -> any TranscribingEngine,
         session: URLSession = .shared,
     ) -> TranscriptionEngineResolver {
         let cloud = CloudTranscriptionEngine(configuration: { [self] in cloudTranscriptionConfiguration }, session: session)
         return { target in
             switch target {
-            case .local: local
+            case .local: local()
             case .cloud: cloud
             }
         }

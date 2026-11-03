@@ -430,7 +430,7 @@ extension PipelineQueue {
     ///   there is one, and a retried job that is then cancelled leaves without
     ///   a new record, so the old error would be served for it again.
     @discardableResult
-    func retryJob(id: UUID) -> Bool {
+    func retryJob(id: UUID, target: TranscriptionTarget? = nil) -> Bool {
         guard canRetryJob(id: id), let index = jobs.firstIndex(where: { $0.id == id }) else { return false }
         guard Self.sourceAudioExists(for: jobs[index]) else {
             noteRetryAudioMissing(at: index)
@@ -442,7 +442,7 @@ extension PipelineQueue {
         jobAudioSeconds.removeValue(forKey: id)
         protocolResumeDispositions.removeValue(forKey: id)
         terminalJobStore?.remove(jobID: id)
-        jobs[index].prepareForRetry()
+        jobs[index].prepareForRetry(target: target)
         updateJobState(id: id, to: .waiting)
         triggerProcessing()
         return true

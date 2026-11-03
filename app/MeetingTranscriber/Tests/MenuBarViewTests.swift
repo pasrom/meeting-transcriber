@@ -686,6 +686,65 @@ final class MenuBarViewTests: XCTestCase {
         )
     }
 
+    /// A failed job whose cloud transcription failed, in `queue`.
+    private func insertCloudFailedJob(into queue: PipelineQueue, mixPath: URL) -> UUID {
+        var job = PipelineJob(
+            meetingTitle: "Cloud Call", appName: "Teams",
+            mixPath: mixPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .error
+        job.error = "Cloud transcription failed: the provider had a server error (HTTP 503)"
+        job.transcriptionTarget = .cloud
+        job.cloudTranscriptionFailed = true
+        queue.insertJobForTesting(job)
+        return job.id
+    }
+
+    /// A cloud failure offers the two actions in place of Retry.
+    func testRetryInCloudRequeuesTheJobForTheCloud() throws {
+        let dir = try makeTempDirectory(prefix: "menubar_retry_cloud_test")
+        let queue = PipelineQueue(logDir: dir)
+        let id = try insertCloudFailedJob(into: queue, mixPath: emptyFile("cloud_mix.wav", in: dir))
+
+        let body = try makeView(status: makeStatus(), pipelineQueue: queue).inspect()
+        XCTAssertThrowsError(
+            try body.find(viewWithAccessibilityIdentifier: A11yID.jobRetryButton(0)),
+            "the plain Retry was offered for a cloud failure",
+        )
+        try body.find(viewWithAccessibilityIdentifier: A11yID.jobRetryInCloudButton(0)).button().tap()
+
+        let retried = try XCTUnwrap(queue.jobs.first { $0.id == id })
+        XCTAssertEqual(retried.state, .waiting)
+        XCTAssertEqual(retried.transcriptionTarget, .cloud)
+    }
+
+    func testRunLocallyRequeuesTheJobForTheLocalEngine() throws {
+        let dir = try makeTempDirectory(prefix: "menubar_run_locally_test")
+        let queue = PipelineQueue(logDir: dir)
+        let id = try insertCloudFailedJob(into: queue, mixPath: emptyFile("cloud_mix.wav", in: dir))
+
+        try makeView(status: makeStatus(), pipelineQueue: queue).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.jobRunLocallyButton(0))
+            .button()
+            .tap()
+
+        let retried = try XCTUnwrap(queue.jobs.first { $0.id == id })
+        XCTAssertEqual(retried.state, .waiting)
+        XCTAssertEqual(retried.transcriptionTarget, .local)
+    }
+
+    func testALocallyFailedJobOffersOnlyRetry() throws {
+        let dir = try makeTempDirectory(prefix: "menubar_local_failure_test")
+        let queue = PipelineQueue(logDir: dir)
+        try queue.insertJobForTesting(mixPath: emptyFile("local_mix.wav", in: dir), state: .error, error: "Failed")
+
+        let body = try makeView(status: makeStatus(), pipelineQueue: queue).inspect()
+
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.jobRetryButton(0)))
+        XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: A11yID.jobRetryInCloudButton(0)))
+        XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: A11yID.jobRunLocallyButton(0)))
+    }
+
     private func emptyFile(_ name: String, in dir: URL) throws -> URL {
         let url = dir.appendingPathComponent(name)
         try Data().write(to: url)
