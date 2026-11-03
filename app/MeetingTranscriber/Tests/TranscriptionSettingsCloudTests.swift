@@ -100,16 +100,35 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         XCTAssertTrue(note.contains("transcribe.example.com"), note)
     }
 
-    func testBaseURLFieldWritesBack() throws {
+    /// A track starting while the user types must not see a half-typed host
+    /// or a new host paired with the old key, so nothing is stored until Save.
+    func testBaseURLAndKeyReachSettingsTogetherOnlyOnSave() throws {
         let settings = makeSettings()
         settings.cloudTranscriptionEnabled = true
+        let saved = settings.cloudTranscriptionBaseURL
+        let view = makeView(settings)
 
-        try makeView(settings).inspect()
+        try view.inspect()
             .find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionBaseURLField)
             .find(ViewType.TextField.self)
             .setInput("https://other.example.com/v1")
+        try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionAPIKeyField)
+            .find(ViewType.SecureField.self)
+            .setInput("sk-cloud")
+        XCTAssertEqual(settings.cloudTranscriptionBaseURL, saved, "an edit reached settings before Save")
+        XCTAssertNil(KeychainHelper.read(key: keyAccount))
+        XCTAssertNoThrow(try view.inspect().find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionUnsavedNote))
+
+        try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionSaveButton)
+            .find(ViewType.Button.self)
+            .tap()
 
         XCTAssertEqual(settings.cloudTranscriptionBaseURL, "https://other.example.com/v1")
+        XCTAssertEqual(makeSettings().cloudTranscriptionAPIKey, "sk-cloud")
+        let stored = defaults.dictionaryRepresentation().values.compactMap { $0 as? String }
+        XCTAssertFalse(stored.contains("sk-cloud"), "the key must never reach UserDefaults")
     }
 
     func testModelFieldWritesBack() throws {
@@ -125,17 +144,59 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         XCTAssertEqual(settings.cloudTranscriptionModel, "whisper-large-v3")
     }
 
-    func testAPIKeyFieldWritesToTheKeychainNotUserDefaults() throws {
+    // MARK: - Test Connection
+
+    func testTestConnectionButtonRunsTheTestAndShowsItsResult() async throws {
         let settings = makeSettings()
         settings.cloudTranscriptionEnabled = true
+        settings.cloudTranscriptionBaseURL = "https://cloud.test/v1"
+        MockURLProtocol.handler = { request in
+            // swiftlint:disable:next force_unwrapping
+            (HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        defer { MockURLProtocol.handler = nil }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [MockURLProtocol.self]
+        let test = CloudConnectionTest(session: URLSession(configuration: sessionConfig))
+        let drafts = CloudEndpointDrafts()
+        drafts.load(from: settings)
+        let controls = CloudTranscriptionControls(
+            settings: settings, consent: CloudTranscriptionConsent(), connectionTest: test, drafts: drafts,
+        )
 
-        try makeView(settings).inspect()
-            .find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionAPIKeyField)
-            .find(ViewType.SecureField.self)
-            .setInput("sk-cloud")
+        try controls.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionTestButton)
+            .find(ViewType.Button.self)
+            .tap()
+        XCTAssertTrue(test.isRunning, "the button must start the test and show it running")
+        await test.task?.value
 
-        XCTAssertEqual(KeychainHelper.read(key: keyAccount), "sk-cloud")
-        let stored = defaults.dictionaryRepresentation().values.compactMap { $0 as? String }
-        XCTAssertFalse(stored.contains("sk-cloud"), "the key must never reach UserDefaults")
+        XCTAssertEqual(test.result, .authFailed(status: 401))
+        let status = try controls.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionTestStatus)
+            .find(ViewType.Text.self)
+            .string()
+        XCTAssertEqual(status, CloudConnectionTestResult.authFailed(status: 401).message)
+    }
+
+    // MARK: - Configuration
+
+    func testConfigurationCarriesTheEngineLanguageAndVocabularyTerms() throws {
+        let settings = makeSettings()
+        settings.transcriptionEngine = .whisperKit
+        settings.whisperLanguage = "id"
+        let vocabulary = FileManager.default.temporaryDirectory.appendingPathComponent("vocab_\(UUID().uuidString).txt")
+        try "Acme\nSpeaker A\n".write(to: vocabulary, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: vocabulary) }
+        settings.setCustomVocabularyPath(vocabulary.path)
+
+        let config = settings.cloudTranscriptionConfiguration
+        XCTAssertEqual(config.language, "id")
+        XCTAssertEqual(config.vocabularyTerms, ["Acme", "Speaker A"])
+
+        settings.whisperLanguage = ""
+        settings.clearCustomVocabularyFile()
+        XCTAssertNil(settings.cloudTranscriptionConfiguration.language)
+        XCTAssertEqual(settings.cloudTranscriptionConfiguration.vocabularyTerms, [])
     }
 }

@@ -12,6 +12,10 @@ struct CloudTranscriptionConfiguration: Equatable {
     var model: String
     /// Sent as a Bearer token; empty sends no `Authorization` header.
     var apiKey: String
+    /// The local engine's language picker code; nil (auto-detect) sends no `language`.
+    var language: String?
+    /// Custom vocabulary terms in file order; sent as a bounded `prompt`.
+    var vocabularyTerms: [String] = []
 }
 
 enum CloudTranscriptionError: LocalizedError, Equatable {
@@ -154,6 +158,7 @@ final class CloudTranscriptionEngine: TranscribingEngine {
             throw CloudTranscriptionError.invalidBaseURL(trimmedBase)
         }
         let url = base.appendingPathComponent("audio").appendingPathComponent("transcriptions")
+        let fields = Self.optionalFields(config)
 
         transcriptionProgress = 0
         // A file AVAudioFile cannot read goes up whole, so the provider's
@@ -161,7 +166,7 @@ final class CloudTranscriptionEngine: TranscribingEngine {
         guard let (pieces, sampleRate, sendOriginal) = try await preparation.planPieces(
             of: audioPath, pieceDuration: pieceDuration, searchWindow: searchWindow, maxPassthroughBytes: maxPassthroughBytes,
         ) else {
-            let segments = try await transcribeFile(audioPath, duration: nil, url: url, config: config)
+            let segments = try await transcribeFile(audioPath, duration: nil, url: url, config: config, fields: fields)
             transcriptionProgress = 1
             return segments
         }
@@ -169,7 +174,7 @@ final class CloudTranscriptionEngine: TranscribingEngine {
         // (Float32 is twice 16-bit); then it is rewritten as 16-bit like any piece.
         if sendOriginal {
             let segments = try await transcribeFile(
-                audioPath, duration: Double(pieces[0].count) / sampleRate, url: url, config: config,
+                audioPath, duration: Double(pieces[0].count) / sampleRate, url: url, config: config, fields: fields,
             )
             transcriptionProgress = 1
             return segments
@@ -186,7 +191,7 @@ final class CloudTranscriptionEngine: TranscribingEngine {
             try await preparation.writePiece(of: audioPath, range: range, to: pieceURL)
             let offset = Double(range.lowerBound) / sampleRate
             let duration = Double(range.count) / sampleRate
-            for segment in try await transcribeFile(pieceURL, duration: duration, url: url, config: config) {
+            for segment in try await transcribeFile(pieceURL, duration: duration, url: url, config: config, fields: fields) {
                 var shifted = segment
                 shifted.start += offset
                 shifted.end += offset
@@ -197,16 +202,40 @@ final class CloudTranscriptionEngine: TranscribingEngine {
         return result
     }
 
+    /// `language` and `prompt`, each only when there is something to send.
+    static func optionalFields(_ config: CloudTranscriptionConfiguration) -> [(name: String, value: String)] {
+        var fields: [(name: String, value: String)] = []
+        if let language = isoLanguage(config.language) {
+            fields.append(("language", language))
+        }
+        let prompt = WhisperVocabularyPrompt.text(for: config.vocabularyTerms)
+        if !prompt.isEmpty {
+            fields.append(("prompt", prompt))
+        }
+        return fields
+    }
+
+    /// The picker code as ISO-639-1, which the API expects. Two picker codes
+    /// have none of their own: Filipino goes as Tagalog, Cantonese as Chinese.
+    static func isoLanguage(_ code: String?) -> String? {
+        guard let code = code?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty else { return nil }
+        switch code {
+        case "fil": return "tl"
+        case "yue": return "zh"
+        default: return code
+        }
+    }
+
     /// One file in one request, through the retry loop. `duration` bounds the
     /// timestamps the provider may return; nil when the file could not be read.
     private func transcribeFile(
-        _ audioPath: URL, duration: TimeInterval?, url: URL, config: CloudTranscriptionConfiguration,
+        _ audioPath: URL, duration: TimeInterval?, url: URL, config: CloudTranscriptionConfiguration, fields: [(name: String, value: String)],
     ) async throws -> [TimestampedSegment] {
         let boundary = "Boundary-\(UUID().uuidString)"
         let bodyFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("cloud_transcription_\(UUID().uuidString).multipart")
         try await preparation.writeMultipartBody(
-            to: bodyFile, boundary: boundary, audioPath: audioPath, model: config.model, fields: [],
+            to: bodyFile, boundary: boundary, audioPath: audioPath, model: config.model, fields: fields,
         )
         defer { try? FileManager.default.removeItem(at: bodyFile) }
 
@@ -364,6 +393,72 @@ final class CloudTranscriptionEngine: TranscribingEngine {
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
             return TimestampedSegment(start: min(segment.start, limit), end: min(segment.end, limit), text: text)
+        }
+    }
+}
+
+/// What Test Connection found, one case per thing the user has to fix.
+enum CloudConnectionTestResult: Equatable {
+    case success
+    case authFailed(status: Int)
+    case unreachable(String)
+    case missingTimestamps(model: String)
+    /// Any other failure, with its full message (the provider's text for an HTTP error).
+    case failed(String)
+
+    var message: String {
+        switch self {
+        case .success:
+            "Connected: the model returned segment timestamps."
+
+        case let .authFailed(status):
+            "The API key was rejected (HTTP \(status))."
+
+        case let .unreachable(description):
+            "The endpoint could not be reached (\(description))."
+
+        case let .missingTimestamps(model):
+            "Model \"\(model)\" returned no segment timestamps; choose one that does, such as whisper-1."
+
+        case let .failed(message):
+            message
+        }
+    }
+}
+
+extension CloudTranscriptionEngine {
+    /// Sends one second of generated silence with `config`, without retries,
+    /// and names what went wrong.
+    static func testConnection(
+        _ config: CloudTranscriptionConfiguration,
+        session: URLSession = .shared,
+    ) async -> CloudConnectionTestResult {
+        let clip = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cloud_connection_test_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: clip) }
+        do {
+            try AudioMixer.saveWAV(samples: [Float](repeating: 0, count: 16000), sampleRate: 16000, url: clip)
+            let engine = CloudTranscriptionEngine(
+                configuration: { config }, session: session, timeoutSeconds: 30, retryDelays: [],
+            )
+            _ = try await engine.transcribeSegments(audioPath: clip)
+            return .success
+        } catch let error as CloudTranscriptionError {
+            switch error {
+            case let .httpError(status, _, _) where status == 401 || status == 403:
+                return .authFailed(status: status)
+
+            case let .network(description):
+                return .unreachable(description)
+
+            case let .missingSegments(model):
+                return .missingTimestamps(model: model)
+
+            default:
+                return .failed(error.localizedDescription)
+            }
+        } catch {
+            return .failed(error.localizedDescription)
         }
     }
 }

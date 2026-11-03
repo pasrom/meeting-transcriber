@@ -83,6 +83,17 @@ extension AppSettings {
         }
     }
 
+    /// The vocabulary file's terms in file order; empty when none is configured
+    /// or the file is unreadable or over the size limits.
+    var customVocabularyTerms: [String] {
+        guard let url = VocabularyFileAccess.resolve(path: customVocabularyPath, bookmark: customVocabularyBookmark) else {
+            return []
+        }
+        return VocabularyFileAccess.withAccess(to: url) { url in
+            WhisperVocabularyPrompt.terms(fromFileAt: url.path) ?? []
+        }
+    }
+
     private func resolveCustomVocabularyFile(isStale: inout Bool) -> URL? {
         if let bookmark = customVocabularyBookmark,
            let url = try? URL(

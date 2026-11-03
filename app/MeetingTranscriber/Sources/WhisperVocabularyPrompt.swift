@@ -155,6 +155,23 @@ enum WhisperVocabularyPrompt {
         }
         return promptTokens
     }
+
+    /// `defaultTokenBudget` in characters, for a prompt built without the
+    /// Whisper tokenizer (cloud transcription): about four characters a token.
+    static let defaultCharacterBudget = defaultTokenBudget * 4
+
+    /// The rule of `tokens(for:)` counted in characters: whole terms in file
+    /// order, joined by ", "; a term that would overrun the budget is skipped,
+    /// never truncated, and a shorter later one may still fit.
+    static func text(for terms: [String], characterBudget: Int = defaultCharacterBudget) -> String {
+        var prompt = ""
+        for term in terms.prefix(maximumTermCount) {
+            let candidate = prompt.isEmpty ? term : prompt + ", " + term
+            guard candidate.count <= characterBudget else { continue }
+            prompt = candidate
+        }
+        return prompt
+    }
 }
 
 // swiftlint:enable discouraged_optional_collection

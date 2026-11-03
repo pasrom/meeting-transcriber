@@ -439,6 +439,8 @@ final class AppSettings { // swiftlint:disable:this type_body_length
             baseURL: cloudTranscriptionBaseURL,
             model: cloudTranscriptionModel,
             apiKey: cloudTranscriptionAPIKey,
+            language: activeEngineLanguageOrNil,
+            vocabularyTerms: customVocabularyTerms,
         )
     }
 

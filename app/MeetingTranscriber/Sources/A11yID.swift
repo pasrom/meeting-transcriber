@@ -167,6 +167,10 @@ enum A11yID {
     static let cloudTranscriptionBaseURLField = "cloudTranscriptionBaseURLField"
     static let cloudTranscriptionModelField = "cloudTranscriptionModelField"
     static let cloudTranscriptionAPIKeyField = "cloudTranscriptionAPIKeyField"
+    static let cloudTranscriptionTestButton = "cloudTranscriptionTestButton"
+    static let cloudTranscriptionTestStatus = "cloudTranscriptionTestStatus"
+    static let cloudTranscriptionSaveButton = "cloudTranscriptionSaveButton"
+    static let cloudTranscriptionUnsavedNote = "cloudTranscriptionUnsavedNote"
 
     /// Settings sidebar row for one tab (`settings-tab-<rawValue>`). The detail
     /// pane renders only the selected tab, so a control in another tab is absent

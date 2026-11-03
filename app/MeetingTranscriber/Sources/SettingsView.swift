@@ -34,10 +34,14 @@ struct SettingsView: View {
     var legacyWhisperModels: LegacyWhisperModelsState?
     var captionWarmup: LiveCaptionsWarmup = .idle
 
+    @State private var cloudEndpointDrafts = CloudEndpointDrafts()
     @State private var selection: SettingsTab = .general
 
     var body: some View {
         splitView
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { notification in
+                cloudEndpointDrafts.settingsWindowWillClose(notification, settings: settings)
+            }
     }
 
     private var splitView: some View {
@@ -82,6 +86,7 @@ struct SettingsView: View {
                 parakeetEngine: parakeetEngine,
                 captionWarmup: captionWarmup,
                 legacyModels: legacyWhisperModels,
+                cloudEndpointDrafts: cloudEndpointDrafts,
             )
 
         case .speakers:

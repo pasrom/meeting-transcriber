@@ -24,4 +24,19 @@ extension AppSettings {
     var activeCloudKeyAccount: String {
         cloudEndpoint.alternate ? cloudTranscriptionAPIKeyAccount + ".alternate" : cloudTranscriptionAPIKeyAccount
     }
+
+    /// Stage into the inactive slot so even a successful write followed by a
+    /// locked Keychain leaves the previously saved URL and key paired.
+    @MainActor
+    func replaceCloudEndpoint(baseURL: String, apiKey: String, storeKey: (String, String) -> Bool) -> Bool {
+        let previous = activeCloudKeyAccount
+        let next = cloudEndpoint.alternate ? cloudTranscriptionAPIKeyAccount : cloudTranscriptionAPIKeyAccount + ".alternate"
+        guard storeKey(apiKey, next), KeychainHelper.read(key: next, ifMissing: "") == apiKey else { return false }
+        var selection = cloudEndpoint
+        selection.baseURL = baseURL
+        selection.alternate.toggle()
+        cloudEndpoint = selection
+        KeychainHelper.delete(key: previous)
+        return true
+    }
 }

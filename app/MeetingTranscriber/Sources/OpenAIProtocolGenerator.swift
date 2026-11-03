@@ -586,7 +586,7 @@ final class CrossOriginRedirectRefuser: NSObject, URLSessionTaskDelegate, Sendab
 
     /// Scheme and host compare case-insensitively and an omitted port is the
     /// scheme's default, so `https://h` and `https://H:443` are one origin.
-    private static func origin(_ url: URL) -> String {
+    static func origin(_ url: URL) -> String {
         let scheme = url.scheme?.lowercased() ?? ""
         let port = url.port ?? (scheme == "https" ? 443 : 80)
         return "\(scheme)://\(url.host?.lowercased() ?? ""):\(port)"
