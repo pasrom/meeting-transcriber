@@ -58,6 +58,35 @@ final class PipelineQueueStageTimingTests: XCTestCase {
         )
     }
 
+    /// A local engine switched in Settings while a job transcribes: the run
+    /// keeps the engine it started with, so its timing must carry that one.
+    func testTheTranscribingEventKeepsTheEngineTheRunStartedWith() async throws {
+        let dir = try makeTempDirectory(prefix: "pq_stage_timing_engine")
+        let log = StageTimingLog(path: dir.appendingPathComponent("stage_timing.jsonl"))
+        let started = SwitchingEngine()
+        var selected: any TranscribingEngine = started
+        started.onTranscribe = { selected = MockEngine() }
+        let queue = PipelineQueue(
+            engine: started,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { MockProtocolGen() },
+            outputDir: dir, logDir: dir,
+            engineResolver: { _ in selected },
+            stagingDir: dir,
+            stageTimingLog: log,
+        )
+        let job = try PipelineJob(
+            meetingTitle: "Standup", appName: "Teams",
+            mixPath: createTestAudioFile(in: dir), appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+        await queue.awaitProcessing()
+
+        let events = await waitForEvents(log, count: 1)
+        XCTAssertTrue(selected is MockEngine, "test premise: the selection changed during the run")
+        XCTAssertEqual(events.first { $0.stage == .transcribing }?.engine, "SwitchingEngine")
+    }
+
     // MARK: - Echo cancellation inside the transcribing stage
 
     /// Echo cancellation runs inside the transcribing stage and costs several
@@ -126,5 +155,15 @@ final class PipelineQueueStageTimingTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         let events = await log.loadRecent(within: 30 * 86400)
         XCTAssertEqual(events.map(\.stage), [.transcribing])
+    }
+}
+
+/// Runs `onTranscribe` while it transcribes, to change the selection mid-run.
+private final class SwitchingEngine: MockEngine {
+    var onTranscribe: () -> Void = {}
+
+    override func transcribeSegments(audioPath: URL) throws -> [TimestampedSegment] {
+        onTranscribe()
+        return try super.transcribeSegments(audioPath: audioPath)
     }
 }

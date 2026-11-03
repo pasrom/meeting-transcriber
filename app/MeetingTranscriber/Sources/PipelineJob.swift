@@ -261,6 +261,9 @@ struct PipelineJob: Identifiable, Codable {
     // See `includeFullTranscriptInProtocol`.
     // swiftlint:disable:next discouraged_optional_boolean
     var useAITitleForFilenames: Bool?
+    /// Captured when the job enters the queue, like the output options above.
+    /// Nil (a snapshot from before this existed) means `.local`.
+    var transcriptionTarget: TranscriptionTarget?
     /// Diarizer mode that produced the *current* `speakerNamingDataByJob`
     /// entry. Set by `PipelineQueue` after diarisation completes (in the
     /// initial pipeline run and after `lateDiarization`). Used by the

@@ -113,7 +113,7 @@ extension PipelineQueue {
             // process that dies now adopts the recording again and needs the
             // log again. It goes when the recording leaves staging
             // (`persistAudioToOutput`).
-            stampTranscriptOutputOptions(on: &job)
+            stampAdmissionSettings(on: &job)
             jobs.append(job)
             eventLog.append(jobID: job.id, event: "recovered", from: nil, to: .waiting)
         }

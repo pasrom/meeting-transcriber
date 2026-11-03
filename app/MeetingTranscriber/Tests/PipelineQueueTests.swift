@@ -1203,6 +1203,71 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(engine.transcribeCallCount > 0)
     }
 
+    // MARK: - Transcription target
+
+    func testEnqueueCapturesTheTranscriptionTarget() {
+        XCTAssertNil(makeJob().transcriptionTarget, "precondition: a new job has no target yet")
+
+        queue.enqueue(makeJob())
+
+        XCTAssertEqual(queue.jobs.first?.transcriptionTarget, .local)
+    }
+
+    func testTheJobIsTranscribedByTheEngineItsTargetResolvesTo() async throws {
+        let fixedEngine = MockEngine()
+        let resolvedEngine = MockEngine()
+        resolvedEngine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Resolved")]
+        var requestedTargets: [TranscriptionTarget] = []
+        let resolver: TranscriptionEngineResolver = { target in
+            requestedTargets.append(target)
+            return resolvedEngine
+        }
+        let pQueue = PipelineQueue(
+            engine: fixedEngine,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { MockProtocolGen() },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            engineResolver: resolver,
+        )
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        pQueue.enqueue(PipelineJob(
+            meetingTitle: "Resolver Test", appName: "Teams",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        ))
+
+        await pQueue.processNext()
+
+        XCTAssertGreaterThan(resolvedEngine.transcribeCallCount, 0)
+        XCTAssertEqual(fixedEngine.transcribeCallCount, 0)
+        XCTAssertFalse(requestedTargets.isEmpty)
+        XCTAssertTrue(requestedTargets.allSatisfy { $0 == .local }, "\(requestedTargets)")
+    }
+
+    func testAJobRestoredWithoutATargetIsTranscribedLocally() {
+        let engine = MockEngine()
+        var requestedTargets: [TranscriptionTarget] = []
+        let resolver: TranscriptionEngineResolver = { target in
+            requestedTargets.append(target)
+            return engine
+        }
+        let pQueue = PipelineQueue(
+            engine: MockEngine(),
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { MockProtocolGen() },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            engineResolver: resolver,
+        )
+        let legacyJob = makeJob()
+        XCTAssertNil(legacyJob.transcriptionTarget)
+
+        let resolved = pQueue.transcriptionEngine(for: legacyJob)
+
+        XCTAssertIdentical(resolved, engine)
+        XCTAssertEqual(requestedTargets, [.local])
+    }
+
     func testProcessNextAppliesTerminologyRulesToSavedTranscript() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [
