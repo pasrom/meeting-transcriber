@@ -16,7 +16,12 @@ struct CloudTranscriptionConfiguration: Equatable {
 
 enum CloudTranscriptionError: LocalizedError, Equatable {
     case invalidBaseURL(String)
-    case httpError(status: Int, body: String)
+    /// `body` is the provider's own error message when it sent one, else the
+    /// first 500 characters of the response, with the API key redacted.
+    /// `param` is the request field the provider blamed, when it named one.
+    case httpError(status: Int, body: String, param: String? = nil)
+    /// The request did not complete; carries the transport's description.
+    case network(String)
     case invalidResponse
     /// A segment timestamp that is not a time: negative, or an end before its start.
     case invalidTimestamps
@@ -28,8 +33,12 @@ enum CloudTranscriptionError: LocalizedError, Equatable {
         case let .invalidBaseURL(value):
             "Cloud transcription base URL is not valid: \"\(value)\""
 
-        case let .httpError(status, body):
-            "Cloud transcription failed with HTTP \(status)" + (body.isEmpty ? "" : ": \(body)")
+        case let .httpError(status, body, _):
+            "Cloud transcription failed: \(Self.reason(status: status)) (HTTP \(status))"
+                + (body.isEmpty ? "" : ": \(body)")
+
+        case let .network(description):
+            "Cloud transcription failed: the provider could not be reached (\(description))"
 
         case .invalidResponse:
             "Cloud transcription returned a response that is not a transcription"
@@ -40,6 +49,45 @@ enum CloudTranscriptionError: LocalizedError, Equatable {
         case let .missingSegments(model):
             "Cloud model \"\(model)\" returned no segment timestamps. "
                 + "Choose a model that supports response_format=verbose_json with segment timestamps, such as whisper-1."
+        }
+    }
+
+    /// Only known request fields are public: even the parameter name is provider text.
+    private static let publicParams: Set<String> = [
+        "file", "model", "language", "prompt", "response_format", "temperature", "timestamp_granularities",
+    ]
+
+    /// Status and kind only: the description can carry the provider's text,
+    /// which may echo the vocabulary or the key, so it stays out of public logs.
+    var logSummary: String {
+        switch self {
+        case .invalidBaseURL: "invalid_base_url"
+        case let .httpError(status, _, param): "http status=\(status) param=\(Self.publicParam(param))"
+        case .network: "network"
+        case .invalidResponse: "invalid_response"
+        case .invalidTimestamps: "invalid_timestamps"
+        case .missingSegments: "missing_segments"
+        }
+    }
+
+    private static func publicParam(_ param: String?) -> String {
+        guard let param else { return "-" }
+        return publicParams.contains(param) ? param : "other"
+    }
+
+    /// `logSummary` for a cloud error, else the error's own description.
+    static func publicLogDescription(of error: any Error) -> String {
+        (error as? Self)?.logSummary ?? error.localizedDescription
+    }
+
+    private static func reason(status: Int) -> String {
+        switch status {
+        case 401, 403: "the API key was rejected"
+        case 400: "the provider could not process this audio"
+        case 413: "the recording is too large for the provider"
+        case 429: "the provider is rate limiting requests or the quota is used up"
+        case 500 ... 599: "the provider had a server error"
+        default: "the provider refused the request"
         }
     }
 }
@@ -58,15 +106,26 @@ final class CloudTranscriptionEngine: TranscribingEngine {
     /// Idle timeout between received bytes; an upload of a long recording can
     /// take minutes but keeps bytes moving.
     private let timeoutSeconds: TimeInterval
+    /// Waits before each retry of a transient failure; its count is the
+    /// number of retries per request.
+    private let retryDelays: [Duration]
+    /// Longest `Retry-After` honoured, so a provider cannot park a job for an hour.
+    static let maxRetryAfter: Duration = .seconds(60)
+    /// Injected so tests do not wait; throws on cancellation.
+    private let sleep: @MainActor (Duration) async throws -> Void
 
     init(
         configuration: @escaping @MainActor () -> CloudTranscriptionConfiguration,
         session: URLSession = .shared,
         timeoutSeconds: TimeInterval = 600,
+        retryDelays: [Duration] = [.seconds(2), .seconds(8)],
+        sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
     ) {
         self.configuration = configuration
         self.session = session
         self.timeoutSeconds = timeoutSeconds
+        self.retryDelays = retryDelays
+        self.sleep = sleep
     }
 
     func loadModel() async {} // swiftlint:disable:this async_without_await
@@ -94,19 +153,110 @@ final class CloudTranscriptionEngine: TranscribingEngine {
         }
 
         logger.info("cloud_transcription_upload host=\(url.host ?? "?", privacy: .public) model=\(config.model, privacy: .public)")
-        // The refuser keeps a cross-origin 307/308 from replaying the recording
-        // to a host the user did not configure.
-        let (data, response) = try await session.upload(
-            for: request, fromFile: bodyFile, delegate: CrossOriginRedirectRefuser(),
-        )
+        var attempt = 0
+        while true {
+            try Task.checkCancellation()
+            switch try await send(request, bodyFile: bodyFile, config: config, duration: nil) {
+            case let .done(segments):
+                return segments
+
+            case let .transient(error, retryAfter):
+                guard attempt < retryDelays.count else { throw error }
+                let delay = min(retryAfter ?? retryDelays[attempt], Self.maxRetryAfter)
+                attempt += 1
+                logger.warning(
+                    "cloud_transcription_retry attempt=\(attempt) delay=\(delay, privacy: .public) error=\(error.logSummary, privacy: .public) detail=\(error.localizedDescription, privacy: .private)",
+                )
+                try await sleep(delay)
+            }
+        }
+    }
+
+    private enum Attempt {
+        case done([TimestampedSegment])
+        /// Worth another try: a dropped connection, a 429 or a 5xx.
+        case transient(CloudTranscriptionError, retryAfter: Duration?)
+    }
+
+    /// Transport failures worth retrying; anything else (a bad certificate,
+    /// an unsupported URL) fails the same way the next time.
+    private static let transientCodes: Set<URLError.Code> = [
+        .timedOut, .networkConnectionLost, .notConnectedToInternet,
+        .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+    ]
+
+    /// One request. Throws what retrying cannot fix: auth, a rejected file,
+    /// any other 4xx, an unreadable answer.
+    private func send(
+        _ request: URLRequest, bodyFile: URL, config: CloudTranscriptionConfiguration, duration: TimeInterval?,
+    ) async throws -> Attempt {
+        let data: Data
+        let response: URLResponse
+        do {
+            // The refuser keeps a cross-origin 307/308 from replaying the recording
+            // to a host the user did not configure.
+            (data, response) = try await session.upload(
+                for: request, fromFile: bodyFile, delegate: CrossOriginRedirectRefuser(),
+            )
+        } catch let error as URLError {
+            if Task.isCancelled { throw CancellationError() }
+            let failure = CloudTranscriptionError.network(error.localizedDescription)
+            guard Self.transientCodes.contains(error.code) else { throw failure }
+            return .transient(failure, retryAfter: nil)
+        }
         guard let http = response as? HTTPURLResponse else {
             throw CloudTranscriptionError.invalidResponse
         }
         guard (200 ... 299).contains(http.statusCode) else {
-            let body = String(bytes: data.prefix(500), encoding: .utf8) ?? ""
-            throw CloudTranscriptionError.httpError(status: http.statusCode, body: body)
+            let detail = Self.errorDetail(data, redacting: config.apiKey)
+            let failure = CloudTranscriptionError.httpError(
+                status: http.statusCode, body: detail.message, param: detail.param,
+            )
+            guard http.statusCode == 429 || (500 ... 599).contains(http.statusCode) else { throw failure }
+            return .transient(failure, retryAfter: Self.retryAfter(http.value(forHTTPHeaderField: "Retry-After")))
         }
-        return try Self.parseSegments(data, model: config.model, duration: nil)
+        return try .done(Self.parseSegments(data, model: config.model, duration: duration))
+    }
+
+    private struct ErrorEnvelope: Decodable {
+        struct Detail: Decodable {
+            let message: String
+            let param: String?
+        }
+
+        let error: Detail
+    }
+
+    static let errorMessageLimit = 500
+
+    /// The provider's `{"error":{"message":…}}` when present, else the body,
+    /// cut to `errorMessageLimit` characters. Some providers echo the key back;
+    /// it is redacted before the cut, so no prefix of it survives at the edge.
+    static func errorMessage(_ data: Data, redacting apiKey: String) -> String {
+        errorDetail(data, redacting: apiKey).message
+    }
+
+    /// `errorMessage` plus the `param` the provider blamed. "None" is LiteLLM's
+    /// spelling of no param.
+    static func errorDetail(_ data: Data, redacting apiKey: String) -> (message: String, param: String?) {
+        let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: data)
+        let raw = envelope?.error.message ?? String(bytes: data, encoding: .utf8) ?? ""
+        let redacted = apiKey.isEmpty ? raw : raw.replacingOccurrences(of: apiKey, with: "[redacted]")
+        let message = String(redacted.trimmingCharacters(in: .whitespacesAndNewlines).prefix(errorMessageLimit))
+        let param = envelope?.error.param.flatMap { $0.isEmpty || $0 == "None" ? nil : $0 }
+        return (message, param)
+    }
+
+    /// `Retry-After` as delta-seconds or an HTTP-date; nil when absent or unreadable.
+    static func retryAfter(_ value: String?, now: Date = Date()) -> Duration? {
+        guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
+        if let seconds = Int(value) { return .seconds(max(0, seconds)) }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = formatter.date(from: value) else { return nil }
+        return .seconds(max(0, Int(date.timeIntervalSince(now).rounded(.up))))
     }
 
     /// Streams the multipart body to disk so a long recording is never held

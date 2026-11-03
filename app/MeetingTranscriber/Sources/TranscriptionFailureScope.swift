@@ -19,6 +19,10 @@ import WhisperKit
 /// decode, logits and segmenting errors and FluidAudio's `processingFailed`
 /// are thrown for model wiring (a tensor shape, a missing output), and
 /// `audioProcessingFailed` mixes the two, so each of those ends the job.
+/// For the cloud engine only a 413 (too large) or a 400 about the audio is the
+/// file's. A 400 that names another request field (`model`, `response_format`)
+/// is the configuration's, and the other track would carry it too; so do
+/// auth, rate limits, server errors and the network.
 enum TranscriptionFailureScope: Equatable {
     case file
     case engine
@@ -36,6 +40,9 @@ enum TranscriptionFailureScope: Equatable {
             default:
                 .engine
             }
+
+        case let CloudTranscriptionError.httpError(status, _, param):
+            status == 413 || (status == 400 && (param == nil || param == "file")) ? .file : .engine
 
         case let error as ASRError:
             switch error {
