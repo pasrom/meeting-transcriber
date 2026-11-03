@@ -27,6 +27,11 @@ struct GeneralSettingsView: View {
     var body: some View {
         // swiftlint:disable:next closure_body_length
         Form {
+            Section("Startup") {
+                Toggle("Start watching when the app opens", isOn: $settings.autoWatch)
+                    .accessibilityIdentifier(A11yID.autoWatchToggle)
+            }
+
             Section("Mode") {
                 Toggle("Record-only mode", isOn: $settings.recordOnly)
                     .accessibilityIdentifier(A11yID.recordOnlyToggle)
