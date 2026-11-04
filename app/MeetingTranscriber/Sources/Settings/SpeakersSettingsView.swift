@@ -56,6 +56,8 @@ struct SpeakersSettingsView: View {
                 .accessibilityIdentifier(A11yID.diarizationSection)
                 .recordOnlyDisabled(settings.recordOnly)
 
+            speakerNamingSection
+
             if !settings.noMic {
                 Section("Speaker Identity") {
                     HStack {
@@ -124,6 +126,25 @@ struct SpeakersSettingsView: View {
                     experimentalTuningDisclosure
                 }
             }
+        }
+    }
+
+    // MARK: - Speaker Naming Section
+
+    /// Only shown with diarization on: without it no job waits for naming.
+    @ViewBuilder private var speakerNamingSection: some View {
+        if settings.diarize {
+            Section("Speaker Naming") {
+                Toggle("Open naming window automatically", isOn: $settings.autoOpenSpeakerNaming)
+                    .accessibilityIdentifier(A11yID.autoOpenSpeakerNamingToggle)
+                Text(
+                    "When off, name speakers later from the menu bar (Name Speakers\u{2026}). "
+                        + "Meetings still unnamed after 24 hours get the automatic names the next time the app starts.",
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .recordOnlyDisabled(settings.recordOnly)
         }
     }
 
