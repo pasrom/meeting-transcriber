@@ -41,6 +41,38 @@ final class SpeakerNamingWindowWidthTests: XCTestCase {
         XCTAssertLessThanOrEqual(idealWidth(participants: [], known: known), SpeakerNamingView.maxWidth)
     }
 
+    /// The pending-meeting picker sits above the dialog, outside its width
+    /// bounds, so it has to stay narrow by itself: as a segmented control it
+    /// was as wide as all the waiting meetings' titles together.
+    func testManyWaitingMeetingsDoNotWidenTheWindowPastItsMaximum() {
+        let titles = (1 ... 15).map { "Weekly project sync with the whole team, part \($0)" }
+        XCTAssertLessThanOrEqual(windowWidth(waitingMeetings: titles), SpeakerNamingView.maxWidth)
+    }
+
+    /// A menu sizes to its widest item, and titles have no length limit: an
+    /// import takes the file's basename, a sidecar its `title`.
+    func testOneVeryLongMeetingTitleDoesNotWidenTheWindowPastItsMaximum() {
+        let long = String(repeating: "Quarterly planning review across all regional teams ", count: 6)
+        XCTAssertLessThanOrEqual(windowWidth(waitingMeetings: [long, "Standup"]), SpeakerNamingView.maxWidth)
+    }
+
+    /// The naming window's content as `MeetingTranscriberApp` lays it out: the
+    /// job picker above the dialog.
+    private func windowWidth(waitingMeetings titles: [String]) -> CGFloat {
+        let jobs = titles.map { title in
+            PipelineJob(meetingTitle: title, appName: "Teams", mixPath: nil, appPath: nil, micPath: nil, micDelay: 0)
+        }
+        let content = VStack(spacing: 0) {
+            NamingJobPicker(jobs: jobs, selection: .constant(jobs[0].id))
+                .padding(.horizontal)
+                .padding(.top, 8)
+            SpeakerNamingView(
+                data: makeData(participants: ["Ann", "Bob"]), knownSpeakerNames: [], gracePeriod: 0,
+            ) { _ in }
+        }
+        return NSHostingView(rootView: content).fittingSize.width
+    }
+
     /// A short list still opens at the usual width rather than collapsing.
     func testAFewParticipantsKeepTheMinimumWidth() {
         XCTAssertGreaterThanOrEqual(idealWidth(participants: ["Ann", "Bob"]), SpeakerNamingView.minWidth)
