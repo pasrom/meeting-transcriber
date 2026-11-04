@@ -142,6 +142,10 @@ enum A11yID {
     static let rerunButton = "rerun-button"
     static let rerunStepper = "rerun-stepper"
     static let rerunModePicker = "rerun-mode-picker"
+    /// The pending-meeting menu at the top of the naming window, shown once
+    /// more than one meeting waits. `scripts/drive-naming-field.swift
+    /// select-job` finds it by this value.
+    static let namingJobPicker = "naming-job-picker"
     /// Why the session did not take the last answer (`SpeakerNamingRefusal`).
     static let namingRefusalMessage = "naming-refusal-message"
 

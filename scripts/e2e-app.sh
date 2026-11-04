@@ -165,7 +165,7 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        on the first job and one on the second, which moves the
                        surviving R_ label to a lower row. The lane asserts that
                        geometry, then (with BOTH jobs still pending) switches the
-                       dialog's segmented job picker to the second job so the same
+                       dialog's job picker to the second job so the same
                        view is reused, posts real keystrokes into the surviving R_
                        field from outside the process, and asserts the app is
                        still alive, the text landed in that row and nowhere else,
@@ -3295,7 +3295,7 @@ run_naming_confirm() {
 # a surviving label keeps must carry the user's typing to that label and no
 # other. See issue #700 for the defect this guards against.
 #
-# The switch is done via the dialog's segmented job picker while BOTH jobs are
+# The switch is done via the dialog's job picker while BOTH jobs are
 # still pending ("while the second dialog is showing", in the reporter's words),
 # NOT by resolving the first job. This matters and was measured: resolving the
 # first drops the picker (count 2 -> 1), which shifts the SpeakerNamingView's
@@ -3471,20 +3471,20 @@ run_naming_switch() {
     # The picker is driven BY IDENTITY, never by a fixed ordinal. This lane does
     # not own the queue: the app recovers orphaned recordings a beat after
     # launch, and with nothing here auto-skipping naming such a job parks and
-    # takes a picker segment of its own. In its first CI run one did exactly
+    # takes a picker entry of its own. In its first CI run one did exactly
     # that and landed BETWEEN this lane's two jobs (under the pinned expected
     # speaker count a single-source recording diarizes to a lone "S1"), so a
-    # hard-coded "segment 1" selected a foreign job. A job's segment is its
+    # hard-coded "entry 1" selected a foreign job. A job's entry is its
     # position in /state.pendingNamingJobs: that array is built from the very
     # `pendingSpeakerNamingJobs` the picker's ForEach iterates, so the two
     # orders agree by construction. The order is re-read right before every
-    # press, the picker's segment count is required to equal the pending count
+    # press, the picker's entry count is required to equal the pending count
     # read, and the press is verified by the labels that appear; a bounded
     # retry absorbs a job parking between the read and the press. Foreign jobs
     # are left alone, they belong to whichever lane produced them.
     local _ns_order=""
     _ns_select_job() {
-        local job="$1" labels="$2" which="$3" attempt idx count segments out
+        local job="$1" labels="$2" which="$3" attempt idx count entries out
         for attempt in 1 2 3; do
             _ns_order="$(state_query '[.pendingNamingJobs[].jobID]' -c)" \
                 || fail "$(state_why $? "$label: the pending naming order")"
@@ -3494,17 +3494,17 @@ run_naming_switch() {
                 || fail "$label: the $which job $job is no longer pending (pending order: $_ns_order)"
             [ "$count" -ge 2 ] \
                 || fail "$label: only $count pending naming job(s), so the dialog shows no job picker; both of this lane's jobs must be pending (pending order: $_ns_order)"
-            out="$("$driver" select-segment --index "$idx" 2>&1)" \
-                || fail "$label: could not select picker segment $idx for the $which job: $out"
-            segments="$(sed -n 's/^selected-segment=[0-9]* of=\([0-9]*\)$/\1/p' <<<"$out")"
-            if [ "$segments" = "$count" ] && poll_until 10 1 _ns_shows "$labels"; then
-                log "$label: $which job selected at picker segment $idx of $count (pending order: $_ns_order)"
+            out="$("$driver" select-job --index "$idx" 2>&1)" \
+                || fail "$label: could not select picker entry $idx for the $which job: $out"
+            entries="$(sed -n 's/^selected-job=[0-9]* of=\([0-9]*\)$/\1/p' <<<"$out")"
+            if [ "$entries" = "$count" ] && poll_until 10 1 _ns_shows "$labels"; then
+                log "$label: $which job selected at picker entry $idx of $count (pending order: $_ns_order)"
                 return 0
             fi
-            log "$label: attempt $attempt: picker has ${segments:-?} segment(s) vs $count pending job(s), window shows $shown; a job may have parked meanwhile, re-reading the order"
+            log "$label: attempt $attempt: picker has ${entries:-?} entry/entries vs $count pending job(s), window shows $shown; a job may have parked meanwhile, re-reading the order"
             sleep 2
         done
-        fail "$label: could not bring the $which job ($job) into the window: the picker has ${segments:-?} segment(s) but /state lists $count pending naming job(s), and the window shows $shown where $labels was expected (pending order: $_ns_order)"
+        fail "$label: could not bring the $which job ($job) into the window: the picker has ${entries:-?} entry/entries but /state lists $count pending naming job(s), and the window shows $shown where $labels was expected (pending order: $_ns_order)"
     }
 
     local pending_now pending_count
@@ -3522,7 +3522,7 @@ run_naming_switch() {
     log "$label: window shows the first job ($first_count fields)"
 
     # Switch to the second job the way the reporter did: with BOTH jobs still
-    # pending, pick the other one in the dialog's segmented job picker ("while
+    # pending, pick the other one in the dialog's job picker ("while
     # the second dialog is showing"). This is what keeps one view alive across
     # the switch and so keeps its reused fields in play. Resolving the
     # first job instead would drop the picker (count 2 -> 1), which shifts the

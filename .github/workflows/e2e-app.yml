@@ -399,7 +399,7 @@ jobs:
       # labels), pins expected speakers to 1 so only the mic clusters decide
       # where the surviving R_ label sits, asserts that geometry, then (with both
       # jobs still pending, so the picker stays and the view is reused) switches
-      # the dialog's segmented job picker to the second job, posts real keystrokes
+      # the dialog's job picker to the second job, posts real keystrokes
       # into the surviving R_ field from outside the process, and asserts the app
       # survived, the text landed in that row only, and a Confirm enrolls that
       # name into the speaker DB (read over RPC, no ~/Downloads dependency).

@@ -370,17 +370,15 @@ struct MeetingTranscriberApp: App {
 
     @ViewBuilder private var speakerNamingPicker: some View {
         if appState.pipeline.queue.pendingSpeakerNamingJobs.count > 1 {
-            Picker("Meeting", selection: Binding(
-                get: {
-                    appState.pipeline.queue.namingJobID(preferring: appState.selectedNamingJobID)
-                },
-                set: { appState.selectedNamingJobID = $0 },
-            )) {
-                ForEach(appState.pipeline.queue.pendingSpeakerNamingJobs) { job in
-                    Text(job.meetingTitle).tag(Optional(job.id))
-                }
-            }
-            .pickerStyle(.segmented)
+            NamingJobPicker(
+                jobs: appState.pipeline.queue.pendingSpeakerNamingJobs,
+                selection: Binding(
+                    get: {
+                        appState.pipeline.queue.namingJobID(preferring: appState.selectedNamingJobID)
+                    },
+                    set: { appState.selectedNamingJobID = $0 },
+                ),
+            )
             .padding(.horizontal)
             .padding(.top, 8)
         }

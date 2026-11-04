@@ -110,6 +110,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/HelpBadge.swift` / `Settings/SettingsHelp.swift` | Reusable "?" help-popover badge + its shared copy, used across Settings sections |
 | `Settings/View+RecordOnly.swift` | `recordOnlyDisabled(_:)` view modifier — dims + disables the Transcription/Protocol/VAD/Diarization sections when record-only mode is on |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
+| `NamingJobPicker.swift` | Menu of the meetings waiting for names, above the naming dialog once more than one waits (a menu so the content-sized window stays narrow) |
 | `NamingGraceKey.swift` | Identity of one keyboard-grace window in the naming dialog — what counts as "a new grace window" (data revision + pending-job count), so the gate re-locks when another job steals focus |
 | `KnownVoicesView.swift` | Manage persisted speaker DB (rename, delete, merge) — embedded in `SpeakersSettingsView` |
 | `RecognitionStatsView.swift` | Recognition stats display — aggregate counts from `recognition_log.jsonl` |
