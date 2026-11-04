@@ -48,9 +48,41 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
 
     func test_initialSync_propagatesCustomVocabularyPathToParakeet() {
         settings.transcriptionEngine = .parakeet
+        settings.customVocabularyEnabled = true
         settings.setCustomVocabularyPath("/tmp/init-vocab.txt")
         let engines = EngineController(settings: settings)
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/init-vocab.txt")
+    }
+
+    func test_vocabularySwitchOff_keepsTheFileFromParakeet() async {
+        settings.transcriptionEngine = .parakeet
+        settings.customVocabularyEnabled = false
+        settings.setCustomVocabularyPath("/tmp/off-vocab.txt")
+        let engines = EngineController(settings: settings)
+        XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "")
+
+        settings.customVocabularyEnabled = true
+
+        await waitFor(engines.parakeetEngine.customVocabularyPath == "/tmp/off-vocab.txt")
+        XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/off-vocab.txt")
+    }
+
+    func test_vocabularySwitchOff_keepsTheBookmarkFromParakeet() async throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocabulary-switch-\(UUID().uuidString).txt")
+        try "Northstar\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        settings.transcriptionEngine = .parakeet
+        settings.customVocabularyEnabled = false
+        settings.setCustomVocabularyFile(file)
+        let bookmark = try XCTUnwrap(settings.customVocabularyBookmark)
+        let engines = EngineController(settings: settings)
+        XCTAssertNil(engines.parakeetEngine.customVocabularyBookmark)
+
+        settings.customVocabularyEnabled = true
+
+        await waitFor(engines.parakeetEngine.customVocabularyBookmark == bookmark)
+        XCTAssertEqual(engines.parakeetEngine.customVocabularyBookmark, bookmark)
     }
 
     func test_initialSync_propagatesCustomVocabularyPathToWhisperKit() {
@@ -62,7 +94,7 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
 
     func test_initialSync_propagatesWhisperKitVocabularyPromptChoice() {
         settings.transcriptionEngine = .whisperKit
-        settings.whisperKitVocabularyPromptEnabled = true
+        settings.customVocabularyEnabled = true
 
         XCTAssertTrue(EngineController(settings: settings).whisperKit.vocabularyPromptEnabled)
     }
@@ -159,6 +191,7 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
 
     func test_runtimeChange_customVocabularyPath_propagatesToParakeet() async {
         settings.transcriptionEngine = .parakeet
+        settings.customVocabularyEnabled = true
         let engines = EngineController(settings: settings)
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "")
 
@@ -184,7 +217,7 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
         let engines = EngineController(settings: settings)
         XCTAssertFalse(engines.whisperKit.vocabularyPromptEnabled)
 
-        settings.whisperKitVocabularyPromptEnabled = true
+        settings.customVocabularyEnabled = true
 
         await waitFor(engines.whisperKit.vocabularyPromptEnabled)
         XCTAssertTrue(engines.whisperKit.vocabularyPromptEnabled)
@@ -197,6 +230,7 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
     /// the first change would propagate and subsequent ones silently no-op.
     func test_observation_rearmsForMultipleChanges() async {
         settings.transcriptionEngine = .parakeet
+        settings.customVocabularyEnabled = true
         let engines = EngineController(settings: settings)
 
         settings.setCustomVocabularyPath("/tmp/v1.txt")
@@ -220,6 +254,7 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
     func test_engineSwitch_syncsNewlyActiveEngine() async {
         settings.transcriptionEngine = .whisperKit
         settings.whisperLanguage = "de"
+        settings.customVocabularyEnabled = true
         settings.setCustomVocabularyPath("/tmp/parakeet-vocab.txt")
         let engines = EngineController(settings: settings)
 

@@ -36,13 +36,46 @@ final class CustomVocabularyTests: XCTestCase {
         XCTAssertEqual(settings.customVocabularyPath, "")
     }
 
-    func testWhisperKitVocabularyPromptDefaultsOffAndPersists() {
-        XCTAssertFalse(settings.whisperKitVocabularyPromptEnabled)
+    func testCustomVocabularySwitchDefaultsOffAndPersists() {
+        XCTAssertFalse(settings.customVocabularyEnabled)
 
-        settings.whisperKitVocabularyPromptEnabled = true
+        settings.customVocabularyEnabled = true
 
-        XCTAssertTrue(defaults.bool(forKey: "whisperKitVocabularyPromptEnabled"))
-        XCTAssertTrue(AppSettings(defaults: defaults).whisperKitVocabularyPromptEnabled)
+        XCTAssertTrue(defaults.bool(forKey: "customVocabularyEnabled"))
+        XCTAssertTrue(AppSettings(defaults: defaults).customVocabularyEnabled)
+    }
+
+    /// An upgrade keeps what the engine in use did: only WhisperKit had a switch.
+    func testUpgradeStartsTheSwitchWhereTheActiveMethodWas() {
+        XCTAssertTrue(AppSettings.initialCustomVocabularyEnabled(
+            whisperKitPromptEnabled: false, hasVocabularyFile: true, whisperKit: false,
+        ))
+        XCTAssertFalse(AppSettings.initialCustomVocabularyEnabled(
+            whisperKitPromptEnabled: true, hasVocabularyFile: false, whisperKit: false,
+        ))
+        XCTAssertFalse(AppSettings.initialCustomVocabularyEnabled(
+            whisperKitPromptEnabled: false, hasVocabularyFile: true, whisperKit: true,
+        ))
+        XCTAssertTrue(AppSettings.initialCustomVocabularyEnabled(
+            whisperKitPromptEnabled: true, hasVocabularyFile: false, whisperKit: true,
+        ))
+    }
+
+    func testUpgradeStoresTheDerivedSwitch() throws {
+        defaults.removeObject(forKey: "customVocabularyEnabled")
+        defaults.set("parakeet", forKey: "transcriptionEngine")
+        defaults.set("/tmp/terms.txt", forKey: "customVocabularyPath")
+
+        XCTAssertTrue(AppSettings(defaults: defaults).customVocabularyEnabled)
+        XCTAssertTrue(try XCTUnwrap(defaults.flag(forKey: "customVocabularyEnabled")))
+    }
+
+    func testUpgradeReadsTheOldWhisperKitFlag() {
+        defaults.removeObject(forKey: "customVocabularyEnabled")
+        defaults.set("whisperKit", forKey: "transcriptionEngine")
+        defaults.set(true, forKey: "whisperKitVocabularyPromptEnabled")
+
+        XCTAssertTrue(AppSettings(defaults: defaults).customVocabularyEnabled)
     }
 
     // MARK: - Persistence

@@ -54,6 +54,7 @@
             XCTAssertEqual(s.recording.asymmetricSilenceWarningSeconds, 90.0)
             XCTAssertEqual(s.transcription.engine, "whisperKit")
             XCTAssertEqual(s.transcription.whisperLanguage, "de")
+            XCTAssertFalse(s.transcription.customVocabularyEnabled)
             XCTAssertTrue(s.diarization.diarize)
             XCTAssertEqual(s.diarization.mode, "offline")
             XCTAssertEqual(s.diarization.numSpeakers, 0)
@@ -82,6 +83,7 @@
             settings.diarize = false
             settings.verboseDiagnostics = true
             settings.includePreReleases = true
+            settings.customVocabularyEnabled = true
 
             let s = settings.rpcSettingsSnapshot()
 
@@ -100,6 +102,7 @@
             XCTAssertFalse(s.diarization.diarize)
             XCTAssertTrue(s.diagnostics.verboseDiagnostics)
             XCTAssertTrue(s.updates.includePreReleases)
+            XCTAssertTrue(s.transcription.customVocabularyEnabled)
         }
 
         // MARK: - Enum raw-value mapping is pinned
@@ -255,7 +258,7 @@
                 "recording.asymmetricSilenceWarningSeconds",
                 "transcription.engine", "transcription.whisperKitModel",
                 "transcription.whisperLanguage", "transcription.parakeetLanguage",
-                "transcription.customVocabularyPath",
+                "transcription.customVocabularyEnabled", "transcription.customVocabularyPath",
                 "diarization.diarize", "diarization.mode", "diarization.numSpeakers",
                 "diarization.vadEnabled", "diarization.vadThreshold",
                 "diarization.clusterThreshold", "diarization.warmStartFa",

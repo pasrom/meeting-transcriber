@@ -119,15 +119,16 @@ final class EngineController {
             if whisperKit.customVocabularyPath != nextVocab { whisperKit.customVocabularyPath = nextVocab }
             let nextBookmark = settings.customVocabularyBookmark
             if whisperKit.customVocabularyBookmark != nextBookmark { whisperKit.customVocabularyBookmark = nextBookmark }
-            let nextVocabularyPromptEnabled = settings.whisperKitVocabularyPromptEnabled
+            let nextVocabularyPromptEnabled = settings.customVocabularyEnabled
             if whisperKit.vocabularyPromptEnabled != nextVocabularyPromptEnabled {
                 whisperKit.vocabularyPromptEnabled = nextVocabularyPromptEnabled
             }
 
         case .parakeet:
-            let nextVocab = settings.customVocabularyPath
+            let vocabularyOn = settings.customVocabularyEnabled
+            let nextVocab = vocabularyOn ? settings.customVocabularyPath : ""
             if parakeetEngine.customVocabularyPath != nextVocab { parakeetEngine.customVocabularyPath = nextVocab }
-            let nextBookmark = settings.customVocabularyBookmark
+            let nextBookmark = vocabularyOn ? settings.customVocabularyBookmark : nil
             if parakeetEngine.customVocabularyBookmark != nextBookmark { parakeetEngine.customVocabularyBookmark = nextBookmark }
             let nextLang = settings.parakeetLanguageOrNil
             if parakeetEngine.language != nextLang { parakeetEngine.language = nextLang }
@@ -149,7 +150,7 @@ final class EngineController {
             _ = settings.whisperLanguage
             _ = settings.customVocabularyPath
             _ = settings.customVocabularyBookmark
-            _ = settings.whisperKitVocabularyPromptEnabled
+            _ = settings.customVocabularyEnabled
             _ = settings.parakeetLanguage
         } onChange: { [weak self] in
             Task { @MainActor in

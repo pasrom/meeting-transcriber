@@ -54,6 +54,7 @@ enum A11yID {
 
     static let recordOnlyBanner = "recordOnlyBanner"
     static let transcriptionSection = "transcriptionSection"
+    static let vocabularySection = "vocabularySection"
     /// Opens a confirmation dialog, so it stays off the `/ui/press` allowlist.
     static let legacyWhisperModelsTrashButton = "legacyWhisperModelsTrashButton"
 
@@ -107,7 +108,7 @@ enum A11yID {
     /// `/state`, which is what makes it a usable text-entry probe.
     static let micNameField = "micNameField"
     static let customVocabularyPathField = "customVocabularyPathField"
-    static let whisperKitVocabularyPromptToggle = "whisperKitVocabularyPromptToggle"
+    static let customVocabularyToggle = "customVocabularyToggle"
     static let whisperKitModelPicker = "whisperKitModelPicker"
     static let whisperKitCustomRepoField = "whisperKitCustomRepoField"
     static let whisperKitCustomVariantField = "whisperKitCustomVariantField"
