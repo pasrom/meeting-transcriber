@@ -166,6 +166,18 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     /// Number of "Known:" chips shown by default before "More…" appears.
     private static let knownChipsCollapsedLimit = 8
 
+    /// Width bounds of the dialog. The scene sizes the window to its content
+    /// (`.windowResizability(.contentSize)`), so the window is exactly as wide
+    /// as the content's ideal width allows. A chip row asked for its ideal
+    /// size gets no width to wrap at and answers with all chips on one line,
+    /// so without a maximum here a meeting with many participants, or an
+    /// expanded "More" list, opened the window several screens wide. Bounded,
+    /// the rows are offered a width and wrap. No fixed ideal width: the content
+    /// still sets it within these bounds, so the re-run row (a fixed 280 pt mode
+    /// picker, the stepper and the button) keeps the width it needs.
+    static let minWidth: CGFloat = 400
+    static let maxWidth: CGFloat = 900
+
     private var speakers: [(label: String, autoName: String?, speakingTime: Double)] {
         Self.computeSpeakers(from: data)
     }
@@ -305,7 +317,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
             escapeDismissShortcut
         }
         .padding()
-        .frame(minWidth: 400, maxHeight: 700)
+        .frame(minWidth: Self.minWidth, maxWidth: Self.maxWidth, maxHeight: 700)
         .id(data.meetingTitle)
         .onAppear { resetForCurrentPresentation() }
         // After Re-run, lateDiarization replaces the SpeakerNamingData for
