@@ -73,7 +73,7 @@ PRs are excluded from the self-hosted runner.
   from a ground-truth fixture) alone decide its row, and asserts that geometry
   before touching the dialog, so a diarizer that hears the fixtures differently
   fails the lane as "geometry not staged" rather than passing vacuously. It then
-  switches the dialog's segmented job picker to the second job **while both jobs
+  switches the dialog's job picker to the second job **while both jobs
   are still pending** — resolving the first instead drops the picker, shifts the
   view's structural slot, and SwiftUI rebuilds it with fresh fields so the
   defect cannot show (measured on the unfixed build: resolve-first did not crash,
@@ -82,11 +82,11 @@ PRs are excluded from the self-hosted runner.
   nowhere else, and a Confirm enrolls that name into the speaker DB. The picker
   is driven by job identity, never by a fixed ordinal: the lane does not own the
   queue (the app recovers orphaned recordings a beat after launch, and with
-  nothing in this lane auto-skipping naming such a job parks and takes a segment;
+  nothing in this lane auto-skipping naming such a job parks and takes an entry;
   in the lane's first CI run one landed *between* its two jobs as a lone `S1`),
-  so a job's segment is its position in `/state.pendingNamingJobs`, the very
+  so a job's entry is its position in `/state.pendingNamingJobs`, the very
   array the picker iterates, re-read before each press, checked against the
-  picker's segment count, and verified by the labels that appear. It reads the
+  picker's entry count, and verified by the labels that appear. It reads the
   DB over RPC (`/state.speakerDB`), not the transcript file: the transcript lives
   under `~/Downloads`, which is TCC-protected and needs the fragile per-runner
   Downloads grant the naming-confirm lane already leans on, whereas `/state` is

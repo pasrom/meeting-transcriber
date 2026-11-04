@@ -41,6 +41,28 @@ final class SpeakerNamingWindowWidthTests: XCTestCase {
         XCTAssertLessThanOrEqual(idealWidth(participants: [], known: known), SpeakerNamingView.maxWidth)
     }
 
+    /// The pending-meeting picker sits above the dialog, outside its width
+    /// bounds, so it has to stay narrow by itself: as a segmented control it
+    /// was as wide as all the waiting meetings' titles together.
+    func testManyWaitingMeetingsDoNotWidenTheWindowPastItsMaximum() {
+        let jobs = (1 ... 15).map { index in
+            PipelineJob(
+                meetingTitle: "Weekly project sync with the whole team, part \(index)", appName: "Teams",
+                mixPath: nil, appPath: nil, micPath: nil, micDelay: 0,
+            )
+        }
+        // The naming window's content as `MeetingTranscriberApp` lays it out.
+        let content = VStack(spacing: 0) {
+            NamingJobPicker(jobs: jobs, selection: .constant(jobs[0].id))
+                .padding(.horizontal)
+                .padding(.top, 8)
+            SpeakerNamingView(
+                data: makeData(participants: ["Ann", "Bob"]), knownSpeakerNames: [], gracePeriod: 0,
+            ) { _ in }
+        }
+        XCTAssertLessThanOrEqual(NSHostingView(rootView: content).fittingSize.width, SpeakerNamingView.maxWidth)
+    }
+
     /// A short list still opens at the usual width rather than collapsing.
     func testAFewParticipantsKeepTheMinimumWidth() {
         XCTAssertGreaterThanOrEqual(idealWidth(participants: ["Ann", "Bob"]), SpeakerNamingView.minWidth)
