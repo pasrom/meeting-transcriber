@@ -60,6 +60,7 @@
                 whisperKitModel: whisperKitModel,
                 whisperLanguage: whisperLanguage,
                 parakeetLanguage: parakeetLanguage,
+                customVocabularyEnabled: customVocabularyEnabled,
                 customVocabularyPath: customVocabularyPath,
             )
         }

@@ -110,6 +110,7 @@
         /// Same flow `mt-cli state | jq .engines` exercises against the live app.
         func test_snapshot_reflectsRuntimeSettingChange() async throws {
             settings.transcriptionEngine = .parakeet
+            settings.customVocabularyEnabled = true
             let state = try AppState(pipelineEnvironment: makeIsolatedPipelineEnvironment(), settings: settings)
 
             XCTAssertEqual(

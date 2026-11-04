@@ -204,6 +204,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
     func testParakeetShowsCustomVocabularyField() throws {
         let settings = makeSettings()
         settings.transcriptionEngine = .parakeet
+        settings.customVocabularyEnabled = true
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
     }
@@ -211,6 +212,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
     func testWhisperKitShowsCustomVocabularyField() throws {
         let settings = makeSettings()
         settings.transcriptionEngine = .whisperKit
+        settings.customVocabularyEnabled = true
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
     }
@@ -220,6 +222,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         // field, but the WhisperKit-specific Model picker must not leak through.
         let settings = makeSettings()
         settings.transcriptionEngine = .parakeet
+        settings.customVocabularyEnabled = true
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
         XCTAssertNoThrow(try body.find(text: "Language"))

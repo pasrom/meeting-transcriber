@@ -379,11 +379,12 @@
                 /// Empty string = auto-detect (mirrors the UserDefaults sentinel).
                 let whisperLanguage: String
                 let parakeetLanguage: String
+                let customVocabularyEnabled: Bool
                 let customVocabularyPath: String
 
                 static let empty = Self(
                     engine: "", whisperKitModel: "", whisperLanguage: "",
-                    parakeetLanguage: "", customVocabularyPath: "",
+                    parakeetLanguage: "", customVocabularyEnabled: false, customVocabularyPath: "",
                 )
             }
 

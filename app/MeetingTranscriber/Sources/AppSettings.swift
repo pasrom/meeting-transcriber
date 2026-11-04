@@ -428,9 +428,20 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(customVocabularyBookmark, forKey: "customVocabularyBookmark") }
     }
 
-    /// Experimental opt-in: WhisperKit's prompt can reduce transcript completeness.
-    var whisperKitVocabularyPromptEnabled: Bool {
-        didSet { defaults.set(whisperKitVocabularyPromptEnabled, forKey: "whisperKitVocabularyPromptEnabled") }
+    /// Whether any engine reads the vocabulary file: Parakeet's CTC boosting and
+    /// WhisperKit's experimental prompt, which can reduce transcript completeness.
+    var customVocabularyEnabled: Bool {
+        didSet { defaults.set(customVocabularyEnabled, forKey: "customVocabularyEnabled") }
+    }
+
+    /// Upgrade value for `customVocabularyEnabled`: what the engine in use did
+    /// before the one switch. Only WhisperKit was gated, by its own prompt flag.
+    static func initialCustomVocabularyEnabled(
+        whisperKitPromptEnabled: Bool,
+        hasVocabularyFile: Bool,
+        whisperKit: Bool,
+    ) -> Bool {
+        whisperKit ? whisperKitPromptEnabled : hasVocabularyFile
     }
 
     func updateWhisperKitCustomModelFolder(path: String, bookmark: Data?) {
@@ -821,7 +832,19 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
         customVocabularyBookmark = defaults.data(forKey: "customVocabularyBookmark")
-        whisperKitVocabularyPromptEnabled = defaults.bool(forKey: "whisperKitVocabularyPromptEnabled", default: false)
+        if let stored = defaults.flag(forKey: "customVocabularyEnabled") {
+            customVocabularyEnabled = stored
+        } else {
+            let storedEngine = defaults.string(forKey: "transcriptionEngine")
+                .flatMap(TranscriptionEngineSetting.init(rawValue:)) ?? .whisperKit
+            let derived = Self.initialCustomVocabularyEnabled(
+                whisperKitPromptEnabled: defaults.bool(forKey: "whisperKitVocabularyPromptEnabled", default: false),
+                hasVocabularyFile: !(defaults.string(forKey: "customVocabularyPath") ?? "").isEmpty,
+                whisperKit: storedEngine == .whisperKit,
+            )
+            customVocabularyEnabled = derived
+            defaults.set(derived, forKey: "customVocabularyEnabled")
+        }
         let savedTerminologyRules = defaults.string(forKey: "terminologyRulesText") ?? ""
         terminologyRulesText = savedTerminologyRules
         terminologyRulesValidation = TerminologyNormalizer(rulesText: savedTerminologyRules).diagnostics

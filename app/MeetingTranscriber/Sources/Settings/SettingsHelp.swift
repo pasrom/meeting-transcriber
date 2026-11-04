@@ -99,4 +99,11 @@ enum SettingsHelp {
         "How long the condition must last before the indicator turns red and, for a channel " +
         "that has stopped delivering, before you are notified. Lower reacts faster to a dead " +
         "channel; higher ignores natural speaking pauses."
+
+    static let customVocabulary =
+        "Helps transcription recognize the names and terms listed in your vocabulary file."
+
+    static let customVocabularyWhisperKit = customVocabulary + "\n\n"
+        + "Experimental with WhisperKit: on busy audio it can leave out whole sentences. "
+        + "Parakeet is the better engine for vocabulary."
 }
