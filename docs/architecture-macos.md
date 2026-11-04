@@ -103,7 +103,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/GeneralSettingsView.swift` | Startup (Launch at login, Start watching when the app opens = `AppSettings.autoWatch`) · Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack) · Detection (Poll Interval, Grace Period) |
 | `Settings/AudioSettingsView.swift` | Microphone device · VAD (enabled + threshold) · Per-Channel Indicator |
 | `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Vocabulary section · Live transcription (PoC) toggle |
-| `Settings/SpeakersSettingsView.swift` | Diarization · Mic Speaker Name · Known Voices · Recognition Stats · Experimental Diarization Tuning |
+| `Settings/SpeakersSettingsView.swift` | Diarization · Speaker Naming (open the naming window automatically) · Mic Speaker Name · Known Voices · Recognition Stats · Experimental Diarization Tuning |
 | `Settings/OutputSettingsView.swift` | LLM provider · notes language · output folder · custom prompt |
 | `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics |
 | `Settings/AboutSettingsView.swift` | Version · bundle identifier · build date · ffmpeg status · project link · Updates |
@@ -589,7 +589,7 @@ When dual-source recording (app + mic) is available:
 
 ### Speaker Naming UI
 
-`SpeakerNamingView` shown when diarization finds speakers. Each row shows label, auto-matched name, speaking time, and audio playback. All rows are editable. Supports re-run with different speaker count.
+`SpeakerNamingView` shown when diarization finds speakers: by itself while "Open naming window automatically" (`AppSettings.autoOpenSpeakerNaming`) is on, otherwise when the user opens it from "Name Speakers…" in the menu bar. Each row shows label, auto-matched name, speaking time, and audio playback. All rows are editable. Supports re-run with different speaker count.
 
 ---
 

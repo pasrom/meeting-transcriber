@@ -283,9 +283,8 @@ final class PipelineController {
     ///
     /// Wiring only; `rebuild` owns the steps that make a queue live.
     ///
-    /// Not free of effect even so: a `PipelineQueue` takes the output folder's
-    /// security scope in its initialiser and holds it for its lifetime, so a
-    /// queue built and dropped takes and releases one.
+    /// Not free of effect even so: a `PipelineQueue` takes the output folder's security scope
+    /// in its initialiser and holds it for its lifetime, so a queue built and dropped takes and releases one.
     func makeQueue() -> PipelineQueue? {
         guard let engine = engineProvider?() else { return nil }
         return PipelineQueue(
@@ -293,15 +292,15 @@ final class PipelineController {
             diarizationFactory: { [self] in makeFluidDiarizer(mode: settings.diarizerMode) },
             diarizationFactoryWithMode: { [self] mode in makeFluidDiarizer(mode: mode) },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
-            // Captured by value: this is the moment the destination of every job
-            // this queue will run is decided, so a fallback is reported here and
-            // not from `effectiveOutputDir`, which `body` reads on every render.
+            // Captured by value: this is the moment the destination of every job this queue will run is
+            // decided, so a fallback is reported here and not from `effectiveOutputDir`, which `body` reads on every render.
             outputDir: queueEnvironment.resolveOutputDir(outputDirectory),
             logDir: queueEnvironment.logDir,
             stagingDir: queueEnvironment.stagingDir,
             diarizeEnabled: settings.diarize,
             echoDedupEnabled: settings.echoDedupEnabled,
             echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },
+            autoOpenSpeakerNaming: { [settings] in settings.autoOpenSpeakerNaming },
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName,
             includeFullTranscriptInProtocol: settings.includeFullTranscriptInProtocol,
@@ -395,6 +394,7 @@ final class PipelineController {
                 break
             }
         }
+        queue.onSpeakerNamesWaiting = { [notifier] in notifier.notify(title: "Name Speakers", body: PipelineQueue.speakerNamesWaitingMessage($0)) }
         queue.onUnusableVoices = { [notifier] job, names in
             notifier.notify(title: "Voice not saved", body: PipelineQueue.unusableVoicesMessage(names, in: job))
         }

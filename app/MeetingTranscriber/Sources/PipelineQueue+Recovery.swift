@@ -191,12 +191,9 @@ extension PipelineQueue {
         cleanupStalePending()
         logger.info("Restored \(loaded.count) jobs from snapshot")
         triggerProcessing()
-        // Auto-popup the naming dialog if any restored job is still
-        // waiting for confirmation. Same notification as the in-pipeline
-        // pop, so MeetingTranscriberApp brings the window forward.
-        if !pendingSpeakerNamingJobs.isEmpty {
-            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
-        }
+        // Restored jobs still waiting for names: the window, or with auto-open
+        // off a notification, since they never make the transition again.
+        announceRestoredSpeakerNaming()
     }
 
     /// What to do with each job that was interrupted mid-run, decided before

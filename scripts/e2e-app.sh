@@ -1773,6 +1773,8 @@ _NC_PRE_DIARIZE_STD=""
 _NC_PRE_DIARIZE_CTR=""
 _NC_PRE_NUMSPK_STD=""
 _NC_PRE_NUMSPK_CTR=""
+_NC_PRE_AUTOOPEN_STD=""
+_NC_PRE_AUTOOPEN_CTR=""
 # Temp dir holding this lane's private COPY of the fixture (see run_naming_confirm
 # for why a copy is mandatory). Cleaned up by _naming_confirm_cleanup on any exit.
 _NC_FIXTURE_DIR=""
@@ -1875,9 +1877,11 @@ _naming_confirm_cleanup() {
     # write -int for numSpeakers (a raw 1/0 into `-bool` errors; see the helpers).
     restore_bool_default "$_STANDARD_PLIST" diarize "$_NC_PRE_DIARIZE_STD"
     restore_int_default "$_STANDARD_PLIST" numSpeakers "$_NC_PRE_NUMSPK_STD"
+    restore_bool_default "$_STANDARD_PLIST" autoOpenSpeakerNaming "$_NC_PRE_AUTOOPEN_STD"
     if [ -f "$_CONTAINER_PLIST" ]; then
         restore_bool_default "$_CONTAINER_PLIST" diarize "$_NC_PRE_DIARIZE_CTR"
         restore_int_default "$_CONTAINER_PLIST" numSpeakers "$_NC_PRE_NUMSPK_CTR"
+        restore_bool_default "$_CONTAINER_PLIST" autoOpenSpeakerNaming "$_NC_PRE_AUTOOPEN_CTR"
     fi
     local now_diarize now_num
     now_diarize="$(read_dev_default_effective "$DEV_BUNDLE_ID" "$_CONTAINER_PLIST" diarize)"
@@ -1899,13 +1903,17 @@ if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] || [ "$NAMING_SWI
     # restores each domain to exactly its own pre-lane state.
     _NC_PRE_DIARIZE_STD="$(snapshot_default "$_STANDARD_PLIST" diarize)"
     _NC_PRE_NUMSPK_STD="$(snapshot_default "$_STANDARD_PLIST" numSpeakers)"
+    _NC_PRE_AUTOOPEN_STD="$(snapshot_default "$_STANDARD_PLIST" autoOpenSpeakerNaming)"
     if [ -f "$_CONTAINER_PLIST" ]; then
         _NC_PRE_DIARIZE_CTR="$(snapshot_default "$_CONTAINER_PLIST" diarize)"
         _NC_PRE_NUMSPK_CTR="$(snapshot_default "$_CONTAINER_PLIST" numSpeakers)"
+        _NC_PRE_AUTOOPEN_CTR="$(snapshot_default "$_CONTAINER_PLIST" autoOpenSpeakerNaming)"
     fi
     log "[naming-confirm] pre-lane diarize(std='$_NC_PRE_DIARIZE_STD' ctr='$_NC_PRE_DIARIZE_CTR') numSpeakers(std='$_NC_PRE_NUMSPK_STD' ctr='$_NC_PRE_NUMSPK_CTR')"
     _set_dev_default diarize true bool
     _set_dev_default numSpeakers "$_NAMING_NUM_SPEAKERS" int
+    # The naming lanes wait for the window to open by itself.
+    _set_dev_default autoOpenSpeakerNaming true bool
     if [ "${GITHUB_ACTIONS:-}" != "true" ] && [ "$NAMING_ESCAPE" != true ]; then
         # Escape-lane runs never confirm — they dismiss — so nothing reaches
         # updateSpeakerDB and the warning would be a false alarm on the one run

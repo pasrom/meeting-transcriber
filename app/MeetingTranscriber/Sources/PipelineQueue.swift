@@ -115,6 +115,17 @@ class PipelineQueue {
         isEchoCancellationEnabled()
     }
 
+    /// Pop the naming window when a job reaches `.speakerNamingPending`
+    /// (`AppSettings.autoOpenSpeakerNaming`). Read through a closure for the
+    /// same reason as `isEchoCancellationEnabled`: the queue outlives a
+    /// Settings change. Only the automatic pops ask; a window the user opens,
+    /// or one a late re-run they started returns to, opens regardless.
+    private let isSpeakerNamingAutoOpenEnabled: () -> Bool
+
+    var autoOpensSpeakerNaming: Bool {
+        isSpeakerNamingAutoOpenEnabled()
+    }
+
     /// Produces the canceller for a run, or nil when no model can be resolved.
     ///
     /// Stored non-optional with the production resolution as its default, so
@@ -223,6 +234,11 @@ class PipelineQueue {
     /// DB because their voice sample was unusable (NaN/Inf embedding), at
     /// most once per name and job — for notifications.
     var onUnusableVoices: ((PipelineJob, [String]) -> Void)?
+    /// Called instead of opening the naming window when auto-open is off
+    /// (`AppSettings.autoOpenSpeakerNaming`): with the meeting that just
+    /// started waiting for names, or on launch with all that were already
+    /// waiting — for notifications.
+    var onSpeakerNamesWaiting: (([PipelineJob]) -> Void)?
     /// Names `onUnusableVoices` already reported, per job. A job can be
     /// confirmed more than once (late naming, re-runs): the same name needs
     /// telling once, a newly affected one still does.
@@ -356,6 +372,7 @@ class PipelineQueue {
         inFlightRuns: InFlightRunRegistry? = nil,
         echoCancellationEnabled: @escaping () -> Bool = { false },
         echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
+        autoOpenSpeakerNaming: @escaping () -> Bool = { true },
     ) {
         self.logDir = logDir
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
@@ -372,6 +389,7 @@ class PipelineQueue {
         echoDedupEnabled = true
         isEchoCancellationEnabled = echoCancellationEnabled
         self.echoCancellerFactory = echoCancellerFactory ?? { Self.bundledEchoCanceller() }
+        isSpeakerNamingAutoOpenEnabled = autoOpenSpeakerNaming
         self.numSpeakers = 0
         self.micLabel = "Me"
         let outputOptions = TranscriptOutputOptions(
@@ -461,6 +479,29 @@ class PipelineQueue {
             + "or too quiet to remember, so it will not be recognised next time. The transcript keeps the name."
     }
 
+    /// On snapshot restore: brings jobs that still wait for names to the user,
+    /// by the naming window (the same post as after processing, which
+    /// `MeetingTranscriberApp` brings forward) or, with auto-open off, by
+    /// `onSpeakerNamesWaiting`. A job restored already pending never makes the
+    /// `.speakerNamingPending` transition again, so this is its only prompt.
+    func announceRestoredSpeakerNaming() {
+        let waiting = pendingSpeakerNamingJobs
+        guard !waiting.isEmpty else { return }
+        if autoOpensSpeakerNaming {
+            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+        } else {
+            onSpeakerNamesWaiting?(waiting)
+        }
+    }
+
+    /// Notification text for `onSpeakerNamesWaiting`.
+    static func speakerNamesWaitingMessage(_ jobs: [PipelineJob]) -> String {
+        let what = jobs.count == 1
+            ? "\"\(jobs[0].meetingTitle)\" is waiting for speaker names."
+            : "\(jobs.count) meetings are waiting for speaker names."
+        return what + " Open Name Speakers... in the menu bar."
+    }
+
     /// Full init with all processing dependencies.
     init(
         engine: any TranscribingEngine,
@@ -474,6 +515,7 @@ class PipelineQueue {
         echoDedupEnabled: Bool = true,
         echoCancellationEnabled: @escaping () -> Bool = { false },
         echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
+        autoOpenSpeakerNaming: @escaping () -> Bool = { true },
         numSpeakers: Int = 0,
         micLabel: String = "Me",
         includeFullTranscriptInProtocol: Bool = true,
@@ -507,6 +549,7 @@ class PipelineQueue {
         self.echoDedupEnabled = echoDedupEnabled
         isEchoCancellationEnabled = echoCancellationEnabled
         self.echoCancellerFactory = echoCancellerFactory ?? { Self.bundledEchoCanceller() }
+        isSpeakerNamingAutoOpenEnabled = autoOpenSpeakerNaming
         self.numSpeakers = numSpeakers
         // "Remote" is the reserved routing tag for the app/remote track
         // (DiarizationProcess.remoteSpeakerLabel). If the user names the mic

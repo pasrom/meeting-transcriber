@@ -786,6 +786,25 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertEqual(notifier.calls[0].body, "Sprint Review")
     }
 
+    /// With auto-open off this notification is the only prompt for a meeting
+    /// waiting for names.
+    func testConfigureCallbacksSpeakerNamesWaitingFiresNotification() throws {
+        let tmpDir = try makeTempDirectory(prefix: "appstate_names_waiting")
+        let (state, notifier) = makeIsolatedState(logDir: tmpDir)
+        state.pipeline.configureCallbacks()
+
+        state.pipeline.queue.onSpeakerNamesWaiting?([makeJob(title: "Sprint Review")])
+        state.pipeline.queue.onSpeakerNamesWaiting?([makeJob(title: "Sprint Review"), makeJob(title: "Standup")])
+
+        XCTAssertEqual(notifier.calls.map(\.title), ["Name Speakers", "Name Speakers"])
+        guard notifier.calls.count == 2 else { return }
+        XCTAssertEqual(
+            notifier.calls[0].body,
+            "\"Sprint Review\" is waiting for speaker names. Open Name Speakers... in the menu bar.",
+        )
+        XCTAssertEqual(notifier.calls[1].body, "2 meetings are waiting for speaker names. Open Name Speakers... in the menu bar.")
+    }
+
     func testConfigureCallbacksNotionOnlyProtocolFiresProtocolNotification() throws {
         let tmpDir = try makeTempDirectory(prefix: "appstate_notion_callbacks")
         let (state, notifier) = makeIsolatedState(logDir: tmpDir)
@@ -996,6 +1015,14 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         state.settings.diarize = true
         let queue = try XCTUnwrap(state.pipeline.makeQueue())
         XCTAssertTrue(queue.diarizeEnabled)
+    }
+
+    /// Off, the value other than the default: with the default this would pass
+    /// even if `makeQueue()` dropped the setting.
+    func testMakeQueueUsesAutoOpenSpeakerNamingFromSettings() throws {
+        let (state, _) = makeState()
+        state.settings.autoOpenSpeakerNaming = false
+        XCTAssertFalse(try XCTUnwrap(state.pipeline.makeQueue()).autoOpensSpeakerNaming)
     }
 
     func testMakeQueueUsesMicLabelFromSettings() throws {
