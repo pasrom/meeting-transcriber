@@ -505,14 +505,16 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(customVocabularyBookmark, forKey: "customVocabularyBookmark") }
     }
 
-    /// Whether any engine reads the vocabulary file: Parakeet's CTC boosting and
-    /// WhisperKit's experimental prompt, which can reduce transcript completeness.
+    /// Whether any engine reads the vocabulary file: Parakeet's CTC boosting, the
+    /// cloud prompt and WhisperKit's experimental prompt, which can reduce
+    /// transcript completeness.
     var customVocabularyEnabled: Bool {
         didSet { defaults.set(customVocabularyEnabled, forKey: "customVocabularyEnabled") }
     }
 
-    /// Upgrade value for `customVocabularyEnabled`: what the engine in use did
-    /// before the one switch. Only WhisperKit was gated, by its own prompt flag.
+    /// Upgrade value for `customVocabularyEnabled`: what the method in use did
+    /// before the one switch. Only local WhisperKit was gated, by its own prompt flag;
+    /// with cloud on, `whisperKit` is false.
     static func initialCustomVocabularyEnabled(
         whisperKitPromptEnabled: Bool,
         hasVocabularyFile: Bool,
@@ -1033,7 +1035,8 @@ final class AppSettings { // swiftlint:disable:this type_body_length
             let derived = Self.initialCustomVocabularyEnabled(
                 whisperKitPromptEnabled: defaults.bool(forKey: "whisperKitVocabularyPromptEnabled", default: false),
                 hasVocabularyFile: !(defaults.string(forKey: "customVocabularyPath") ?? "").isEmpty,
-                whisperKit: storedEngine == .whisperKit,
+                whisperKit: storedEngine == .whisperKit
+                    && !defaults.bool(forKey: "cloudTranscriptionEnabled", default: false),
             )
             customVocabularyEnabled = derived
             defaults.set(derived, forKey: "customVocabularyEnabled")

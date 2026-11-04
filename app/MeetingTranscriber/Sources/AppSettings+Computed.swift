@@ -57,7 +57,7 @@ extension AppSettings {
             model: cloudTranscriptionModel,
             apiKey: cloudTranscriptionAPIKey,
             language: cloudTranscriptionLanguageOrNil,
-            vocabularyTerms: customVocabularyTerms,
+            vocabularyTerms: customVocabularyEnabled ? customVocabularyTerms : [],
         )
     }
 

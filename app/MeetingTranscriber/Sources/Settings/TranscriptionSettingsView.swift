@@ -527,12 +527,12 @@ extension TranscriptionSettingsView {
         .recordOnlyDisabled(settings.recordOnly)
     }
 
-    /// WhisperKit's help adds the experimental warning: it is the engine where the
-    /// vocabulary can cost completeness.
+    /// Local WhisperKit's help adds the experimental warning: it is the one method
+    /// where the vocabulary can cost completeness.
     private var customVocabularyToggle: some View {
         HelpfulToggle(
             title: "Use custom vocabulary",
-            help: settings.transcriptionEngine == .whisperKit
+            help: !settings.cloudTranscriptionEnabled && settings.transcriptionEngine == .whisperKit
                 ? SettingsHelp.customVocabularyWhisperKit
                 : SettingsHelp.customVocabulary,
             isOn: $settings.customVocabularyEnabled,
