@@ -51,8 +51,9 @@ struct GeneralSettingsView: View {
                 Text(
                     """
                     Detects web meetings (Google Meet, Whereby, web Zoom/Teams) by the WebRTC \
-                    signal, so any browser works. Other apps that place calls can trigger it too; \
-                    it always asks before recording, and "Never for this app" stops one for good.
+                    signal in Chromium browsers and by microphone use in Safari. Other apps that \
+                    place calls, or a page that only uses the microphone, can trigger it too; it \
+                    always asks before recording, and "Never for this app" stops one for good.
                     """,
                 )
                 .font(.caption)

@@ -217,7 +217,9 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(watchWebex, forKey: "watchWebex") }
     }
 
-    /// Watch for browser-based meetings (Chromium browsers / WebRTC), issue #503.
+    /// Watch for browser-based meetings, issue #503: Chromium browsers by their
+    /// WebRTC power assertion, Safari by its WebKit GPU process holding the mic
+    /// (`MicInputDetector.safariPatterns`).
     /// Off by default — opt-in, and browser meetings prompt before recording
     /// (the WebRTC signal isn't meeting-exclusive), unlike native auto-start.
     var watchBrowserMeetings: Bool {
