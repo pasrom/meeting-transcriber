@@ -612,7 +612,8 @@ is a maintainer call this plan does not make.
   the next fork, which is the point of process-open matching.
 - **No Firefox or Safari meeting detection.** Both are outside the Chromium
   content layer; Safari call audio capture is a separate, already-shipped
-  concern.
+  concern. (Later: Safari meetings are now detected on the mic-input channel;
+  see `docs/architecture/detection.md`.)
 - **No per-app auto-record.** Every non-denied app prompts per meeting, by
   design (the WebRTC signal is not meeting-exclusive). An explicit per-app
   "record without asking" setting would be a new feature with its own
