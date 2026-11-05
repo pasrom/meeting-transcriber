@@ -59,15 +59,9 @@ struct GeneralSettingsView: View {
                 customApps
                 Toggle("Browser Web Meetings", isOn: $settings.watchBrowserMeetings)
                     .accessibilityIdentifier(A11yID.watchBrowserToggle)
-                Text(
-                    """
-                    Detects web meetings (Google Meet, Whereby, web Zoom/Teams) by the WebRTC \
-                    signal, so any browser works. Other apps that place calls can trigger it too; \
-                    it always asks before recording, and "Never for this app" stops one for good.
-                    """,
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text(Self.browserMeetingsCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 browserConsentWarning
                 consentDenyList
             }
@@ -175,6 +169,24 @@ struct GeneralSettingsView: View {
         }
         return refusals
     }
+
+    /// The Browser Web Meetings caption. Safari is named only where it is
+    /// detected: the App Store build cannot attribute WebKit's GPU process to
+    /// Safari (`MicInputDetector.patterns(watching:)`).
+    #if APPSTORE
+        static let browserMeetingsCaption = """
+        Detects web meetings (Google Meet, Whereby, web Zoom/Teams) in Chromium browsers \
+        by the WebRTC signal. Other apps that place calls can trigger it too; it always \
+        asks before recording, and "Never for this app" stops one for good.
+        """
+    #else
+        static let browserMeetingsCaption = """
+        Detects web meetings (Google Meet, Whereby, web Zoom/Teams) by the WebRTC signal \
+        in Chromium browsers and by microphone use in Safari. Other apps that place calls, \
+        or a page that only uses the microphone, can trigger it too; it always asks before \
+        recording, and "Never for this app" stops one for good.
+        """
+    #endif
 
     static func watchRefusal(
         name: String,

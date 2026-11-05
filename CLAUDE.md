@@ -194,6 +194,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **OpenAI API** | Yes | Yes (only LLM option) |
 | **Debug RPC server** | Yes (off by default; Settings toggle or env flag) | No (`#if !APPSTORE`) |
 | **Safari call audio** | Yes (`ProcessResponsibility` via `dlsym`) | No (private symbol unavailable; bundle-derived PIDs only) |
+| **Safari meeting detection** | Yes (WebKit GPU process attributed to Safari via `ProcessResponsibility`) | No (Safari patterns compiled out of `MicInputDetector.patterns(watching:)`; same private symbol) |
 | **Accessibility (Teams names)** | Optional, prompted at watch start | Not applicable: never prompted or reported, no Settings row, no roster read (`PermissionHealthCheck.accessibilityApplies`) |
 | **Chromium helper selection** | Yes (`ChromiumHelperFilter` reads argv via `KERN_PROCARGS2`) | Not measured: if the sandbox refuses the sysctl for other processes, every argv reads empty and the tap keeps all helpers (the issue #791 stall); the refusal is logged with its errno |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker + app-scoped bookmarks |

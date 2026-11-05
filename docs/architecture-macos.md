@@ -144,7 +144,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `MeetingTitleMatcher.swift` | Compiled idle/meeting title regex semantics for one `AppMeetingPattern` |
 | `PowerAssertionDetector.swift` | IOKit power assertion–based meeting detection (sandbox-safe); carries the Chrome WebRTC pattern for browser meetings (issue #503) |
 | `PowerAssertionDetector+Diagnostics.swift` | "Saw something that looks like a meeting and did not act on it" diagnostic, split out of `PowerAssertionDetector` (line-cap) |
-| `MicInputDetector.swift` | Third `MeetingDetecting` strategy: watches which processes hold `kAudioProcessPropertyIsRunningInput` via the Core Audio process-object API — covers call apps (WeChat, Tencent Meeting, FaceTime, WhatsApp, Slack Huddles) with no reliable power-assertion signal; each app opt-in and off by default |
+| `MicInputDetector.swift` | Third `MeetingDetecting` strategy: watches which processes hold `kAudioProcessPropertyIsRunningInput` via the Core Audio process-object API — covers call apps (WeChat, Tencent Meeting, FaceTime, WhatsApp, Slack Huddles) with no reliable power-assertion signal; each app opt-in and off by default. Also carries Safari browser meetings (WebKit GPU process attributed to Safari), selected by Browser Web Meetings and consent-gated |
 | `MeetingPatterns.swift` | Regex patterns for Teams, Zoom, Webex, browser (Chrome WebRTC) |
 | `BrowserConsentPolicy.swift` | Pure decision logic for the browser-meeting "ask before recording" prompt — decline cooldown (issue #503) |
 | `ConsentAnswer.swift` | Three-way outcome of a consent prompt (yes / no / unanswered) — kept distinct from a `Bool` so a decline and a timeout get different re-prompt cooldowns (issue #543) |
@@ -742,7 +742,7 @@ AppSettings (UserDefaults)
 |-----------|----------------|
 | MeetingDetector | `windowListProvider` closure (mock window list) |
 | PowerAssertionDetector | `assertionProvider` + `windowListProvider` closures |
-| MicInputDetector | `processProvider` + `windowListProvider` closures |
+| MicInputDetector | `processProvider` + `windowListProvider` + `responsibleAppProvider` closures |
 | DiarizationProvider | `diarizationFactory` closure in PipelineQueue |
 | ProtocolGenerating | `protocolGenerator` protocol in PipelineQueue |
 | RecordingProvider | `recorderFactory` closure in WatchLoop |
