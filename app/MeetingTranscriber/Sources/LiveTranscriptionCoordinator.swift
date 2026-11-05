@@ -89,7 +89,10 @@ final class LiveTranscriptionCoordinator {
         self.warmupQueue = warmupQueue
     }
 
-    private static func makeDefaultController(
+    /// The real controller, whose `prepare()` loads the speaker-matcher, VAD and
+    /// streaming-ASR CoreML models. Not private: `AppState.init` defaults its
+    /// `liveControllerFactory` to it.
+    static func makeDefaultController(
         engine: (any StreamingTranscribingEngine)?,
         captions: LiveCaptionsState,
         engineLanguage: String?,

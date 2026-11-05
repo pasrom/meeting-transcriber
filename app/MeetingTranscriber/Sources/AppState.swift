@@ -224,11 +224,16 @@ final class AppState {
 
     // MARK: - Init
 
+    /// `liveControllerFactory` builds the controller the live-caption prewarm
+    /// loads. Tests with live captions on pass one that loads no models: the real
+    /// load outlives the test, and its CoreML compiles can crash a later class.
     init(
         pipelineEnvironment: PipelineController.QueueEnvironment,
         settings: AppSettings = AppState.makeDefaultSettings(),
         notifier: any AppNotifying = SilentNotifier(),
         updateChecker: UpdateChecker? = nil,
+        liveControllerFactory: @escaping LiveTranscriptionCoordinator.ControllerFactory =
+            LiveTranscriptionCoordinator.makeDefaultController,
     ) {
         // Dependency defaults are resolved through explicitly-typed factory
         // helpers (above) rather than inline `?? SomeType()` expressions (and an
@@ -262,6 +267,7 @@ final class AppState {
             engineSupportsLive: { [settings] in settings.transcriptionEngine.supportsLiveTranscription },
             engineLanguage: { [settings] in settings.activeEngineLanguageOrNil },
             verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
+            makeController: liveControllerFactory,
             warmupQueue: warmupQueue,
         )
         self.watching = WatchingController(
@@ -590,11 +596,4 @@ final class AppState {
             pid: Int(ProcessInfo.processInfo.processIdentifier),
         )
     }
-}
-
-// MARK: - SilentNotifier
-
-/// No-op notifier for CLI targets and tests that don't need notifications.
-struct SilentNotifier: AppNotifying {
-    func notify(title _: String, body _: String, urgency _: NotificationUrgency) {}
 }
