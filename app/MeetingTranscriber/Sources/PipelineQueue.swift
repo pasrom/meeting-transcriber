@@ -115,6 +115,17 @@ class PipelineQueue {
         isEchoCancellationEnabled()
     }
 
+    /// Pop the naming window when a job reaches `.speakerNamingPending`
+    /// (`AppSettings.autoOpenSpeakerNaming`). Read through a closure for the
+    /// same reason as `isEchoCancellationEnabled`: the queue outlives a
+    /// Settings change. Only the automatic pops ask; a window the user opens,
+    /// or one a late re-run they started returns to, opens regardless.
+    private let isSpeakerNamingAutoOpenEnabled: () -> Bool
+
+    var autoOpensSpeakerNaming: Bool {
+        isSpeakerNamingAutoOpenEnabled()
+    }
+
     /// Produces the canceller for a run, or nil when no model can be resolved.
     ///
     /// Stored non-optional with the production resolution as its default, so
@@ -356,6 +367,7 @@ class PipelineQueue {
         inFlightRuns: InFlightRunRegistry? = nil,
         echoCancellationEnabled: @escaping () -> Bool = { false },
         echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
+        autoOpenSpeakerNaming: @escaping () -> Bool = { true },
     ) {
         self.logDir = logDir
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
@@ -372,6 +384,7 @@ class PipelineQueue {
         echoDedupEnabled = true
         isEchoCancellationEnabled = echoCancellationEnabled
         self.echoCancellerFactory = echoCancellerFactory ?? { Self.bundledEchoCanceller() }
+        isSpeakerNamingAutoOpenEnabled = autoOpenSpeakerNaming
         self.numSpeakers = 0
         self.micLabel = "Me"
         let outputOptions = TranscriptOutputOptions(
@@ -474,6 +487,7 @@ class PipelineQueue {
         echoDedupEnabled: Bool = true,
         echoCancellationEnabled: @escaping () -> Bool = { false },
         echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
+        autoOpenSpeakerNaming: @escaping () -> Bool = { true },
         numSpeakers: Int = 0,
         micLabel: String = "Me",
         includeFullTranscriptInProtocol: Bool = true,
@@ -507,6 +521,7 @@ class PipelineQueue {
         self.echoDedupEnabled = echoDedupEnabled
         isEchoCancellationEnabled = echoCancellationEnabled
         self.echoCancellerFactory = echoCancellerFactory ?? { Self.bundledEchoCanceller() }
+        isSpeakerNamingAutoOpenEnabled = autoOpenSpeakerNaming
         self.numSpeakers = numSpeakers
         // "Remote" is the reserved routing tag for the app/remote track
         // (DiarizationProcess.remoteSpeakerLabel). If the user names the mic

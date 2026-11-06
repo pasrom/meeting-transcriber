@@ -95,6 +95,7 @@ enum A11yID {
     static let echoCancellationToggle = "echoCancellationToggle"
     static let echoDedupToggle = "echoDedupToggle"
     static let diarizationSection = "diarizationSection"
+    static let autoOpenSpeakerNamingToggle = "autoOpenSpeakerNamingToggle"
     static let liveTranscriptionSection = "liveTranscriptionSection"
     static let liveCaptionsOverlayToggle = "liveCaptionsOverlayToggle"
     static let liveCaptionsSizePicker = "liveCaptionsSizePicker"

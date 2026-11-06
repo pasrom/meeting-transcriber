@@ -1029,8 +1029,11 @@ extension PipelineQueue {
             // Auto-pop the dialog now that the job is in the right state.
             // The window's onAppear guard reads pendingSpeakerNamingJobs,
             // which only includes .speakerNamingPending jobs, so the
-            // notification has to come after the transition above.
-            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+            // notification has to come after the transition above. With
+            // auto-open off the job just waits; the menu bar offers it.
+            if autoOpensSpeakerNaming {
+                NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+            }
             // Tests drive naming through an injected handler instead of the UI.
             // Re-invoke it here, after the `.speakerNamingPending` transition,
             // mirroring the late-rerun re-invocation, so the test path runs the

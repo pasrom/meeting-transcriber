@@ -544,6 +544,17 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(diarizerMode.rawValue, forKey: "diarizerMode") }
     }
 
+    /// Open the "Name Speakers" window by itself when a meeting is ready to be
+    /// named, after processing and again on launch for meetings still waiting.
+    /// On by default, which is how the app has always behaved. Off, the
+    /// meeting still waits for its names; the user opens the window from the
+    /// menu bar ("Name Speakers...") when it suits them, and the
+    /// "Name Speakers" notification is the only prompt. The 24 h stale
+    /// cleanup applies either way.
+    var autoOpenSpeakerNaming: Bool {
+        didSet { defaults.set(autoOpenSpeakerNaming, forKey: "autoOpenSpeakerNaming") }
+    }
+
     /// Number of expected speakers. 0 = auto-detect.
     var numSpeakers: Int {
         didSet {
@@ -890,6 +901,7 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         echoDedupEnabled = defaults.bool(forKey: "echoDedupEnabled", default: false)
         diarizerMode = (defaults.string(forKey: "diarizerMode")
             .flatMap(DiarizerMode.init(rawValue:))) ?? .offline
+        autoOpenSpeakerNaming = defaults.bool(forKey: "autoOpenSpeakerNaming", default: true)
         numSpeakers = defaults.object(forKey: "numSpeakers") as? Int ?? 0
 
         let t = Self.loadDiarizerTuning(from: defaults)

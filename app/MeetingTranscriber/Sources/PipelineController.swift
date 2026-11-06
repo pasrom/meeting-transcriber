@@ -283,9 +283,8 @@ final class PipelineController {
     ///
     /// Wiring only; `rebuild` owns the steps that make a queue live.
     ///
-    /// Not free of effect even so: a `PipelineQueue` takes the output folder's
-    /// security scope in its initialiser and holds it for its lifetime, so a
-    /// queue built and dropped takes and releases one.
+    /// Not free of effect even so: a `PipelineQueue` takes the output folder's security scope
+    /// in its initialiser and holds it for its lifetime, so a queue built and dropped takes and releases one.
     func makeQueue() -> PipelineQueue? {
         guard let engine = engineProvider?() else { return nil }
         return PipelineQueue(
@@ -302,6 +301,7 @@ final class PipelineController {
             diarizeEnabled: settings.diarize,
             echoDedupEnabled: settings.echoDedupEnabled,
             echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },
+            autoOpenSpeakerNaming: { [settings] in settings.autoOpenSpeakerNaming },
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName,
             includeFullTranscriptInProtocol: settings.includeFullTranscriptInProtocol,
