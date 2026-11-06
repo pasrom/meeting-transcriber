@@ -98,6 +98,7 @@ enum A11yID {
     static let notionRefreshButton = "notionRefreshButton"
     static let outputFolderSection = "outputFolderSection"
     static let vadSection = "vadSection"
+    static let staleNamingTimeoutPicker = "staleNamingTimeoutPicker"
     static let echoCancellationToggle = "echoCancellationToggle"
     static let echoDedupToggle = "echoDedupToggle"
     static let diarizationSection = "diarizationSection"

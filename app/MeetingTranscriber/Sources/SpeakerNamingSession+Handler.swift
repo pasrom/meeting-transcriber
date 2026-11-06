@@ -17,8 +17,8 @@ extension SpeakerNamingSession {
     /// way a user sees the dialog's message, and the RPC caller sees its 404.
     /// So a refused answer for a job still waiting is logged, put on the job as
     /// a warning, and then the auto-names are accepted for it: what the stale
-    /// cleanup would do a day later, without the job sitting pending, and
-    /// anything awaiting it, until then. A refusal because the job is no longer
+    /// cleanup would do once the user's `staleNamingTimeout` passes, without
+    /// the job sitting pending, and anything awaiting it, until then. A refusal because the job is no longer
     /// waiting needs no answer and is only logged.
     func invokeHandler(jobID: UUID, data: SpeakerNamingData) {
         guard let handler = speakerNamingHandler, delegate?.isStillQueued(jobID) ?? true else { return }

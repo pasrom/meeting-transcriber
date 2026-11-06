@@ -96,6 +96,19 @@ class PipelineQueue {
     /// without writing into the real user directory; see `AudioPersistencePolicy`.
     let stagingDir: URL
     let diarizeEnabled: Bool
+
+    /// How long a job may wait for its names before `cleanupStalePending()`
+    /// accepts the auto-names (`AppSettings.staleNamingTimeout`); nil keeps it
+    /// waiting. Read through a closure, like `isEchoCancellationEnabled`. Its
+    /// only caller today is the cleanup on snapshot restore, which runs right
+    /// after the queue is built, so in practice a change applies at the next
+    /// launch.
+    private let staleNamingMaxAgeProvider: () -> TimeInterval?
+
+    var staleNamingMaxAge: TimeInterval? {
+        staleNamingMaxAgeProvider()
+    }
+
     /// Leave loudspeaker copies out of the transcript (`AppSettings.echoDedupEnabled`).
     let echoDedupEnabled: Bool
 
@@ -369,6 +382,7 @@ class PipelineQueue {
         completedJobLifetime: TimeInterval = 60,
         notionExportConfigurationProvider: (() -> NotionExportResolution)? = nil,
         terminalJobStore: TerminalJobStore? = nil,
+        staleNamingMaxAge: @escaping () -> TimeInterval? = { StaleNamingTimeout.oneDay.maxAge },
         inFlightRuns: InFlightRunRegistry? = nil,
         echoCancellationEnabled: @escaping () -> Bool = { false },
         echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
@@ -386,6 +400,7 @@ class PipelineQueue {
         scopedOutputDir = nil
         self.stagingDir = stagingDir
         self.diarizeEnabled = false
+        staleNamingMaxAgeProvider = staleNamingMaxAge
         echoDedupEnabled = true
         isEchoCancellationEnabled = echoCancellationEnabled
         self.echoCancellerFactory = echoCancellerFactory ?? { Self.bundledEchoCanceller() }
@@ -512,6 +527,7 @@ class PipelineQueue {
         logDir: URL,
         stagingDir: URL = AppPaths.recordingsDir,
         diarizeEnabled: Bool = false,
+        staleNamingMaxAge: @escaping () -> TimeInterval? = { StaleNamingTimeout.oneDay.maxAge },
         echoDedupEnabled: Bool = true,
         echoCancellationEnabled: @escaping () -> Bool = { false },
         echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
@@ -546,6 +562,7 @@ class PipelineQueue {
         scopedOutputDir = securityScope.start(outputDir) ? outputDir : nil
         self.stagingDir = stagingDir
         self.diarizeEnabled = diarizeEnabled
+        staleNamingMaxAgeProvider = staleNamingMaxAge
         self.echoDedupEnabled = echoDedupEnabled
         isEchoCancellationEnabled = echoCancellationEnabled
         self.echoCancellerFactory = echoCancellerFactory ?? { Self.bundledEchoCanceller() }
@@ -824,7 +841,7 @@ class PipelineQueue {
         guard oldState != newState || error != nil else { return }
         jobs[index].state = newState
         if let error { jobs[index].error = error }
-        // The stale-naming day counts from the first entry, see
+        // The stale-naming wait counts from the first entry, see
         // `namingDeadlineStart`. Returning from a late re-diarization is the
         // same wait, not a new one.
         if newState == .speakerNamingPending, jobs[index].namingStartedAt == nil {
@@ -1150,11 +1167,19 @@ class PipelineQueue {
 
     // MARK: - Speaker Naming forwarders
 
-    /// Auto-resolve pending naming items older than maxAge (default: 24h).
+    /// Auto-resolve pending naming items older than the user's
+    /// `staleNamingTimeout` (one day unless changed); does nothing when it is
+    /// `.never`. Runs on snapshot restore.
+    func cleanupStalePending() {
+        guard let maxAge = staleNamingMaxAge else { return }
+        cleanupStalePending(maxAge: maxAge)
+    }
+
+    /// Auto-resolve pending naming items older than `maxAge`.
     /// Thin forwarder passing the queue's already-filtered
     /// `.speakerNamingPending` list to the session, which generates the protocol
     /// with auto-names, transitions them to .done, and deletes sidecar files.
-    func cleanupStalePending(maxAge: TimeInterval = 86400) {
+    func cleanupStalePending(maxAge: TimeInterval) {
         naming.cleanupStalePending(pendingJobs: pendingSpeakerNamingJobs, maxAge: maxAge)
     }
 

@@ -298,6 +298,7 @@ final class PipelineController {
             logDir: queueEnvironment.logDir,
             stagingDir: queueEnvironment.stagingDir,
             diarizeEnabled: settings.diarize,
+            staleNamingMaxAge: { [settings] in settings.staleNamingTimeout.maxAge },
             echoDedupEnabled: settings.echoDedupEnabled,
             echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },
             autoOpenSpeakerNaming: { [settings] in settings.autoOpenSpeakerNaming },
