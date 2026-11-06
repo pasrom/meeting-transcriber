@@ -185,11 +185,14 @@ case "select-job":
     // jobs without resolving either. Found by its identifier
     // (`A11yID.namingJobPicker`); the naming view holds no other pop-up
     // button, so the first one in the "Name Speakers" window is the fallback
-    // if the identifier does not reach the AX element. Other windows (Settings)
-    // have pop-ups of their own, so the fallback does not look there.
+    // if the identifier does not reach the AX element, or lands on a wrapping
+    // element rather than the pop-up itself. Other windows (Settings) have
+    // pop-ups of their own, so the fallback does not look there.
     guard let idxStr = argument("--index"), let idx = Int(idxStr) else { usage() }
     let popUpRole = kAXPopUpButtonRole as String
-    var picker = find(identifier: "naming-job-picker", in: app)?.0
+    var picker = find(identifier: "naming-job-picker", in: app)
+        .map(\.0)
+        .flatMap { string($0, kAXRoleAttribute) == popUpRole ? $0 : nil }
     for window in windows(of: app) where picker == nil && string(window, kAXTitleAttribute) == "Name Speakers" {
         walk(window) { element, _ in
             if string(element, kAXRoleAttribute) == popUpRole {
@@ -220,8 +223,15 @@ case "select-job":
         _ = AXUIElementPerformAction(picker, kAXCancelAction as CFString)
         fail(5, "job index \(idx) out of range (menu has \(items.count) items)")
     }
+    // `.cannotComplete` is accepted for the same reason as on the open press;
+    // the lane's entry count and the labels it then reads are the verdict, so
+    // a press that did nothing still fails there.
     let result = AXUIElementPerformAction(items[idx], kAXPressAction as CFString)
-    guard result == .success else { fail(8, "AXPress on menu item \(idx) failed: \(result.rawValue)") }
+    guard result == .success || result == .cannotComplete else {
+        // Close the menu so the app's main thread leaves menu tracking.
+        _ = AXUIElementPerformAction(picker, kAXCancelAction as CFString)
+        fail(8, "AXPress on menu item \(idx) failed: \(result.rawValue)")
+    }
     print("selected-job=\(idx) of=\(items.count)")
 
 case "read":
