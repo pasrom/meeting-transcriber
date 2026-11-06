@@ -125,6 +125,17 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         }
     }
 
+    func testAutoWatchToggleBindsToSettings() throws {
+        // The setting existed before it had a control; this pins the control.
+        let settings = makeSettings()
+        XCTAssertFalse(settings.autoWatch, "precondition: auto-watch defaults off")
+        let toggle = try makeGeneral(settings: settings).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.autoWatchToggle)
+            .toggle()
+        try toggle.tap()
+        XCTAssertTrue(settings.autoWatch, "tapping the toggle must turn auto-watch on")
+    }
+
     func testPollIntervalFieldExists() throws {
         let body = try makeGeneral().inspect()
         XCTAssertNoThrow(try body.find(text: "Poll Interval"))

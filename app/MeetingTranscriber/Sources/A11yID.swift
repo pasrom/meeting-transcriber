@@ -19,6 +19,10 @@ import Foundation
 enum A11yID {
     // Settings — section anchors + record-only controls.
     static let recordOnlyToggle = "recordOnlyToggle"
+    static let autoWatchToggle = "autoWatchToggle"
+    /// Stays off the `/ui/press` allowlist: a live press would add a real login item.
+    static let launchAtLoginToggle = "launchAtLoginToggle"
+    static let launchAtLoginHint = "launchAtLoginHint"
     static let watchBrowserToggle = "watchBrowserToggle"
     static let watchSlackToggle = "watchSlackToggle"
     static let browserConsentWarning = "browserConsentWarning"

@@ -100,7 +100,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `AudioImportTypes.swift` | File types offered by the batch-import and voice-enrollment `NSOpenPanel`s — single source of truth so the ffmpeg-gated vs. natively-decoded format lists stay pinned and testable |
 | `A11yID.swift` | Shared accessibility-identifier namespace — one constant per control, referenced by the view modifier, ViewInspector tests, and the `/ui/press` allowlist |
 | `SettingsView.swift` | Settings window — `TabView` shell hosting seven topic-grouped sub-views in `Sources/Settings/` |
-| `Settings/GeneralSettingsView.swift` | Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack) · Detection (Poll Interval, Grace Period) |
+| `Settings/GeneralSettingsView.swift` | Startup (Launch at login, Start watching when the app opens = `AppSettings.autoWatch`) · Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack) · Detection (Poll Interval, Grace Period) |
 | `Settings/AudioSettingsView.swift` | Microphone device · VAD (enabled + threshold) · Per-Channel Indicator |
 | `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Vocabulary section · Live transcription (PoC) toggle |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Mic Speaker Name · Known Voices · Recognition Stats · Experimental Diarization Tuning |
@@ -120,6 +120,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `AppSettings+Vocabulary.swift` | Custom-vocabulary file selection, sandbox bookmark resolution, and validation state — shared by both ASR engines |
 | `AppSettings+TerminologyRules.swift` | Optional terminology-rules file: selection, bookmark, per-job read and the Settings status; the text area remains the default source |
 | `LegacyDefaultsMigration.swift` | One-shot carry-over of settings from the pre-rename bundle identifier, since `UserDefaults` is scoped per identifier |
+| `LoginItemController.swift` | Launch at login via `SMAppService.mainApp`, behind `LoginItemRegistering` so tests use a fake. Deliberately not an `AppSettings` value: macOS owns the status and the user can change it in System Settings → Login Items, so the General tab re-reads it on appear, on app activation and after every register/unregister (a refresh also drops an earlier error). Never press it live or register from a test, which would add a real login item; the toggle is off the `/ui/press` allowlist for that reason |
 | `UpdateChecker.swift` | Checks GitHub releases for newer versions, drives the menu bar update badge |
 | `Settings/PickerLanguages.swift` | Language picker entries for WhisperKit and Parakeet language selectors |
 | `LiveCaptionsState.swift` | `@Observable` live-captions state (per-channel hypotheses + finalised utterances) + RPC-wire types |
