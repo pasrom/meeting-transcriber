@@ -27,6 +27,9 @@ Concurrency, audio loading, job restore, protocol generation, record-only mode a
 **Retrying a failed job:**
 - **The menu offers Retry from state alone, never from a file check.** `canRetryJob` runs in the view body on every render, and the recording can sit on a network or removable volume where `fileExists` blocks the main thread. `retryJob` checks the file itself on every click; one that finds it gone adds a fixed sentence to the job's error text (once) and changes nothing else, and the offer stays, so a volume that comes back is retryable. See the comments on `canRetryJob`.
 
+**Unnamed meetings on launch:**
+- **A meeting left waiting for names longer than `AppSettings.staleNamingTimeout` gets the automatic names at the next launch.** `loadSnapshot` runs `cleanupStalePending()`, which reads the timeout through a closure (`staleNamingMaxAge`, wired in `PipelineController.makeQueue`) and accepts the auto-names for every `.speakerNamingPending` job whose wait, counted from `namingDeadlineStart`, is longer: 1 day (the default, and the only value before the setting existed), 7 days, or never. It runs only on launch, so a meeting is resolved at the first start after its time is up, not the moment it expires. `cleanupStalePending(maxAge:)` is the ungated form tests use.
+
 **Protocol generation:**
 - `ProtocolGenerating` protocol with two implementations: `ClaudeCLIProtocolGenerator` and `OpenAIProtocolGenerator`.
 - `AppSettings.protocolProvider` enum (`.claudeCLI` / `.openAICompatible` / `.none`) selects the provider. `.none` skips LLM generation and saves the transcript only.

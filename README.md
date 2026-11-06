@@ -252,7 +252,7 @@ Open Settings via the menu bar item or ⌘,.
 | **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack), detection timing, update checks |
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
 | **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model incl. a custom WhisperKit model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
-| **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
+| **Speakers** | Diarization, how long unnamed meetings wait before they get the automatic names, mic speaker name, known voices, recognition stats |
 | **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, notes language, output folder, custom prompt |
 | **Advanced** | Permissions status, diagnostics, version info |
 
