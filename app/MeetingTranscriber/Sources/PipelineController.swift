@@ -293,13 +293,13 @@ final class PipelineController {
             diarizationFactory: { [self] in makeFluidDiarizer(mode: settings.diarizerMode) },
             diarizationFactoryWithMode: { [self] mode in makeFluidDiarizer(mode: mode) },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
-            // Captured by value: this is the moment the destination of every job
-            // this queue will run is decided, so a fallback is reported here and
-            // not from `effectiveOutputDir`, which `body` reads on every render.
+            // Captured by value: this is the moment the destination of every job this queue will run is
+            // decided, so a fallback is reported here and not from `effectiveOutputDir`, which `body` reads on every render.
             outputDir: queueEnvironment.resolveOutputDir(outputDirectory),
             logDir: queueEnvironment.logDir,
             stagingDir: queueEnvironment.stagingDir,
             diarizeEnabled: settings.diarize,
+            staleNamingMaxAge: { [settings] in settings.staleNamingTimeout.maxAge },
             echoDedupEnabled: settings.echoDedupEnabled,
             echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },
             numSpeakers: settings.numSpeakers,
