@@ -17,7 +17,8 @@ enum RecognitionSource: String, Codable {
     case dialog
     /// Resolved over the automation API rather than by a person at the screen.
     case rpc
-    /// 24 h stale cleanup accepted the auto-names for an abandoned job.
+    /// The stale cleanup on launch accepted the auto-names for a job left
+    /// waiting longer than `AppSettings.staleNamingTimeout`.
     case stale
     /// Headless blocking-transcribe finished on the auto-names, no dialog.
     case headless

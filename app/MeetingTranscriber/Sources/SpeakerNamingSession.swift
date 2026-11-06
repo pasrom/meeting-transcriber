@@ -324,9 +324,10 @@ final class SpeakerNamingSession {
             // Headless blocking-transcribe: accept the auto-assigned names
             // (exactly like a `.skipped` dialog result) so the job finishes on
             // its own. No naming data, kept or written: nobody will resolve it,
-            // parking would wedge the job until the 24h stale-cleanup, and a
-            // file on disk makes a quit during the protocol call re-run the
-            // whole job (`ProtocolResumePolicy`). The mode is for stage timings.
+            // parking would wedge the job until the stale cleanup (never with
+            // "Forever", `AppSettings.staleNamingTimeout`), and a file on disk
+            // makes a quit during the protocol call re-run the whole job
+            // (`ProtocolResumePolicy`). The mode is for stage timings.
             delegate?.setNamingMetadata(jobID: jobID, slug: slug, usedDiarizerMode: diarizeProcess.mode, wroteSidecarsIn: nil)
             // Log it as a resolution like every other path, tagged `.headless`:
             // the names still land in the transcript, so leaving no row would
@@ -547,7 +548,7 @@ final class SpeakerNamingSession {
     /// Auto-resolve pending naming items older than maxAge. Generates the
     /// protocol with auto-names, transitions them to .done, deletes sidecars.
     /// `pendingJobs` is the queue's already-filtered `.speakerNamingPending` list.
-    func cleanupStalePending(pendingJobs: [PipelineJob], maxAge: TimeInterval = 86400) {
+    func cleanupStalePending(pendingJobs: [PipelineJob], maxAge: TimeInterval = StaleNamingTimeout.oneDayInterval) {
         let now = Date()
         for job in pendingJobs where now.timeIntervalSince(job.namingDeadlineStart) > maxAge {
             logger.info("Auto-resolving stale pending naming for \(job.meetingTitle, privacy: .private)")

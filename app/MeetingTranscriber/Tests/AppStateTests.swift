@@ -1032,6 +1032,17 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let queue = try XCTUnwrap(state.pipeline.makeQueue())
         XCTAssertEqual(queue.numSpeakers, 4)
     }
+
+    /// Values other than the one-day default: with the default this would pass
+    /// even if `makeQueue()` dropped the setting and the queue fell back to it.
+    func testMakeQueueUsesStaleNamingTimeoutFromSettings() throws {
+        let (state, _) = makeState()
+        state.settings.staleNamingTimeout = .never
+        XCTAssertNil(try XCTUnwrap(state.pipeline.makeQueue()).staleNamingMaxAge)
+
+        state.settings.staleNamingTimeout = .sevenDays
+        XCTAssertEqual(try XCTUnwrap(state.pipeline.makeQueue()).staleNamingMaxAge, 7 * 86400)
+    }
 }
 
 // MARK: - Private helpers
