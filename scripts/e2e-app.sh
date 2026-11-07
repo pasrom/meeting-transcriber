@@ -2076,6 +2076,11 @@ on_exit() {
         rm -f "$CRASH_RECORDINGS/${CRASH_STEM}"* 2>/dev/null || true
         [ -n "${CRASH_MARKER:-}" ] && rm -f "$CRASH_MARKER"
     fi
+    # Naming-switch: release this run's jobs before the restores below (a skip
+    # writes the recognition log the speaker-DB restore puts back).
+    if [ "$NAMING_SWITCH" = true ]; then
+        _ns_release_jobs
+    fi
     # Naming-confirm: restore the runner's real speaker DB (CI-gated, no-op
     # locally) and the lane's diarize/numSpeakers overrides so a later run on
     # this host starts from the AppSettings defaults.
@@ -3328,6 +3333,27 @@ run_naming_confirm() {
 # RUNNER PREREQUISITE: the Accessibility grant from the e2e-architecture skill's
 # runner setup. Missing, the lane skips loudly and passes, like --naming-escape.
 _NS_DIR=""
+# The job ids this lane enqueued, for the teardown below. Kept at lane level
+# because the lane function's locals are gone when the trap runs.
+_NS_JOBS=()
+# Leave none of this lane's jobs parked at speaker naming after a failure that
+# left the app running: a parked job reopens the dialog at the next launch, and
+# the persisted store hands it to a later run as its own. It cannot help once
+# the app is gone (a crash, or the quit before the trap on a pass, where the
+# lane has already skipped and confirmed its jobs). Only ids this run enqueued
+# are touched: a foreign job belongs to whichever lane produced it. Bounded per
+# job rather than by the pipeline timeout: a job still mid-pipeline would
+# otherwise hold the speaker-DB and settings restores after this for minutes,
+# and a CI cancel kills the script seconds after TERM.
+_NS_RELEASE_TIMEOUT_S=20
+_ns_release_jobs() {
+    local job
+    # `${a[@]+...}`: bash 3.2 under `set -u` calls an empty array unbound.
+    for job in ${_NS_JOBS[@]+"${_NS_JOBS[@]}"}; do
+        poll_rpc "/v1/jobs/$job" --each _dev_app_running "$_NS_RELEASE_TIMEOUT_S" 2 \
+            _echo_settled_or_skipped "$job" || true
+    done
+}
 run_naming_switch() {
     local label="[naming-switch]"
     require_command python3
@@ -3412,11 +3438,13 @@ run_naming_switch() {
     # second is enqueued, so the window opens on this one.
     local first second first_naming second_naming
     first="$(_echo_enqueue "$label" "$_NS_DIR/pairs/first" "$stem")"
+    _NS_JOBS+=("$first")
     log "$label: first pair enqueued as $first; waiting for it to park at naming (timeout ${PIPELINE_TIMEOUT_S}s)"
     _ns_await_parked first "$first"
     first_naming="$RPC_BODY"
 
     second="$(_echo_enqueue "$label" "$_NS_DIR/pairs/second" "$stem")"
+    _NS_JOBS+=("$second")
     log "$label: second pair enqueued as $second; waiting for it to park at naming"
     _ns_await_parked second "$second"
     second_naming="$RPC_BODY"
