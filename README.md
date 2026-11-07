@@ -325,6 +325,57 @@ Pull requests run unit tests, lint, and analyzer in [`ci.yml`](.github/workflows
 
 ---
 
+## Contributors
+
+Thanks to these people for their contributions ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/pasrom"><img src="https://avatars.githubusercontent.com/u/32713472?v=4?s=80" width="80px;" alt="pasrom"/><br /><sub><b>pasrom</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=pasrom" title="Code">💻</a> <a href="#maintenance-pasrom" title="Maintenance">🚧</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/TrigrD3"><img src="https://avatars.githubusercontent.com/u/55515446?v=4?s=80" width="80px;" alt="Muhammad Jatmika Aryaputra"/><br /><sub><b>Muhammad Jatmika Aryaputra</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=TrigrD3" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/alexpfau"><img src="https://avatars.githubusercontent.com/u/77438832?v=4?s=80" width="80px;" alt="Alex Pfau"/><br /><sub><b>Alex Pfau</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=alexpfau" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/execsumo"><img src="https://avatars.githubusercontent.com/u/168054536?v=4?s=80" width="80px;" alt="Herwin"/><br /><sub><b>Herwin</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=execsumo" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/iHateCode"><img src="https://avatars.githubusercontent.com/u/6393143?v=4?s=80" width="80px;" alt="iHateCode"/><br /><sub><b>iHateCode</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=iHateCode" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/GB-D"><img src="https://avatars.githubusercontent.com/u/277263165?v=4?s=80" width="80px;" alt="GB-D"/><br /><sub><b>GB-D</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=GB-D" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/jianjettfu-oss"><img src="https://avatars.githubusercontent.com/u/229418358?v=4?s=80" width="80px;" alt="jianjettfu-oss"/><br /><sub><b>jianjettfu-oss</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=jianjettfu-oss" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://danielsogl.de/"><img src="https://avatars.githubusercontent.com/u/15234844?v=4?s=80" width="80px;" alt="Daniel Sogl"/><br /><sub><b>Daniel Sogl</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=danielsogl" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/DevUrandomFoo"><img src="https://avatars.githubusercontent.com/u/15967780?v=4?s=80" width="80px;" alt="Manuel J."/><br /><sub><b>Manuel J.</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=DevUrandomFoo" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="http://marcus.pictures/"><img src="https://avatars.githubusercontent.com/u/3090?v=4?s=80" width="80px;" alt="Marcus Vorwaller"/><br /><sub><b>Marcus Vorwaller</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=marcus" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/devdotbo"><img src="https://avatars.githubusercontent.com/u/129651996?v=4?s=80" width="80px;" alt="Quellkern.com"/><br /><sub><b>Quellkern.com</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=devdotbo" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/chrisworksai"><img src="https://avatars.githubusercontent.com/u/262485129?v=4?s=80" width="80px;" alt="Chris"/><br /><sub><b>Chris</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=chrisworksai" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/dterenyi"><img src="https://avatars.githubusercontent.com/u/54645613?v=4?s=80" width="80px;" alt="Dániel Terényi"/><br /><sub><b>Dániel Terényi</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=dterenyi" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/duncanwood"><img src="https://avatars.githubusercontent.com/u/7288228?v=4?s=80" width="80px;" alt="Duncan Wood"/><br /><sub><b>Duncan Wood</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=duncanwood" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/vimateck"><img src="https://avatars.githubusercontent.com/u/127865285?v=4?s=80" width="80px;" alt="vimateck"/><br /><sub><b>vimateck</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=vimateck" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/nsanitas"><img src="https://avatars.githubusercontent.com/u/909637?v=4?s=80" width="80px;" alt="Nicolas Sanitas"/><br /><sub><b>Nicolas Sanitas</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=nsanitas" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/STRENCH0"><img src="https://avatars.githubusercontent.com/u/17428017?v=4?s=80" width="80px;" alt="Grigoriy"/><br /><sub><b>Grigoriy</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=STRENCH0" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/shubrich"><img src="https://avatars.githubusercontent.com/u/1526320?v=4?s=80" width="80px;" alt="Sebastian Hubrich"/><br /><sub><b>Sebastian Hubrich</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=shubrich" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/tomchuk"><img src="https://avatars.githubusercontent.com/u/193906?v=4?s=80" width="80px;" alt="Tom Achtemichuk"/><br /><sub><b>Tom Achtemichuk</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=tomchuk" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/angelporlan"><img src="https://avatars.githubusercontent.com/u/106339954?v=4?s=80" width="80px;" alt="Ángel Porlán García"/><br /><sub><b>Ángel Porlán García</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=angelporlan" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/egerkuzma"><img src="https://avatars.githubusercontent.com/u/193809533?v=4?s=80" width="80px;" alt="Kuzmich"/><br /><sub><b>Kuzmich</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=egerkuzma" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/semikashev"><img src="https://avatars.githubusercontent.com/u/30040810?v=4?s=80" width="80px;" alt="semikashev"/><br /><sub><b>semikashev</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=semikashev" title="Code">💻</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
+
+This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind are welcome, including bug reports and testing.
+
+---
+
 ## License
 
 [MIT](LICENSE)
