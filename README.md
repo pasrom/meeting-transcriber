@@ -363,6 +363,11 @@ Thanks to these people for their contributions ([emoji key](https://allcontribut
     </tr>
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/semikashev"><img src="https://avatars.githubusercontent.com/u/30040810?v=4?s=80" width="80px;" alt="semikashev"/><br /><sub><b>semikashev</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=semikashev" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/bastiank"><img src="https://avatars.githubusercontent.com/u/374622?v=4?s=80" width="80px;" alt="Bastian Peters"/><br /><sub><b>Bastian Peters</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=bastiank" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Eckii24"><img src="https://avatars.githubusercontent.com/u/35373554?v=4?s=80" width="80px;" alt="Eckii24"/><br /><sub><b>Eckii24</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=Eckii24" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/wapp-its"><img src="https://avatars.githubusercontent.com/u/26138299?v=4?s=80" width="80px;" alt="wapp-its"/><br /><sub><b>wapp-its</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=wapp-its" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/niftan5"><img src="https://avatars.githubusercontent.com/u/57637411?v=4?s=80" width="80px;" alt="Steffen"/><br /><sub><b>Steffen</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=niftan5" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/maximilianwuehr-afk"><img src="https://avatars.githubusercontent.com/u/222928108?v=4?s=80" width="80px;" alt="maximilianwuehr-afk"/><br /><sub><b>maximilianwuehr-afk</b></sub></a><br /><a href="https://github.com/pasrom/meeting-transcriber/commits?author=maximilianwuehr-afk" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
