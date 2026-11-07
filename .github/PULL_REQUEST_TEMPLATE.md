@@ -26,7 +26,7 @@ No behaviour to test (docs, CI, pure refactor): write "n/a". See CONTRIBUTING.md
       already on `main` into this branch and the review reads it commit by commit:
       `git fetch https://github.com/pasrom/meeting-transcriber main && git rebase FETCH_HEAD`
       (the URL spelled out because in a fork clone `origin` is your fork)
-- [ ] `./scripts/lint.sh` is clean
+- [ ] `./scripts/lint.sh` is clean, and `./scripts/lint.sh --analyze` too (CI runs both)
 - [ ] Tests pass: `cd app/MeetingTranscriber && swift test`
       (`MenuBarIconSnapshotTests` compare pixels and depend on the macOS version, so CI
       skips them; if only they fail, add `--skip MenuBarIconSnapshotTests` and tick this)

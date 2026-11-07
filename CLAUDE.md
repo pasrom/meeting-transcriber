@@ -87,6 +87,9 @@ gh workflow run quality-and-safety.yml -f run-sanitizer=true -f run-quality=fals
 # Lint & format auto-fix (SwiftFormat + SwiftLint --fix)
 ./scripts/lint.sh --fix
 
+# SwiftLint analyzer rules, as CI's analyze job runs them (clean build, slow)
+./scripts/lint.sh --analyze
+
 # Pre-push parity check (release build — catches Sendable diagnostics
 # that debug-mode tolerates; flags App Store variant when --with-appstore)
 ./scripts/pre-push.sh

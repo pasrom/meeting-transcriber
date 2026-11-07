@@ -7,6 +7,7 @@
 #   ./scripts/lint.sh --fix          # auto-correct both
 #   ./scripts/lint.sh --format-only  # only SwiftFormat
 #   ./scripts/lint.sh --lint-only    # only SwiftLint
+#   ./scripts/lint.sh --analyze      # only `swiftlint analyze`, as CI runs it (slow)
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -28,6 +29,7 @@ RUN_LINT=true
 case "$MODE" in
     --format-only) RUN_LINT=false ;;
     --lint-only)   RUN_FORMAT=false ;;
+    --analyze)     RUN_FORMAT=false; RUN_LINT=false ;;
 esac
 
 # shellcheck source=scripts/tool-versions.sh
@@ -62,22 +64,67 @@ if [[ "$RUN_FORMAT" == "true" ]]; then
     fi
 fi
 
+require_swiftlint() {
+    if ! command -v swiftlint &>/dev/null; then
+        echo "Error: swiftlint not found. Install with: brew install swiftlint"
+        exit 1
+    fi
+    warn_version_drift swiftlint "$SWIFTLINT_VERSION" "$(swiftlint version || echo unknown)"
+}
+
 # --- SwiftLint (linter) ---
 # `--strict` promotes warning-level rules to errors so any new violation
 # fails CI rather than slowly accumulating. Pair with the swiftSettings'
 # `-warnings-as-errors` for full zero-warning enforcement.
 if [[ "$RUN_LINT" == "true" ]]; then
-    if command -v swiftlint &>/dev/null; then
-        warn_version_drift swiftlint "$SWIFTLINT_VERSION" "$(swiftlint version || echo unknown)"
-        if [[ "$MODE" == "--fix" ]]; then
-            echo "Running swiftlint --fix..."
-            swiftlint lint --fix --strict
-        else
-            echo "Running swiftlint --strict..."
-            swiftlint lint --strict
-        fi
+    require_swiftlint
+    if [[ "$MODE" == "--fix" ]]; then
+        echo "Running swiftlint --fix..."
+        swiftlint lint --fix --strict
     else
-        echo "Error: swiftlint not found. Install with: brew install swiftlint"
+        echo "Running swiftlint --strict..."
+        swiftlint lint --strict
+    fi
+fi
+
+# --- SwiftLint analyze (mirrors the `analyze` job in .github/workflows/ci.yml) ---
+# The analyzer rules in .swiftlint.yml read the compiler arguments from an
+# xcodebuild log, so this needs a build, and a clean one: an incremental build
+# logs only the recompiled files, and `unused_declaration` then reports
+# declarations whose callers were not in the log.
+#
+# Differs from CI in two ways, both stated here so a local/CI split is not a
+# surprise: CI pins its Xcode through DEVELOPER_DIR (this uses whatever
+# `xcode-select` points at, printed below), and CI adds a type-check timing flag
+# that does not change analyze's findings.
+if [[ "$MODE" == "--analyze" ]]; then
+    require_swiftlint
+    echo "Using $(xcodebuild -version | head -n 1); CI pins the Xcode named in ci.yml."
+    # `pwd -P`: TMPDIR is a symlink on macOS, and swiftlint drops files whose
+    # resolved path does not match the one in the log.
+    work="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/lint-analyze.XXXXXX")" && pwd -P)"
+    log="$work/xcodebuild.log"
+    # Packages are cached between runs (gitignored); only the build is clean.
+    packages="$PWD/app/MeetingTranscriber/.build/analyze-packages"
+    echo "Building for analyze (clean, a few minutes)..."
+    if ! (cd app/MeetingTranscriber && xcodebuild -scheme MeetingTranscriber -destination 'platform=macOS' \
+        -derivedDataPath "$work/DerivedData" -clonedSourcePackagesDirPath "$packages" \
+        SWIFT_SUPPRESS_WARNINGS=NO build-for-testing >"$log" 2>&1); then
+        # Keep the folder: the real error is often far above the last lines.
+        echo "Error: the build failed, so there is nothing to analyze. Last lines below;" >&2
+        echo "the full log is $log (delete $work when done)." >&2
+        tail -n 30 "$log" >&2
         exit 1
     fi
+    echo "Running swiftlint analyze --strict..."
+    status=0
+    swiftlint analyze --strict --compiler-log-path "$log" || status=$?
+    if [[ "$status" -eq 0 ]]; then
+        rm -rf "$work"
+    else
+        # Kept so a fix can be checked without another clean build.
+        echo "Re-run after a fix: swiftlint analyze --strict --compiler-log-path $log" >&2
+        echo "(delete $work when done)" >&2
+    fi
+    exit "$status"
 fi

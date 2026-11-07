@@ -9,7 +9,9 @@
 If you run `./scripts/lint.sh`, you also need SwiftLint and SwiftFormat 0.62.0 or
 newer; the format config disables rules older versions do not recognise and will
 reject outright. CI pins exact versions, listed in `scripts/tool-versions.sh`, and
-`lint.sh` warns when your local ones differ.
+`lint.sh` warns when your local ones differ. CI also runs SwiftLint's analyzer
+rules, which plain `lint.sh` does not; `./scripts/lint.sh --analyze` runs them
+the same way (a clean build first, so it takes a few minutes).
 
 ## Setup
 

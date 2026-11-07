@@ -99,7 +99,8 @@ opt_in_rules:
 analyzer_rules:
   - unused_declaration
   # unused_import omitted: results differ between xcodebuild (CI) and swift build (local)
-  # due to implicit framework linking in Xcode SDK. Run locally with scripts/lint.sh if needed.
+  # due to implicit framework linking in Xcode SDK. Run the rules listed here locally
+  # with `scripts/lint.sh --analyze`.
 
 disabled_rules:
   - trailing_comma        # Project convention — intentional trailing commas (99 occurrences)
