@@ -52,7 +52,8 @@ struct LiveCaptionsOverlay: View {
                     .foregroundStyle(.white.opacity(0.45))
                     .accessibilityIdentifier(A11yID.liveCaptionBackend)
             }
-            ForEach(Array(finals.enumerated()), id: \.element) { index, line in
+            // Keyed on the line's id: a relabel keeps its row, equal lines stay distinct.
+            ForEach(Array(finals.enumerated()), id: \.element.id) { index, line in
                 // The newest final is often still being read, so only older ones dim.
                 row(speaker: line.speaker, text: line.text, opacity: index == finals.count - 1 ? 1.0 : 0.6)
             }

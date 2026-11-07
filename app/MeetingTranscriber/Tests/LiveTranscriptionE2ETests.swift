@@ -69,13 +69,14 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         // robustness layer.
         let micText = micFinals.map(\.text).joined(separator: " ").lowercased()
         XCTAssertFalse(micText.isEmpty)
-        // Speaker matching: the fake matcher returns canned names, so a
-        // mic final must carry a non-default speaker. A regression that
-        // bypasses the matcher (hardcoded `captions.label(for:)`) would
-        // flip every final's speaker back to "Me", failing this assertion.
+        // Speaker matching: the fake matcher returns canned names. A final
+        // shows the channel label first and is relabelled when its match
+        // returns, so wait for that. A regression that bypasses the matcher
+        // leaves every final on "Me" and this times out.
+        let micMatched = await waitForMatchedSpeakers(in: setup.captions, channel: .mic, channelLabel: "Me")
         XCTAssertTrue(
-            micFinals.allSatisfy { $0.speaker != "Me" },
-            "matcher-driven speaker must override channel default, got: \(micFinals.map(\.speaker))",
+            micMatched,
+            "matcher-driven speaker must replace the channel default, got: \(setup.captions.recentFinals.map(\.speaker))",
         )
 
         // (3) App channel: feed the same fixture into the app sink, wait
@@ -89,11 +90,11 @@ final class LiveTranscriptionE2ETests: XCTestCase {
             appFinals.isEmpty,
             "expected at least one .app-channel final, got channels: \(setup.captions.recentFinals.map(\.channel))",
         )
-        // Same matcher-bypass guard for the app channel — the fake matcher's
-        // canned response must reach `recentFinals[].speaker`.
+        // Same matcher-bypass guard for the app channel.
+        let appMatched = await waitForMatchedSpeakers(in: setup.captions, channel: .app, channelLabel: "Remote")
         XCTAssertTrue(
-            appFinals.allSatisfy { $0.speaker != "Remote" },
-            "matcher-driven speaker must override channel default, got: \(appFinals.map(\.speaker))",
+            appMatched,
+            "matcher-driven speaker must replace the channel default, got: \(setup.captions.recentFinals.map(\.speaker))",
         )
     }
 
@@ -196,5 +197,25 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         }), ContinuousClock.now < deadline {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+    }
+
+    /// True once every retained final on `channel` carries a matched name.
+    /// Checked in one main-actor hop so a final landing mid-check cannot split it.
+    private func waitForMatchedSpeakers(
+        in captions: LiveCaptionsState,
+        channel: LiveCaptionChannel,
+        channelLabel: String,
+        deadlineSeconds: Double = 10.0,
+    ) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(deadlineSeconds)
+        while ContinuousClock.now < deadline {
+            let matched = await MainActor.run {
+                let finals = captions.recentFinals.filter { $0.channel == channel }
+                return !finals.isEmpty && finals.allSatisfy { $0.speaker != channelLabel }
+            }
+            if matched { return true }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return false
     }
 }

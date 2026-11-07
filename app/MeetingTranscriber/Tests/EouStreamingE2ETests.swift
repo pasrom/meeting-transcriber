@@ -139,23 +139,21 @@ final class EouStreamingE2ETests: XCTestCase {
         await session.flush()
     }
 
-    /// (c) Every finalized event carries plausible audio: non-empty and no
-    /// longer than the whole fixture.
+    /// (c) Finalized events carry plausible audio. The first one has a sample;
+    /// a later line split off at a text boundary may have none, because each
+    /// stretch of audio is handed out once. So the slices together are no
+    /// longer than the fixture.
     private func assertAudioPlausible(
         _ finals: [(text: String, audio: [Float])],
         fixtureSampleCount: Int,
     ) {
-        for (index, entry) in finals.enumerated() {
-            XCTAssertFalse(
-                entry.audio.isEmpty,
-                "finalized event \(index) carried empty audio (text: \(entry.text))",
-            )
-            XCTAssertLessThanOrEqual(
-                entry.audio.count,
-                fixtureSampleCount,
-                "finalized event \(index) audio (\(entry.audio.count)) exceeds fixture (\(fixtureSampleCount))",
-            )
-        }
+        XCTAssertFalse(finals.first?.audio.isEmpty ?? true, "the first finalized event carried no audio")
+        let total = finals.reduce(0) { $0 + $1.audio.count }
+        XCTAssertLessThanOrEqual(
+            total,
+            fixtureSampleCount,
+            "finalized audio (\(total)) exceeds the fixture (\(fixtureSampleCount)): a slice was handed out twice",
+        )
     }
 
     /// (d) Prefix-stripping works against the real manager: no two finals repeat
