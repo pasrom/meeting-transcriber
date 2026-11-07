@@ -327,7 +327,7 @@ Pull requests run unit tests, lint, and analyzer in [`ci.yml`](.github/workflows
 
 ## Contributors
 
-Thanks to these people for their contributions ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
+Thanks to these people for their contributions ([emoji key](https://allcontributors.org/en/reference/emoji-key/)):
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->
