@@ -92,7 +92,12 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
         try await manager.prepare()
     }
 
-    func ingest(_ buffer: LiveAudioBuffer) async {
+    func reset() async {
+        await resetStream()
+        onEvent(.partial(""))
+    }
+
+    func ingest(_ buffer: LiveAudioBuffer, backlog _: @Sendable () -> TimeInterval) async {
         guard buffer.channelCount == 1, buffer.sampleRate == 16000 else { return }
         inputAccumulator.append(contentsOf: buffer.samples)
         await drainChunks()
@@ -104,8 +109,13 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
     func flush() async {
         if !inputAccumulator.isEmpty { await drainChunks() }
         if !speechSamples.isEmpty { await commitFinal() }
+        await resetStream()
+    }
+
+    private func resetStream() async {
         await detector.reset()
         await manager.reset()
+        _ = await manager.latestTranscript()
         isSpeaking = false
         speechSamples = []
         resetUtteranceState()

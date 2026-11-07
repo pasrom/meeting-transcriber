@@ -39,8 +39,7 @@ actor StreamingTranscriber: LiveCaptionPipeline {
 
     private let transcribe: TranscribeFunction
     private let channelLabel: String
-    private let vad: FluidVAD
-    private var vadState: FluidVAD.StreamState?
+    private let detector: any UtteranceBoundaryDetecting
     private var inputAccumulator: [Float] = []
     private var speechSamples: [Float] = []
     private var isSpeaking = false
@@ -75,9 +74,30 @@ actor StreamingTranscriber: LiveCaptionPipeline {
         onEvent: @escaping EventSink,
     ) {
         self.channelLabel = channelLabel
-        self.vad = vad
+        detector = FluidVADBoundaryDetector(vad: vad)
         self.transcribe = transcribe
         self.onEvent = onEvent
+    }
+
+    init(
+        channelLabel: String,
+        detector: any UtteranceBoundaryDetecting,
+        transcribe: @escaping TranscribeFunction,
+        onEvent: @escaping EventSink,
+    ) {
+        self.channelLabel = channelLabel
+        self.detector = detector
+        self.transcribe = transcribe
+        self.onEvent = onEvent
+    }
+
+    func reset() async {
+        inputAccumulator = []
+        speechSamples = []
+        isSpeaking = false
+        lastPartialAt = .distantPast
+        await detector.reset()
+        onEvent(.partial(""))
     }
 
     /// Feed a captured buffer into the streaming pipeline. Buffers that don't
@@ -85,10 +105,10 @@ actor StreamingTranscriber: LiveCaptionPipeline {
     /// app channels are normalized to that shape upstream (mic via
     /// `MicCaptureHandler`, app via `LiveAudioResampler` in
     /// `LiveTranscriptionController`) before reaching here.
-    func ingest(_ buffer: LiveAudioBuffer) async {
+    func ingest(_ buffer: LiveAudioBuffer, backlog: @Sendable () -> TimeInterval) async {
         guard buffer.channelCount == 1, buffer.sampleRate == 16000 else { return }
         inputAccumulator.append(contentsOf: buffer.samples)
-        await drainChunks()
+        await drainChunks(backlog: backlog)
     }
 
     /// Recording stopped — commit any pending speech as a final so the last
@@ -107,36 +127,29 @@ actor StreamingTranscriber: LiveCaptionPipeline {
         isSpeaking = false
     }
 
-    private func drainChunks() async {
-        if vadState == nil {
-            do {
-                vadState = try await vad.makeStreamState()
-            } catch {
-                logger.error(
-                    "[\(self.channelLabel, privacy: .public)] vad init failed: \(error.localizedDescription, privacy: .public)",
-                )
-                return
-            }
-        }
-
+    private func drainChunks(backlog: @Sendable () -> TimeInterval = { 0 }) async {
         while inputAccumulator.count >= Self.chunkSize {
             let chunk = Array(inputAccumulator.prefix(Self.chunkSize))
             inputAccumulator.removeFirst(Self.chunkSize)
-            guard let state = vadState else { return }
             do {
-                let result = try await vad.processStreamingChunk(chunk, state: state)
-                vadState = result.state
-                await handleEvent(result.event, chunk: chunk)
+                let event = try await detector.boundary(in: chunk)
+                await handleEvent(event, chunk: chunk, backlog: backlog)
             } catch {
                 logger.warning(
                     "[\(self.channelLabel, privacy: .public)] vad chunk error: \(error.localizedDescription, privacy: .public)",
                 )
+                inputAccumulator.insert(contentsOf: chunk, at: 0)
+                return
             }
         }
     }
 
-    private func handleEvent(_ event: FluidVAD.StreamEvent?, chunk: [Float]) async {
-        switch event?.kind {
+    private func handleEvent(
+        _ event: FluidVAD.StreamEvent.Kind?,
+        chunk: [Float],
+        backlog: @Sendable () -> TimeInterval,
+    ) async {
+        switch event {
         case .speechStart:
             isSpeaking = true
             speechSamples.append(contentsOf: chunk)
@@ -149,7 +162,7 @@ actor StreamingTranscriber: LiveCaptionPipeline {
         case .none:
             if isSpeaking {
                 speechSamples.append(contentsOf: chunk)
-                await maybeEmitPartial()
+                await maybeEmitPartial(backlog: backlog)
                 if speechSamples.count >= Self.forceFlushSamples {
                     await commitFinal()
                 }
@@ -157,7 +170,9 @@ actor StreamingTranscriber: LiveCaptionPipeline {
         }
     }
 
-    private func maybeEmitPartial() async {
+    private func maybeEmitPartial(backlog: @Sendable () -> TimeInterval) async {
+        let pendingSeconds = backlog() + Double(inputAccumulator.count) / 16000
+        guard pendingSeconds <= Self.partialIntervalSeconds else { return }
         let now = Date()
         guard now.timeIntervalSince(lastPartialAt) >= Self.partialIntervalSeconds else { return }
         guard !speechSamples.isEmpty else { return }
