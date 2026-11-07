@@ -13,6 +13,13 @@ No behaviour to test (docs, CI, pure refactor): write "n/a". See CONTRIBUTING.md
 - Test that went red: <!-- test name -->
 - Not checked: <!-- inputs, paths or devices you did not try; "nothing" is a fine answer -->
 
+## AI assistance
+
+<!-- Delete this section if you used none. Models go here, not in commit trailers. -->
+
+- Written with: <!-- e.g. the model and tool that wrote most of the change -->
+- Reviewed or simplified with: <!-- models used for review passes, if any -->
+
 ## Checklist
 
 - [ ] Rebased on `main`, no merge commits, since a merge commit pulls commits that are

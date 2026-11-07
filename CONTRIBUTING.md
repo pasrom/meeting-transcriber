@@ -114,9 +114,35 @@ behaviour to test (docs, CI, a pure refactor or move) writes "n/a" there.
 - In code comments and the PR text, state a mechanism or a number only when you
   measured it; otherwise say that you did not.
 
+### Hygiene
+
+- No trailers written by AI tools in commit messages: no session links (for
+  example `Claude-Session:`) and no `Co-Authored-By:` lines for an assistant.
+  Older commits on `main` still carry some; new ones should not. A human
+  co-author is fine.
+- If you used AI tools, say so in the PR description instead: which model
+  wrote the change, and which ones you used to review or simplify it. That
+  tells a reviewer what was already checked, and by what.
+- No paths from your machine in code, tests or the PR text.
+- No real names in fixtures, tests, commits or the PR text; use Speaker A, B, C.
+- Never log transcript, protocol or speaker text with `privacy: .public`.
+
+### Build variants
+
+Only if you touch package dependencies, `app/MeetingTranscriber/Entitlements/`
+or code under `#if APPSTORE` or `#if !APPSTORE`:
+
+- CI builds both variants; `./scripts/pre-push.sh --with-appstore` finds an App
+  Store build failure sooner.
+- An entitlement goes into both `Homebrew.entitlements` and
+  `AppStore.entitlements` unless only one variant needs it, and the PR says why.
+- When you rely on new behaviour of a dependency, raise its minimum version in
+  `Package.swift` to the release that has that behaviour, not only
+  `Package.resolved`.
+
 ## Submitting a PR
 
-1. One PR per feature, bug fix, or refactor — keep it focused
+1. One PR per feature, bug fix, or refactor, kept focused: no hunks the change does not need, and a move or rename goes in its own commit
 2. Rebase your branch onto `main` before opening the PR
 3. Ensure all tests pass
 4. Write a clear PR description: what changed and why
