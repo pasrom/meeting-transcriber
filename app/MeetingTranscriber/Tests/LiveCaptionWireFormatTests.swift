@@ -33,7 +33,7 @@ final class LiveCaptionWireFormatTests: XCTestCase {
     }
 
     func testLineEncodesExpectedShape() throws {
-        let line = LiveCaptionLine(channel: .mic, text: "Du sprichst", speaker: "Speaker A")
+        let line = LiveCaptionLine(channel: .mic, text: "Du sprichst", speaker: "Speaker A", id: 7)
         let data = try JSONEncoder().encode(line)
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -45,7 +45,7 @@ final class LiveCaptionWireFormatTests: XCTestCase {
         XCTAssertEqual(json["channel"] as? String, "mic")
         XCTAssertEqual(json["text"] as? String, "Du sprichst")
         XCTAssertEqual(json["speaker"] as? String, "Speaker A")
-        XCTAssertEqual(json.count, 3)
+        XCTAssertEqual(json.count, 3, "the row id stays off the wire")
     }
 
     func testLineDecodesFromWireFormat() throws {

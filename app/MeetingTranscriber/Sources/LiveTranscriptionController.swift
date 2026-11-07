@@ -442,9 +442,13 @@ final class LiveTranscriptionController {
         )
     }
 
+    /// 1 s at 16 kHz. The embedding extractor loops shorter audio up to its
+    /// window, so a short slice could put a wrong name on the line.
+    static let minSpeakerMatchSamples = 16000
+
     /// Shared partial/final sink for both pipeline strategies: applies the
-    /// partial as ghost text, resolves the speaker via the live matcher on each
-    /// final, and routes both into `LiveCaptionsState`. Caption text is gated +
+    /// partial as ghost text and each final immediately, then resolves its speaker
+    /// without delaying newer text. Caption text is gated +
     /// `.private` so spoken content never lands in the unified log by default.
     ///
     /// Log prefix uses the raw channel id, not the user-visible speaker label:
@@ -473,9 +477,10 @@ final class LiveTranscriptionController {
                     if self.verboseDiagnostics() {
                         logger.info("[\(logChannel, privacy: .public)] final: \(text, privacy: .private)")
                     }
-                    let matched = await self.speakerMatcher.match(audio: audio)
-                    let speaker = matched ?? self.captions.label(for: channel)
-                    self.captions.applyFinalized(text, channel: channel, speaker: speaker)
+                    let sequence = self.captions.applyFinalized(text, channel: channel)
+                    guard audio.count >= Self.minSpeakerMatchSamples,
+                          let speaker = await self.speakerMatcher.match(audio: audio) else { return }
+                    self.captions.updateSpeaker(speaker, forFinal: sequence)
                 }
             }
         }
