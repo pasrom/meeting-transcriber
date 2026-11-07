@@ -543,40 +543,6 @@ class DualSourceRecorder: RecordingProvider {
         AudioTapLib.downmixToMono(samples, channels: channels)
     }
 
-    /// Cross-check the device-reported sample rate against raw file size and mic duration.
-    /// Returns the corrected rate (snapped to standard), or the device rate if cross-check
-    /// is unavailable or agrees.
-    nonisolated static func crossCheckAppRate(
-        deviceRate: Int,
-        appRawBytes: Int,
-        appChannels: Int,
-        micDurationSeconds: Double?,
-        micDelay: TimeInterval,
-    ) -> Int {
-        guard let micDuration = micDurationSeconds, micDuration > 3.0 else {
-            return deviceRate
-        }
-        let appDuration = micDuration + micDelay
-        guard appDuration > 3.0 else { return deviceRate }
-
-        guard let inferred = SampleRateQuery.inferRateFromDuration(
-            rawBytes: appRawBytes,
-            bytesPerSample: MemoryLayout<Float>.size,
-            channels: max(appChannels, 1),
-            durationSeconds: appDuration,
-        ) else { return deviceRate }
-
-        let snapped = SampleRateQuery.snapToStandardRate(inferred)
-
-        // Only override if significantly different (> 5% deviation)
-        let deviation = abs(Double(snapped - deviceRate)) / Double(max(deviceRate, 1))
-        if deviation > 0.05 {
-            logger.warning("Rate cross-check: device=\(deviceRate), inferred=\(inferred), snapped=\(snapped) — overriding")
-            return snapped
-        }
-        return deviceRate
-    }
-
     // Pinned Gregorian/POSIX: these stems are the final user-visible filenames
     // in record-only mode, so the year must not localize into a regional calendar.
     private static let timestampFormatter = DateFormatter.filenameStamp("yyyyMMdd_HHmmss")
