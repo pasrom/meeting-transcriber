@@ -127,26 +127,103 @@ final class LiveCaptionsStateTests: XCTestCase {
 
     // MARK: - Silence deadlines
 
-    func testFadeStartsOnlyAfterTwoSecondsOfSilence() async {
+    func testFinalReadingHoldHasFourSecondFloor() async {
         let clock = ManualClock()
         let state = LiveCaptionsState(clock: clock)
         defer { state.clear() }
-        state.applyPartial("hello", channel: .mic)
-        XCTAssertFalse(state.faded)
-        await clock.advance(by: .milliseconds(1999))
+        state.applyFinalized("hello", channel: .mic)
+        await clock.advance(by: .milliseconds(3999))
+        await settle()
         XCTAssertFalse(state.faded)
         await clock.advance(by: .milliseconds(1))
         await assertEventually { state.faded }
         XCTAssertTrue(state.hasContent)
     }
 
-    func testPartialAndFinalEachResetFadeAndRestartHold() async {
+    func testFinalReadingHoldScalesWithWordCount() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized(Array(repeating: "word", count: 20).joined(separator: " "), channel: .app)
+        await clock.advance(by: .milliseconds(5999))
+        await settle()
+        XCTAssertFalse(state.faded)
+        XCTAssertTrue(state.hasContent)
+        await clock.advance(by: .milliseconds(1))
+        await assertEventually { state.faded }
+    }
+
+    /// A 104-word EOU final measured live held the bar 31 s; two lines show only about 20 words.
+    func testFinalReadingHoldIsCappedAtSixSeconds() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized(Array(repeating: "word", count: 104).joined(separator: " "), channel: .app)
+        await clock.advance(by: .milliseconds(5999))
+        await settle()
+        XCTAssertFalse(state.faded)
+        await clock.advance(by: .milliseconds(1))
+        await assertEventually { state.faded }
+    }
+
+    func testUpdatingHypothesisOnEitherChannelHoldsFade() async {
+        for channel in [LiveCaptionChannel.mic, .app] {
+            let clock = ManualClock()
+            let state = LiveCaptionsState(clock: clock)
+            defer { state.clear() }
+            state.applyFinalized("finished", channel: channel == .mic ? .app : .mic)
+            for step in 1 ... 10 {
+                state.applyPartial("still speaking \(step)", channel: channel)
+                await clock.advance(by: .milliseconds(4500))
+                await settle()
+                XCTAssertFalse(state.faded)
+            }
+            XCTAssertTrue(state.hasContent)
+        }
+    }
+
+    /// A backend can drop a final without an event, so a hypothesis that
+    /// stops updating must not keep the bar up for the rest of the recording.
+    func testHypothesisWithoutUpdateIsAbandonedThenFadesAndClears() async {
+        for (channel, withFinal) in [(LiveCaptionChannel.mic, true), (.app, true), (.mic, false)] {
+            let clock = ManualClock()
+            let state = LiveCaptionsState(clock: clock)
+            defer { state.clear() }
+            if withFinal {
+                state.applyFinalized("finished", channel: channel == .mic ? .app : .mic)
+            }
+            state.applyPartial("dropped", channel: channel)
+            await clock.advance(by: .milliseconds(4999))
+            await settle()
+            XCTAssertFalse(state.faded)
+            await clock.advance(by: .milliseconds(1))
+            await assertEventually { state.faded }
+            await clock.advance(by: .seconds(2))
+            await assertEventually { !state.hasContent }
+            XCTAssertEqual(state.hypothesisMic + state.hypothesisApp, "")
+        }
+    }
+
+    func testHypothesisHoldDoesNotShortenALongReadingHold() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized(Array(repeating: "word", count: 20).joined(separator: " "), channel: .app)
+        state.applyPartial("dropped", channel: .mic)
+        await clock.advance(by: .milliseconds(5999))
+        await settle()
+        XCTAssertFalse(state.faded)
+        await clock.advance(by: .milliseconds(1))
+        await assertEventually { state.faded }
+    }
+
+    func testPartialAndFinalEachRestoreOpacity() async {
         for channel in [LiveCaptionChannel.mic, .app] {
             for finalized in [false, true] {
                 let clock = ManualClock()
                 let state = LiveCaptionsState(clock: clock)
-                state.applyPartial("first", channel: .mic)
-                await clock.advance(by: .seconds(2))
+                state.applyFinalized("first", channel: .mic)
+                await clock.advance(by: .seconds(4))
                 await assertEventually { state.faded }
 
                 if finalized {
@@ -155,10 +232,12 @@ final class LiveCaptionsStateTests: XCTestCase {
                     state.applyPartial("new partial", channel: channel)
                 }
                 XCTAssertFalse(state.faded)
-                await clock.advance(by: .milliseconds(1999))
-                XCTAssertFalse(state.faded)
-                await clock.advance(by: .milliseconds(1))
-                await assertEventually { state.faded }
+                if finalized {
+                    await clock.advance(by: .milliseconds(3999))
+                    await settle()
+                    XCTAssertFalse(state.faded)
+                }
+                XCTAssertTrue(state.hasContent)
                 state.clear()
             }
         }
@@ -167,8 +246,8 @@ final class LiveCaptionsStateTests: XCTestCase {
     func testClearResetsFadeAndCancelsPendingDeadlines() async {
         let clock = ManualClock()
         let state = LiveCaptionsState(clock: clock)
-        state.applyPartial("hello", channel: .mic)
-        await clock.advance(by: .seconds(2))
+        state.applyFinalized("hello", channel: .mic)
+        await clock.advance(by: .seconds(4))
         await assertEventually { state.faded }
         state.clear()
         XCTAssertFalse(state.faded)
@@ -177,23 +256,26 @@ final class LiveCaptionsStateTests: XCTestCase {
         state.applyPartial("next recording", channel: .app)
         state.clear()
         state.applyFinalized("new caption", channel: .mic)
-        await clock.advance(by: .milliseconds(1999))
+        await clock.advance(by: .milliseconds(3999))
+        await settle()
         XCTAssertFalse(state.faded)
         XCTAssertTrue(state.hasContent)
         await clock.advance(by: .milliseconds(1))
         await assertEventually { state.faded }
         await clock.advance(by: .seconds(1))
-        XCTAssertTrue(state.hasContent, "clear must cancel the prior recording's five-second deadline")
+        await settle()
+        XCTAssertTrue(state.hasContent, "clear must cancel the prior recording's deadline")
         state.clear()
     }
 
-    func testAutoClearStillOccursAtFiveSeconds() async {
+    func testAutoClearOccursWhenTwoSecondFadeCompletes() async {
         let clock = ManualClock()
         let state = LiveCaptionsState(clock: clock)
         state.applyFinalized("hello", channel: .app)
-        await clock.advance(by: .seconds(2))
+        await clock.advance(by: .seconds(4))
         await assertEventually { state.faded }
-        await clock.advance(by: .milliseconds(2999))
+        await clock.advance(by: .milliseconds(1999))
+        await settle()
         XCTAssertTrue(state.hasContent)
         await clock.advance(by: .milliseconds(1))
         await assertEventually { !state.hasContent }
@@ -203,18 +285,22 @@ final class LiveCaptionsStateTests: XCTestCase {
     func testNewEventRestartsAutoClearDeadline() async {
         let clock = ManualClock()
         let state = LiveCaptionsState(clock: clock)
-        state.applyPartial("first", channel: .mic)
-        await clock.advance(by: .seconds(2))
+        state.applyFinalized("first", channel: .mic)
+        await clock.advance(by: .seconds(4))
         await assertEventually { state.faded }
         state.applyFinalized("new", channel: .app)
-        await clock.advance(by: .seconds(2))
+        await clock.advance(by: .seconds(4))
         await assertEventually { state.faded }
-        await clock.advance(by: .seconds(1))
-        XCTAssertTrue(state.hasContent, "the cancelled original five-second deadline must not clear new text")
+        XCTAssertTrue(state.hasContent, "the cancelled original deadline must not clear new text")
         await clock.advance(by: .milliseconds(1999))
+        await settle()
         XCTAssertTrue(state.hasContent)
         await clock.advance(by: .milliseconds(1))
         await assertEventually { !state.hasContent }
+    }
+
+    private func settle() async {
+        try? await Task.sleep(for: .milliseconds(10))
     }
 
     private func assertEventually(
