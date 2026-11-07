@@ -1,3 +1,4 @@
+import AudioTapLib
 @testable import MeetingTranscriber
 import XCTest
 
@@ -17,6 +18,68 @@ import XCTest
 /// worker. See `feedback_coreml_e5rt_cache_race_under_parallel_xctest`.
 @MainActor
 final class LiveTranscriptionControllerTests: XCTestCase {
+    func testFinalAndFollowingPartialAppearBeforeSpeakerMatchingCompletes() async {
+        let captions = LiveCaptionsState()
+        defer { captions.clear() }
+        let matcher = SuspendedCaptionSpeakerMatcher()
+        let probe = CaptionEventProbe()
+        let factory: LiveTranscriptionController.NemotronPipelineFactory = { _, _, makeSink in
+            probe.appSink = makeSink(.app)
+            return (CaptionDeliveryPipeline(), CaptionDeliveryPipeline())
+        }
+        let controller = LiveTranscriptionController(
+            engine: nil,
+            vad: FluidVAD(threshold: 0.5),
+            captions: captions,
+            speakerMatcher: matcher,
+            engineLanguage: "de",
+            nemotronPipelineFactory: factory,
+        )
+        await controller.prepare()
+        probe.appSink?(.finalized(text: "finished line", audio: [0.1]))
+        await matcher.waitUntilMatching()
+        probe.appSink?(.partial("newest words"))
+        await waitFor(captions.hypothesisApp == "newest words", timeout: .seconds(1))
+        XCTAssertEqual(captions.recentFinals.first?.text, "finished line")
+        XCTAssertEqual(captions.recentFinals.first?.speaker, "Remote")
+
+        await matcher.complete(with: "Alice")
+        await waitFor(captions.recentFinals.first?.speaker == "Alice", timeout: .seconds(1))
+        XCTAssertEqual(captions.hypothesisApp, "newest words", "late speaker matching must not clear the split remainder")
+        XCTAssertEqual(captions.recentFinals.map(\.text), ["finished line"])
+        await controller.flush()
+    }
+
+    func testFinalWithoutAudioSkipsSpeakerMatching() async {
+        let captions = LiveCaptionsState()
+        defer { captions.clear() }
+        let matcher = SuspendedCaptionSpeakerMatcher()
+        let probe = CaptionEventProbe()
+        let factory: LiveTranscriptionController.NemotronPipelineFactory = { _, _, makeSink in
+            probe.appSink = makeSink(.app)
+            return (CaptionDeliveryPipeline(), CaptionDeliveryPipeline())
+        }
+        let controller = LiveTranscriptionController(
+            engine: nil,
+            vad: FluidVAD(threshold: 0.5),
+            captions: captions,
+            speakerMatcher: matcher,
+            engineLanguage: "de",
+            nemotronPipelineFactory: factory,
+        )
+        await controller.prepare()
+        probe.appSink?(.finalized(text: "line without audio", audio: []))
+        probe.appSink?(.finalized(text: "line with audio", audio: [0.1]))
+        await matcher.waitUntilMatching()
+        await matcher.complete(with: "Alice")
+        await waitFor(captions.recentFinals.last?.speaker == "Alice", timeout: .seconds(1))
+
+        XCTAssertEqual(captions.recentFinals.map(\.speaker), ["Remote", "Alice"])
+        let matchCount = await matcher.matchCount
+        XCTAssertEqual(matchCount, 1)
+        await controller.flush()
+    }
+
     func testVerboseDiagnosticsGateContract() async {
         // (1) Default constructor signature back-compat: the production
         // path passes no verboseDiagnostics argument and relies on the
@@ -139,5 +202,43 @@ final class MockStreamingEngine: StreamingTranscribingEngine {
         _ = samples
         transcribeCallCount += 1
         return samplesToTranscribe
+    }
+}
+
+@MainActor
+private final class CaptionEventProbe {
+    var appSink: StreamingTranscriber.EventSink?
+}
+
+private actor CaptionDeliveryPipeline: LiveCaptionPipeline {
+    func ingest(_: LiveAudioBuffer, backlog _: @Sendable () -> TimeInterval) {}
+    func reset() {}
+    func flush() {}
+}
+
+private actor SuspendedCaptionSpeakerMatcher: LiveSpeakerMatching {
+    private var pendingMatch: CheckedContinuation<String?, Never>?
+    private var waitingForMatch: CheckedContinuation<Void, Never>?
+    private(set) var matchCount = 0
+
+    func prepare() {}
+
+    func match(audio _: [Float]) async -> String? {
+        matchCount += 1
+        return await withCheckedContinuation { continuation in
+            pendingMatch = continuation
+            waitingForMatch?.resume()
+            waitingForMatch = nil
+        }
+    }
+
+    func waitUntilMatching() async {
+        if pendingMatch != nil { return }
+        await withCheckedContinuation { waitingForMatch = $0 }
+    }
+
+    func complete(with speaker: String) {
+        pendingMatch?.resume(returning: speaker)
+        pendingMatch = nil
     }
 }

@@ -15,11 +15,8 @@ enum LiveCaptionChannel: String, Hashable, Codable {
 }
 
 /// A finalised utterance with its source channel and rendered speaker label.
-/// `speaker` is captured at finalize time: either the name returned by the
-/// live speaker matcher, or the channel-default fallback when the
-/// extracted embedding doesn't pass `SpeakerMatcher`'s threshold + margin.
-/// Captured per-line so a rename in `speakers.json` after the line is
-/// committed doesn't retroactively relabel it.
+/// `speaker` starts as the channel-default fallback and can be replaced by
+/// the live match for this line. Later registry renames do not relabel it.
 struct LiveCaptionLine: Hashable, Codable {
     let channel: LiveCaptionChannel
     let text: String
@@ -106,6 +103,8 @@ final class LiveCaptionsState {
     /// Target opacity: the overlay animates to transparent when true.
     private(set) var faded = false
 
+    /// Monotonic identity for late speaker matches; never reused after clear.
+    private var finalSequence = 0
     private var silenceTask: Task<Void, Never>?
     private var remainingReadingTime: (() -> Duration)?
 
@@ -117,22 +116,35 @@ final class LiveCaptionsState {
         scheduleSilence()
     }
 
-    func applyFinalized(_ text: String, channel: LiveCaptionChannel, speaker: String) {
+    @discardableResult
+    func applyFinalized(_ text: String, channel: LiveCaptionChannel, speaker: String) -> Int {
         switch channel {
         case .mic: hypothesisMic = ""
         case .app: hypothesisApp = ""
         }
+        finalSequence += 1
         recentFinals.append(LiveCaptionLine(channel: channel, text: text, speaker: speaker))
         if recentFinals.count > Self.maxFinalsKept {
             recentFinals.removeFirst(recentFinals.count - Self.maxFinalsKept)
         }
         setReadingDeadline(for: text)
         scheduleSilence()
+        return finalSequence
+    }
+
+    /// A late match changes only its retained line, never a newer hypothesis or reading deadline.
+    func updateSpeaker(_ speaker: String, forFinal sequence: Int) {
+        let distance = finalSequence - sequence
+        guard distance >= 0, distance < recentFinals.count else { return }
+        let index = recentFinals.count - 1 - distance
+        let line = recentFinals[index]
+        recentFinals[index] = LiveCaptionLine(channel: line.channel, text: line.text, speaker: speaker)
     }
 
     /// Convenience: speaker defaults to the channel label. Used by tests
     /// and as a fallback path when the live matcher isn't wired in.
-    func applyFinalized(_ text: String, channel: LiveCaptionChannel) {
+    @discardableResult
+    func applyFinalized(_ text: String, channel: LiveCaptionChannel) -> Int {
         applyFinalized(text, channel: channel, speaker: label(for: channel))
     }
 
