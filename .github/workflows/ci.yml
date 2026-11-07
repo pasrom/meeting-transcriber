@@ -190,6 +190,7 @@ jobs:
         run: bash scripts/ci/install-lint-tool.sh swiftlint
       - name: Verify pinned SwiftLint
         run: bash scripts/ci/install-lint-tool.sh swiftlint --verify
+      # `scripts/lint.sh --analyze` mirrors this step locally; keep the two in step.
       - name: Build & Analyze
         run: |
           # pipefail: without it `xcodebuild ... | tee` masks an xcodebuild
