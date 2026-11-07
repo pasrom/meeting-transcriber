@@ -31,6 +31,10 @@ enum RecordingFileSuffix {
     /// from that once re-processed 40 recordings on a live archive.
     static let inProgress = "_recording.marker"
 
+    /// The mute times of a recording still in progress, saved at each toggle so
+    /// crash recovery can attach them. See `MicMuteLog`.
+    static let micMuteLog = "_mic_mute.json"
+
     /// Raw float32 app-audio temp file written live during capture (16 kHz
     /// mono, in-IOProc resampled) and consumed by `buildRecording` at `stop()`.
     /// A leftover one means the writer was killed mid-recording (crash) — see

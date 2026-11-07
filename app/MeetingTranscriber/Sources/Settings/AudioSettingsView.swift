@@ -18,6 +18,12 @@ struct AudioSettingsView: View {
                         }
                     }
                     .onAppear { refreshAudioDevices() }
+
+                    Toggle("Start Recordings with Mic Muted", isOn: $settings.startRecordingsMicMuted)
+                        .accessibilityIdentifier(A11yID.startRecordingsMicMutedToggle)
+                        .help("Your voice stays out of app recordings until you unmute. Microphone-only recordings always start unmuted.")
+
+                    MicMuteHotkeyRow(hotkey: $settings.micMuteHotkey)
                 }
             }
 

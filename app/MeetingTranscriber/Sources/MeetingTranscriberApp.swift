@@ -23,6 +23,7 @@ private struct AnimatedMenuBarIcon: View {
     let recordOnlyOverlay: Bool
     let micSilentOverlay: Bool
     let appSilentOverlay: Bool
+    let micMutedOverlay: Bool
 
     @State private var animationFrame = 0
     // `.default` (not `.common`) so the timer never fires inside the status-bar
@@ -39,6 +40,7 @@ private struct AnimatedMenuBarIcon: View {
             recordOnlyOverlay: recordOnlyOverlay,
             micSilentOverlay: micSilentOverlay,
             appSilentOverlay: appSilentOverlay,
+            micMutedOverlay: micMutedOverlay,
         ))
         .onReceive(iconTimer) { _ in
             let next = MenuBarIcon.nextFrame(animationFrame, badge: badge)
@@ -175,6 +177,9 @@ struct MeetingTranscriberApp: App {
             onStopManualRecording: appState.isManualRecording ? {
                 appState.watching.stopManualRecording()
             } : nil,
+            isMicMuted: appState.isMicMuted,
+            onToggleMicMute: appState.micMuteToggle,
+            micMuteShortcut: appState.micMuteShortcut,
             onOpenProtocol: openProtocol,
             onOpenProtocolsFolder: openProtocolsFolder,
             onOpenSettings: {
@@ -205,6 +210,7 @@ struct MeetingTranscriberApp: App {
                 // per-channel overlay inputs.
                 micSilentOverlay: appState.micSilentOverlay,
                 appSilentOverlay: appState.appSilentOverlay,
+                micMutedOverlay: appState.isMicMuted,
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
