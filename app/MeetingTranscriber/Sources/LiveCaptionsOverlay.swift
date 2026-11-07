@@ -31,7 +31,7 @@ struct LiveCaptionsOverlay: View {
                         .opacity(state.faded ? 0 : 1)
                         .animation(
                             state.faded
-                                ? .linear(duration: LiveCaptionsState.fadeEndSeconds - LiveCaptionsState.fadeStartSeconds)
+                                ? .linear(duration: LiveCaptionsState.fadeDuration)
                                 : nil,
                             value: state.faded,
                         )

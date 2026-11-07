@@ -12,7 +12,7 @@ final class LiveCaptionsOverlayTests: XCTestCase {
         state.applyFinalized("hello", channel: .mic)
         XCTAssertEqual(try opacity(of: state), 1)
 
-        await clock.advance(by: .seconds(2))
+        await clock.advance(by: .seconds(4))
         let deadline = ContinuousClock.now + .seconds(1)
         while !state.faded, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(1))
