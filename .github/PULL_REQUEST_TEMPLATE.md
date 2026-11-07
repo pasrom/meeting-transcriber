@@ -28,6 +28,8 @@ No behaviour to test (docs, CI, pure refactor): write "n/a". See CONTRIBUTING.md
       (the URL spelled out because in a fork clone `origin` is your fork)
 - [ ] `./scripts/lint.sh` is clean
 - [ ] Tests pass: `cd app/MeetingTranscriber && swift test`
+      (`MenuBarIconSnapshotTests` compare pixels and depend on the macOS version, so CI
+      skips them; if only they fail, add `--skip MenuBarIconSnapshotTests` and tick this)
 - [ ] Conventional Commits, one logical change per commit
 
 The **Update branch** button merges by default; pick **Update with rebase** from its
