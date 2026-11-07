@@ -22,18 +22,19 @@ struct LiveCaptionsOverlay: View {
     @Bindable var state: LiveCaptionsState
 
     var body: some View {
-        // TimelineView re-evaluates the opacity expression every 200 ms while
-        // visible so the >2 s-silence fade is smooth without a manual timer.
-        // It's gated behind `state.hasContent` so the timeline stops when the
-        // bar is empty (idle bar → zero recurring work). An overlay doesn't
-        // pass its content's height up, so overflow clips the oldest lines at
-        // the top instead of centring and cutting off the newest.
+        // An overlay doesn't pass its content's height up, so overflow clips
+        // the oldest lines at the top instead of centring and cutting off the newest.
         Color.clear
             .overlay(alignment: .bottom) {
                 if state.hasContent {
-                    TimelineView(.periodic(from: .now, by: 0.2)) { context in
-                        content.opacity(state.opacity(at: context.date))
-                    }
+                    content
+                        .opacity(state.faded ? 0 : 1)
+                        .animation(
+                            state.faded
+                                ? .linear(duration: LiveCaptionsState.fadeEndSeconds - LiveCaptionsState.fadeStartSeconds)
+                                : nil,
+                            value: state.faded,
+                        )
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: state.hypothesisMic)

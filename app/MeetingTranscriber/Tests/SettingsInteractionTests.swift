@@ -5,7 +5,7 @@ import XCTest
 /// Interaction + write-back tests for non-button Settings controls (Picker,
 /// Stepper) and a first LiveCaptionsOverlay render test. The existing suite drove
 /// only Toggle `.tap()`; Picker `.select()` / Stepper `.increment()` / the
-/// captions TimelineView had zero coverage. Each control is driven and the
+/// captions overlay had zero coverage. Each control is driven and the
 /// resulting `AppSettings` write-back (or rendered identifier) is asserted, so a
 /// broken binding — not just a missing control — fails the test.
 @MainActor
@@ -396,14 +396,14 @@ final class SettingsInteractionTests: XCTestCase {
         let state = LiveCaptionsState()
         state.applyFinalized("hello", channel: .mic)
 
-        // No active backend → the backend label (inside the TimelineView) is absent.
+        // No active backend → the backend label is absent.
         XCTAssertThrowsError(
             try LiveCaptionsOverlay(state: state).inspect()
                 .find(viewWithAccessibilityIdentifier: A11yID.liveCaptionBackend),
             "with no active backend the label must not render",
         )
 
-        // Active backend → the label appears, reachable through the TimelineView.
+        // Active backend → the label appears.
         state.setActiveBackend("Parakeet EOU")
         XCTAssertNoThrow(
             try LiveCaptionsOverlay(state: state).inspect()
