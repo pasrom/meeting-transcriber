@@ -55,4 +55,36 @@ final class LiveCaptionsWindowControllerSizeTests: XCTestCase {
         controller.apply(size: .large)
         XCTAssertNil(defaults.dictionary(forKey: LiveCaptionsWindowController.originDefaultsKey))
     }
+
+    /// The panel keeps its preset size however much text the overlay holds.
+    /// The text rows are `fixedSize` vertically, so with the hosting view's
+    /// default sizing options their height became the window's minimum and
+    /// the bar grew to thousands of points, off the top of the screen.
+    func testCaptionTextDoesNotResizeThePanel() throws {
+        guard let screen = (NSScreen.main ?? NSScreen.screens.first).map(CaptionScreen.init) else {
+            throw XCTSkip("no screen to show the panel on")
+        }
+        let state = LiveCaptionsState()
+        let controller = try LiveCaptionsWindowController(
+            state: state, size: .medium, defaults: makeDefaults(),
+            screens: { [screen] }, mainScreen: { screen },
+        )
+        let before = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+        controller.show()
+        addTeardownBlock { @MainActor in controller.hide() }
+        let panel = try XCTUnwrap(NSApplication.shared.windows.first { window in
+            !before.contains(ObjectIdentifier(window)) && window.identifier == LiveCaptionsWindowController.panelIdentifier
+        })
+
+        let long = String(repeating: "a caption line that wraps across the bar several times over ", count: 6)
+        for index in 0 ..< LiveCaptionsState.maxFinalsKept {
+            state.applyFinalized("final \(index): " + long, channel: .app)
+        }
+        state.applyPartial(long, channel: .mic)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.layoutIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+
+        XCTAssertEqual(panel.frame.size, LiveCaptionsSize.medium.panelSize)
+    }
 }

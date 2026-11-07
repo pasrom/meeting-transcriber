@@ -17,7 +17,10 @@ import SwiftUI
 /// because auto-sizing produced an infinite layout-feedback loop with the
 /// caption-bar content — the SwiftUI hierarchy's ideal size republished on
 /// every layout pass, NSHostingController called `setFrame`, which fired
-/// another layout, recursing until the stack overflowed. The fixed-size
+/// another layout, recursing until the stack overflowed. The hosting view
+/// also gets no `sizingOptions`: its default min-size constraint made the
+/// `fixedSize` caption text the window's minimum height, so the bar grew to
+/// thousands of points, off the top of the screen. The fixed-size
 /// trade-off: very long captions clip vertically once they exceed the
 /// preset's panel height; that's acceptable for the PoC and the surrounding
 /// overlay only renders a few lines anyway. The dimensions come from
@@ -168,6 +171,7 @@ final class LiveCaptionsWindowController {
 
         let host = NSHostingView(rootView: LiveCaptionsOverlay(state: state))
         host.autoresizingMask = [.width, .height]
+        host.sizingOptions = []
 
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size.panelSize),
