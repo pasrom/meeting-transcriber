@@ -402,6 +402,12 @@ public class AudioCaptureSession {
         micCapture?.currentSignalAges ?? .unknown
     }
 
+    /// False when there is no microphone, or one that failed to open on an app
+    /// recording: the session swallows that failure.
+    public var hasOpenMic: Bool {
+        micCapture != nil
+    }
+
     /// Silence or restore the microphone track. Nil when this session has no
     /// open microphone, otherwise the timeline after the change.
     @discardableResult

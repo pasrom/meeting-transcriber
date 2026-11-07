@@ -14,6 +14,12 @@ public struct MicMuteInterval: Codable, Equatable, Sendable {
 /// When the microphone was muted, in seconds of the written track rather than
 /// wall-clock time, because that is the timeline the transcript of the track is on.
 ///
+/// A toggle can be stamped up to one tap buffer (4096 frames at the hardware
+/// rate, about 85 ms at 48 kHz) from the first or last zeroed sample: the tap
+/// reads `isMuted` before converting, and `position` advances after the write.
+/// The skew errs on the safe side under the "mostly inside" drop rule, so it is
+/// left as is, not a race to fix.
+///
 /// `Codable` so the recorder can save it at each toggle: a crash during a mute
 /// leaves `openSince` set, which recovery closes at the end of the surviving track.
 public struct MicMuteTimeline: Codable, Equatable, Sendable {

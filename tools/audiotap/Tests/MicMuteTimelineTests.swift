@@ -51,6 +51,7 @@ final class MicMuteTimelineTests: XCTestCase {
 /// what reaches the file and the live captions.
 final class MicCaptureHandlerMuteTests: XCTestCase {
     private final class TapSession: MicEngineSessionProviding {
+        let followsSystemDefaultInput = false
         let notificationObject: AnyObject = NSObject()
         let format: AVAudioFormat
         var tapBlock: AVAudioNodeTapBlock?
