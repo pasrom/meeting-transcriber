@@ -325,6 +325,33 @@ Pull requests run unit tests, lint, and analyzer in [`ci.yml`](.github/workflows
 
 ---
 
+## Contributors
+
+Meeting Transcriber is built with help from many people: code, bug reports, testing, ideas and documentation. Some of the most active so far:
+
+<!-- CONTRIBUTORS-PREVIEW:START count=14 - generated from .all-contributorsrc by scripts/update-contributors.sh --render -->
+<a href="https://github.com/pasrom"><img src="https://avatars.githubusercontent.com/u/32713472?v=4&amp;s=80" width="40" height="40" alt="pasrom" title="pasrom"/></a>
+<a href="https://github.com/TrigrD3"><img src="https://avatars.githubusercontent.com/u/55515446?v=4&amp;s=80" width="40" height="40" alt="Muhammad Jatmika Aryaputra" title="Muhammad Jatmika Aryaputra"/></a>
+<a href="https://github.com/alexpfau"><img src="https://avatars.githubusercontent.com/u/77438832?v=4&amp;s=80" width="40" height="40" alt="Alex Pfau" title="Alex Pfau"/></a>
+<a href="https://github.com/execsumo"><img src="https://avatars.githubusercontent.com/u/168054536?v=4&amp;s=80" width="40" height="40" alt="Herwin" title="Herwin"/></a>
+<a href="https://github.com/iHateCode"><img src="https://avatars.githubusercontent.com/u/6393143?v=4&amp;s=80" width="40" height="40" alt="iHateCode" title="iHateCode"/></a>
+<a href="https://github.com/GB-D"><img src="https://avatars.githubusercontent.com/u/277263165?v=4&amp;s=80" width="40" height="40" alt="GB-D" title="GB-D"/></a>
+<a href="https://github.com/jhavez"><img src="https://avatars.githubusercontent.com/u/213444590?v=4&amp;s=80" width="40" height="40" alt="Julien" title="Julien"/></a>
+<a href="https://github.com/jianjettfu-oss"><img src="https://avatars.githubusercontent.com/u/229418358?v=4&amp;s=80" width="40" height="40" alt="jianjettfu-oss" title="jianjettfu-oss"/></a>
+<a href="https://danielsogl.de/"><img src="https://avatars.githubusercontent.com/u/15234844?v=4&amp;s=80" width="40" height="40" alt="Daniel Sogl" title="Daniel Sogl"/></a>
+<a href="https://github.com/duncanwood"><img src="https://avatars.githubusercontent.com/u/7288228?v=4&amp;s=80" width="40" height="40" alt="Duncan Wood" title="Duncan Wood"/></a>
+<a href="https://github.com/niftan5"><img src="https://avatars.githubusercontent.com/u/57637411?v=4&amp;s=80" width="40" height="40" alt="Steffen" title="Steffen"/></a>
+<a href="https://github.com/zunami"><img src="https://avatars.githubusercontent.com/u/4697822?v=4&amp;s=80" width="40" height="40" alt="zunami" title="zunami"/></a>
+<a href="https://github.com/DevUrandomFoo"><img src="https://avatars.githubusercontent.com/u/15967780?v=4&amp;s=80" width="40" height="40" alt="Manuel J." title="Manuel J."/></a>
+<a href="https://github.com/nsanitas"><img src="https://avatars.githubusercontent.com/u/909637?v=4&amp;s=80" width="40" height="40" alt="Nicolas Sanitas" title="Nicolas Sanitas"/></a>
+
+And [37 more](<CONTRIBUTORS.md>), credited in full there.
+<!-- CONTRIBUTORS-PREVIEW:END -->
+
+[CONTRIBUTING.md](CONTRIBUTING.md) explains how to join them.
+
+---
+
 ## License
 
 [MIT](LICENSE)
