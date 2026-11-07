@@ -48,7 +48,7 @@ func argument(_ name: String) -> String? {
 
 func usage() -> Never {
     FileHandle.standardError.write(Data(
-        "usage: drive-naming-field.swift trusted|windows|focus|type|read|press [--bundle-id ID] [--identifier AXID] [--text T]\n".utf8,
+        "usage: drive-naming-field.swift trusted|windows|tree|focus|type|read|press|select-job [--bundle-id ID] [--identifier AXID] [--text T] [--index N]\n".utf8,
     ))
     exit(2)
 }
@@ -203,35 +203,80 @@ case "select-job":
         }
     }
     guard let picker else { fail(5, "no job picker (pop-up button) found in any window") }
-    // Pressing a pop-up often reports `.cannotComplete`: the app's main thread
-    // is busy tracking the menu it just opened, so the reply times out. The
-    // menu items read below are the real check that it opened.
+    // The menu's items, exposed as AXMenu > AXMenuItem under the pop-up only
+    // while the menu is open; empty while it is closed.
+    func menuItems() -> [AXUIElement] {
+        children(picker)
+            .filter { string($0, kAXRoleAttribute) == (kAXMenuRole as String) }
+            .flatMap { children($0) }
+            .filter { string($0, kAXRoleAttribute) == (kAXMenuItemRole as String) }
+    }
+    // Polls every 0.1 s until the menu is open (`true`) or closed (`false`),
+    // for at most `seconds`; returns the items seen last.
+    func awaitMenu(open: Bool, within seconds: Double) -> [AXUIElement] {
+        // A wall-clock deadline, not a sum of sleeps: an AX read can block
+        // while the app tracks the menu, and the bound must still hold.
+        let deadline = Date().addingTimeInterval(seconds)
+        var items = menuItems()
+        while items.isEmpty == open, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+            items = menuItems()
+        }
+        return items
+    }
+    // Closes an open menu the way AX offers it: the pop-up itself has only
+    // AXPress, the items carry AXCancel (the pop-up answers AXCancel with
+    // "action unsupported" and the menu stays).
+    func cancelMenu(via item: AXUIElement) {
+        _ = AXUIElementPerformAction(item, kAXCancelAction as CFString)
+    }
+    // Waits until no menu is exposed under the pop-up, cancelling one that
+    // lingers. After an item press the menu stays exposed for about 350 ms
+    // (measured at 50 ms steps on one machine, macOS 27.2, whether or not the
+    // entry was already the one shown), and the lane's next call arrives
+    // within that window. The selection survives the cancel (the dialog keeps
+    // the newly chosen job's fields).
+    func ensureMenuClosed(_ when: String) {
+        let lingering = awaitMenu(open: false, within: 1.0)
+        guard !lingering.isEmpty else { return }
+        cancelMenu(via: lingering[0])
+        guard awaitMenu(open: false, within: 1.0).isEmpty else {
+            fail(8, "the job picker's menu stayed open \(when); the next press would be swallowed")
+        }
+    }
+    // Press the pop-up only while its menu is closed. AXPress on an OPEN
+    // pop-up removes the menu from the tree but leaves the picker deaf to
+    // further presses (about 3 s after a lingering post-selection menu,
+    // indefinitely after a fully opened one, until an Escape key reaches the
+    // app), which is what "menu has 0 items" then reports. So the same
+    // invariant holds at entry as at exit: whatever an earlier call left
+    // exposed is closed first, then the menu is opened afresh.
+    ensureMenuClosed("before entry \(idx) could be selected")
+    // `.cannotComplete` has not been observed here; it is tolerated rather
+    // than failed because the items polled below are the check that the menu
+    // opened, so a press that did nothing fails there.
     let opened = AXUIElementPerformAction(picker, kAXPressAction as CFString)
     guard opened == .success || opened == .cannotComplete else {
         fail(8, "AXPress on the job picker failed: \(opened.rawValue)")
     }
     // The menu is built when it opens; give it a moment to appear.
-    var items: [AXUIElement] = []
-    for _ in 0 ..< 20 where items.isEmpty {
-        Thread.sleep(forTimeInterval: 0.1)
-        items = children(picker)
-            .filter { string($0, kAXRoleAttribute) == (kAXMenuRole as String) }
-            .flatMap { children($0) }
-            .filter { string($0, kAXRoleAttribute) == (kAXMenuItemRole as String) }
+    let items = awaitMenu(open: true, within: 2.0)
+    guard !items.isEmpty else {
+        fail(5, "the job picker's menu did not open: no menu items appeared under the pop-up within 2 s of pressing it")
     }
     guard idx >= 0, idx < items.count else {
-        _ = AXUIElementPerformAction(picker, kAXCancelAction as CFString)
+        cancelMenu(via: items[0])
         fail(5, "job index \(idx) out of range (menu has \(items.count) items)")
     }
-    // `.cannotComplete` is accepted for the same reason as on the open press;
-    // the lane's entry count and the labels it then reads are the verdict, so
-    // a press that did nothing still fails there.
+    // `.cannotComplete` as on the open press; here the lane's entry count and
+    // labels are the check.
     let result = AXUIElementPerformAction(items[idx], kAXPressAction as CFString)
     guard result == .success || result == .cannotComplete else {
-        // Close the menu so the app's main thread leaves menu tracking.
-        _ = AXUIElementPerformAction(picker, kAXCancelAction as CFString)
+        cancelMenu(via: items[0])
         fail(8, "AXPress on menu item \(idx) failed: \(result.rawValue)")
     }
+    // Leave the menu closed for the next call.
+    ensureMenuClosed("after selecting entry \(idx)")
     print("selected-job=\(idx) of=\(items.count)")
 
 case "read":
