@@ -503,14 +503,9 @@ class DualSourceRecorder: RecordingProvider {
             throw error
         }
         captureSession = session
-        // A probe rather than a stored answer: a microphone that failed to open
-        // on an app recording is swallowed by the session, which then returns nil.
-        let openMicTimeline = session.setMicMuted(micStartsMuted && source.capturesAppAudio)
-        canMuteMic = openMicTimeline != nil
-        isMicMuted = openMicTimeline?.isMuted ?? false
-        if let openMicTimeline, openMicTimeline.isMuted {
-            MicMuteLog.write(openMicTimeline, stem: ts, in: recordingsDir)
-        }
+        canMuteMic = session.hasOpenMic
+        isMicMuted = false
+        if micStartsMuted, source.capturesAppAudio { setMicMuted(true) }
 
         isRecording = true
         recordingStartDate = Date()

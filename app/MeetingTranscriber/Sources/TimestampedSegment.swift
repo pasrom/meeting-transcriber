@@ -99,3 +99,75 @@ extension TimestampedSegment {
         return "\(ts) \(speaker): \(text)"
     }
 }
+
+extension MicMuteInterval {
+    /// Past any real recording, and small enough that its frame count at any
+    /// sample rate, and its clock time, convert to `Int` without trapping.
+    static let maxSeconds: TimeInterval = 7 * 24 * 3600
+
+    /// Bracketed like the recording note, so it cannot read as something said.
+    var transcriptMarker: String {
+        "[Mic muted \(TimestampedSegment.clockTime(start))–\(TimestampedSegment.clockTime(end))]"
+    }
+}
+
+extension [MicMuteInterval] {
+    func shifted(by offset: TimeInterval) -> [MicMuteInterval] {
+        map { MicMuteInterval(start: $0.start + offset, end: $0.end + offset) }
+    }
+
+    /// Finite, within `[0, MicMuteInterval.maxSeconds]`, ordered and merged where
+    /// they overlap. They come from files on disk, a reimported sidecar among
+    /// them, and the frame arithmetic traps on a huge value or double-counts
+    /// an overlap into a recording "muted throughout".
+    var sanitized: [MicMuteInterval] {
+        let clipped = compactMap { interval -> MicMuteInterval? in
+            guard interval.start.isFinite, interval.end.isFinite else { return nil }
+
+            let start = Swift.max(0, interval.start)
+            let end = Swift.min(interval.end, MicMuteInterval.maxSeconds)
+            return end > start ? MicMuteInterval(start: start, end: end) : nil
+        }
+        var merged: [MicMuteInterval] = []
+        for interval in clipped.sorted(by: { $0.start < $1.start }) {
+            if let last = merged.last, interval.start <= last.end {
+                merged[merged.count - 1] = MicMuteInterval(start: last.start, end: Swift.max(last.end, interval.end))
+            } else {
+                merged.append(interval)
+            }
+        }
+        return merged
+    }
+
+    func mutedFrames(rate: Int) -> Int {
+        var seconds: TimeInterval = 0
+        for interval in self {
+            seconds += interval.end - interval.start
+        }
+        return Int(seconds * Double(rate))
+    }
+}
+
+extension TimestampedSegment {
+    /// The share of a segment that may lie inside mutes before it is dropped.
+    /// Not zero, because a sentence that ended as the user muted still holds words
+    /// that were recorded; not near one, because the engines invent text on long
+    /// zeroes and that text would survive. So a long segment that runs from real
+    /// speech into a mute is dropped whole, and one just under half invented is kept.
+    static let maxMutedShare = 0.5
+}
+
+extension [TimestampedSegment] {
+    /// Drops text timed mostly inside a muted stretch. A zero-length segment is
+    /// always kept, even one wholly inside a mute: it has no share to measure.
+    func removingMuted(_ intervals: [MicMuteInterval]) -> [TimestampedSegment] {
+        guard !intervals.isEmpty else { return self }
+
+        return filter { segment in
+            let muted = intervals.reduce(0) { total, interval in
+                total + Swift.max(0, Swift.min(segment.end, interval.end) - Swift.max(segment.start, interval.start))
+            }
+            return muted <= TimestampedSegment.maxMutedShare * (segment.end - segment.start)
+        }
+    }
+}

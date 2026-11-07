@@ -25,15 +25,17 @@ struct MicMuteHotkeyRow: View {
                 }
             }
         }
-        .help("Works from any app while a recording runs. Must include ⌘, ⌃ or ⌥. Changes apply from the next recording.")
+        .help(
+            "Works from any app while a recording runs. Must include ⌘, ⌃ or ⌥, and not be a standard one like ⌘Q. Applies from the next recording.",
+        )
         .onDisappear { stopCapturing() }
     }
 
     private func startCapturing() {
         isCapturing = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Escape cancels. A combination with no modifier is refused, so
-            // keep listening rather than letting it type into the window.
+            // Escape cancels. A combination with no modifier, or a reserved one,
+            // is refused, so keep listening rather than letting it type into the window.
             if event.keyCode != 53, let captured = GlobalHotkey(
                 keyCode: event.keyCode,
                 modifiers: event.modifierFlags,

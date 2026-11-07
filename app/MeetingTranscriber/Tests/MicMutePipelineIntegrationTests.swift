@@ -70,6 +70,63 @@ final class MicMutePipelineIntegrationTests: XCTestCase {
         XCTAssertEqual(result.job?.trackViability, .both)
     }
 
+    /// `[9, 11]` on the mic track is half inside `[10, 20]` and kept; shifted
+    /// first it would be `[10, 12]`, wholly inside, and dropped.
+    func testMuteTimesFilterOnTheMicTimelineBeforeTheShift() async throws {
+        let engine = dualEngine()
+        engine.segmentsByPathSuffix["mic_16k.wav"] = [TimestampedSegment(start: 9, end: 11, text: "straddling")]
+        let job = try PipelineJob(
+            meetingTitle: "m", appName: "File", mixPath: nil,
+            appPath: track("a.wav"), micPath: track("b.wav"), micDelay: 1,
+            micMuteIntervals: [MicMuteInterval(start: 10, end: 20)],
+        )
+        let result = try await run(job, engine: engine)
+        let transcript = try XCTUnwrap(result.transcript)
+
+        XCTAssertTrue(transcript.contains("straddling"))
+    }
+
+    func testOrphanRecoveryAttachesTheMuteLogAndConsumesIt() async throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+        let stem = "20260311_100000"
+        for suffix in [RecordingFileSuffix.mix, RecordingFileSuffix.mic] {
+            try FileManager.default.moveItem(at: track("\(stem)\(suffix)", seconds: 2), to: recDir.appendingPathComponent(stem + suffix))
+        }
+        var timeline = MicMuteTimeline()
+        timeline.setMuted(true)
+        MicMuteLog.write(timeline, stem: stem, in: recDir)
+
+        let queue = PipelineQueue(logDir: tmpDir)
+        await queue.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertEqual(queue.jobs.first?.micMuteSpansOnTranscript, [MicMuteInterval(start: 0, end: 2)])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recDir.appendingPathComponent(stem + RecordingFileSuffix.micMuteLog).path))
+    }
+
+    /// A finished stem the scan skips (here, one already processed) would keep its
+    /// log forever: nothing else ever reads it again.
+    func testOrphanRecoveryReapsTheMuteLogOfASkippedRecording() async throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+        let stem = "20260311_110000"
+        let mix = recDir.appendingPathComponent(stem + RecordingFileSuffix.mix)
+        try FileManager.default.moveItem(at: track("skipped_mix.wav", seconds: 1), to: mix)
+        let mic = recDir.appendingPathComponent(stem + RecordingFileSuffix.mic)
+        try FileManager.default.moveItem(at: track("skipped_mic.wav", seconds: 1), to: mic)
+        MicMuteLog.write(MicMuteTimeline(), stem: stem, in: recDir)
+        let processed = PipelineQueue(logDir: tmpDir)
+        let job = PipelineJob(meetingTitle: "m", appName: "a", mixPath: mix, appPath: nil, micPath: nil, micDelay: 0)
+        processed.insertJobForTesting(job)
+        processed.updateJobState(id: job.id, to: .error, error: "Empty transcript")
+
+        let queue = PipelineQueue(logDir: tmpDir)
+        await queue.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertTrue(queue.jobs.isEmpty, "test premise: the recording was skipped")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recDir.appendingPathComponent(stem + RecordingFileSuffix.micMuteLog).path))
+    }
+
     func testMutedThroughoutSkipsTheMicWithoutAWarning() async throws {
         let engine = dualEngine()
         engine.throwingPathSuffixes = ["mic_16k.wav"]

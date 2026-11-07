@@ -544,7 +544,7 @@ extension PipelineQueue {
 
         // Off-main: directory scan + processed-list read + per-file
         // attributesOfItem probes + filtering all happen here.
-        let candidates: [PairedRecordingResolver.Group] = await Task.detached(priority: .utility) {
+        let candidates: [MicMuteLog.RecoveryCandidate] = await Task.detached(priority: .utility) {
             let fm = FileManager.default
             guard let entries = try? fm.contentsOfDirectory(
                 at: recordingsDir,
@@ -552,7 +552,7 @@ extension PipelineQueue {
             ) else { return [] }
             let processedPaths = ledger.load()
             let now = Date()
-            return PairedRecordingResolver.resolve(urls: entries).paired.filter { group in
+            let recoverable = PairedRecordingResolver.resolve(urls: entries).paired.filter { group in
                 // Groups without a real mix file (app+mic-only paired imports)
                 // aren't recoverable from the dir scan alone.
                 guard let mixURL = group.mix else { return false }
@@ -571,6 +571,7 @@ extension PipelineQueue {
                 }
                 return true
             }
+            return MicMuteLog.forRecovery(recoverable, among: entries, in: recordingsDir)
         }.value
 
         // Left in staging for the active queue's next recovery: the one its
@@ -579,15 +580,15 @@ extension PipelineQueue {
         // one on a queue nobody sees, and a second time on the active one.
         guard !candidates.isEmpty, !isRetired else { return }
 
-        for group in candidates {
+        for (group, micMuted) in candidates {
             guard let mixURL = group.mix else { continue }
             var job = PipelineJob(
                 meetingTitle: "Recovered Recording (\(group.stem))",
                 appName: "Unknown",
                 mixPath: mixURL, appPath: group.app, micPath: group.mic,
-                micDelay: 0,
-                micMuteIntervals: MicMuteLog.recoveredIntervals(stem: group.stem, in: recordingsDir, track: group.mic ?? mixURL),
+                micDelay: 0, micMuteIntervals: micMuted,
             )
+            MicMuteLog.remove(stem: group.stem, in: recordingsDir)
             stampTranscriptOutputOptions(on: &job)
             jobs.append(job)
             eventLog.append(jobID: job.id, event: "recovered", from: nil, to: .waiting)

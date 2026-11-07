@@ -13,6 +13,19 @@ final class GlobalHotkeyTests: XCTestCase {
         XCTAssertNil(GlobalHotkey(keyCode: 46, modifiers: [.shift], characters: "M"))
     }
 
+    func testStandardCommandShortcutsAreRefused() {
+        XCTAssertNil(GlobalHotkey(keyCode: UInt16(kVK_ANSI_Q), modifiers: [.command], characters: "q"))
+        XCTAssertNil(GlobalHotkey(keyCode: UInt16(kVK_ANSI_W), modifiers: [.command, .capsLock], characters: "W"))
+        XCTAssertNil(GlobalHotkey(keyCode: UInt16(kVK_ANSI_S), modifiers: [.command], characters: "s"), "the menu's Stop")
+        XCTAssertNil(GlobalHotkey(keyCode: UInt16(kVK_Tab), modifiers: [.command], characters: "\t"))
+        XCTAssertNil(GlobalHotkey(keyCode: UInt16(kVK_Space), modifiers: [.command], characters: " "))
+    }
+
+    func testAReservedKeyWithAnotherModifierIsAccepted() {
+        XCTAssertNotNil(GlobalHotkey(keyCode: UInt16(kVK_ANSI_Q), modifiers: [.command, .option], characters: "q"))
+        XCTAssertNotNil(GlobalHotkey(keyCode: UInt16(kVK_ANSI_M), modifiers: [.control, .option], characters: "m"))
+    }
+
     func testModifiersMapToCarbonAndTheName() throws {
         let hotkey = try XCTUnwrap(GlobalHotkey(keyCode: 46, modifiers: [.control, .option], characters: "m"))
         XCTAssertEqual(hotkey.keyCode, 46)
@@ -28,7 +41,7 @@ final class GlobalHotkeyTests: XCTestCase {
     }
 
     func testSurvivesSettingsEncoding() throws {
-        let hotkey = try XCTUnwrap(GlobalHotkey(keyCode: 46, modifiers: [.command], characters: "m"))
+        let hotkey = try XCTUnwrap(GlobalHotkey(keyCode: 46, modifiers: [.control, .option], characters: "m"))
         let decoded = try JSONDecoder().decode(GlobalHotkey.self, from: JSONEncoder().encode(hotkey))
         XCTAssertEqual(decoded, hotkey)
     }
@@ -146,11 +159,31 @@ final class MicMuteSettingsTests: XCTestCase {
         XCTAssertNil(settings.micMuteHotkey)
     }
 
+    func testStartMutedToggleWritesBackToSettings() throws {
+        let suite = "mic-mute-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(DefaultsSuite.open(suite))
+        addTeardownBlock { DefaultsSuite.remove(suite) }
+        let settings = AppSettings(defaults: defaults)
+        let toggle = try AudioSettingsView(settings: settings).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.startRecordingsMicMutedToggle)
+        try toggle.find(ViewType.Toggle.self).tap()
+        XCTAssertTrue(settings.startRecordingsMicMuted)
+    }
+
+    func testShortcutButtonNamesTheSetShortcutAndClearRemovesIt() throws {
+        var stored = GlobalHotkey(keyCode: 46, modifiers: [.control, .option], characters: "m")
+        let row = MicMuteHotkeyRow(hotkey: Binding(get: { stored }, set: { stored = $0 }))
+        XCTAssertEqual(try row.inspect().find(button: "⌃⌥M").accessibilityIdentifier(), A11yID.micMuteHotkeyButton)
+
+        try row.inspect().find(button: "Clear").tap()
+        XCTAssertNil(stored)
+    }
+
     func testHotkeyPersists() throws {
         let suite = "mic-mute-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(DefaultsSuite.open(suite))
         addTeardownBlock { DefaultsSuite.remove(suite) }
-        let hotkey = try XCTUnwrap(GlobalHotkey(keyCode: 46, modifiers: [.command], characters: "m"))
+        let hotkey = try XCTUnwrap(GlobalHotkey(keyCode: 46, modifiers: [.control, .option], characters: "m"))
         AppSettings(defaults: defaults).micMuteHotkey = hotkey
         XCTAssertEqual(AppSettings(defaults: defaults).micMuteHotkey, hotkey)
     }

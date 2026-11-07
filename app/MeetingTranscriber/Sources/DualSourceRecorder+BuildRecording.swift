@@ -332,7 +332,7 @@ extension DualSourceRecorder {
         try? FileManager.default.removeItem(
             at: inProgressMarker(stem: stopped.timestamp, in: stopped.recordingsDir),
         )
-        recording.micMuteIntervals = stopped.captureResult.micMuteIntervals
+        recording.micMuteIntervals = recording.micPath != nil ? stopped.captureResult.micMuteIntervals : []
         MicMuteLog.remove(stem: stopped.timestamp, in: stopped.recordingsDir)
         return recording
     }

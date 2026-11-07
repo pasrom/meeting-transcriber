@@ -24,46 +24,33 @@ enum MicMuteLog {
     }
 
     /// The intervals a crashed recording left, with a mute still open running to
-    /// the end of `track`. Consumes the file. Empty when there is none.
-    static func recoveredIntervals(stem: String, in dir: URL, track: URL) -> [MicMuteInterval] {
-        let file = url(stem: stem, in: dir)
-        guard let data = try? Data(contentsOf: file),
+    /// the end of `micTrack`. Empty when there is no log or no mic track: on any
+    /// other track they would silence the far end. Leaves the file for `remove`.
+    static func recoveredIntervals(stem: String, in dir: URL, micTrack: URL?) -> [MicMuteInterval] {
+        guard let track = micTrack,
+              let data = try? Data(contentsOf: url(stem: stem, in: dir)),
               let timeline = try? JSONDecoder().decode(MicMuteTimeline.self, from: data) else { return [] }
 
-        try? FileManager.default.removeItem(at: file)
         let duration = Double(AudioMixer.frameCount(of: track)) / Double(AudioConstants.targetSampleRate)
         return timeline.intervals(endingAt: duration)
     }
-}
 
-extension MicMuteInterval {
-    /// Bracketed like the recording note, so it cannot read as something said.
-    var transcriptMarker: String {
-        "[Mic muted \(TimestampedSegment.clockTime(start))–\(TimestampedSegment.clockTime(end))]"
-    }
-}
+    typealias RecoveryCandidate = (group: PairedRecordingResolver.Group, micMuted: [MicMuteInterval])
 
-extension [MicMuteInterval] {
-    func shifted(by offset: TimeInterval) -> [MicMuteInterval] {
-        map { MicMuteInterval(start: $0.start + offset, end: $0.end + offset) }
-    }
-
-    func mutedFrames(rate: Int) -> Int {
-        Int(reduce(0) { $0 + $1.end - $1.start } * Double(rate))
-    }
-}
-
-extension [TimestampedSegment] {
-    /// Drops text timed mostly inside a muted stretch. Only "mostly", because a
-    /// sentence that ended as the user muted still holds words that were recorded.
-    func removingMuted(_ intervals: [MicMuteInterval]) -> [TimestampedSegment] {
-        guard !intervals.isEmpty else { return self }
-
-        return filter { segment in
-            let muted = intervals.reduce(0) { total, interval in
-                total + Swift.max(0, Swift.min(segment.end, interval.end) - Swift.max(segment.start, interval.start))
+    /// For the orphan scan: the mute times of each group it will recover, and the
+    /// log of every finished stem it skips deleted, since nothing reads it again.
+    /// A stem with no mix yet may still be recording, so its log is left alone.
+    static func forRecovery(
+        _ recoverable: [PairedRecordingResolver.Group], among entries: [URL], in dir: URL,
+    ) -> [RecoveryCandidate] {
+        let names = Set(entries.map(\.lastPathComponent))
+        let recoverableStems = Set(recoverable.map(\.stem))
+        for name in names where name.hasSuffix(RecordingFileSuffix.micMuteLog) {
+            let stem = String(name.dropLast(RecordingFileSuffix.micMuteLog.count))
+            if names.contains(stem + RecordingFileSuffix.mix), !recoverableStems.contains(stem) {
+                remove(stem: stem, in: dir)
             }
-            return muted * 2 <= segment.end - segment.start
         }
+        return recoverable.map { ($0, recoveredIntervals(stem: $0.stem, in: dir, micTrack: $0.mic)) }
     }
 }

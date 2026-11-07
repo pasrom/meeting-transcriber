@@ -80,21 +80,30 @@ final class MicMuteLogTests: XCTestCase {
         try FileManager.default.removeItem(at: dir)
     }
 
-    func testMuteOpenAtACrashRunsToTheEndOfTheTrackAndConsumesTheFile() throws {
+    func testMuteOpenAtACrashRunsToTheEndOfTheTrack() throws {
         let track = dir.appendingPathComponent("s_mic.wav")
         try AudioMixer.saveWAV(samples: [Float](repeating: 0, count: 32000), sampleRate: 16000, url: track)
         var timeline = MicMuteTimeline()
         timeline.setMuted(true)
         MicMuteLog.write(timeline, stem: "s", in: dir)
 
-        let intervals = MicMuteLog.recoveredIntervals(stem: "s", in: dir, track: track)
+        let intervals = MicMuteLog.recoveredIntervals(stem: "s", in: dir, micTrack: track)
         XCTAssertEqual(intervals, [MicMuteInterval(start: 0, end: 2)])
-        XCTAssertTrue(MicMuteLog.recoveredIntervals(stem: "s", in: dir, track: track).isEmpty)
+        MicMuteLog.remove(stem: "s", in: dir)
+        XCTAssertTrue(MicMuteLog.recoveredIntervals(stem: "s", in: dir, micTrack: track).isEmpty)
     }
 
     func testRecordingWithNoMuteRecoversNoIntervals() {
         let track = dir.appendingPathComponent("s_mic.wav")
-        XCTAssertTrue(MicMuteLog.recoveredIntervals(stem: "s", in: dir, track: track).isEmpty)
+        XCTAssertTrue(MicMuteLog.recoveredIntervals(stem: "s", in: dir, micTrack: track).isEmpty)
+    }
+
+    func testALogWithNoMicTrackRecoversNoIntervals() {
+        var timeline = MicMuteTimeline()
+        timeline.setMuted(true)
+        MicMuteLog.write(timeline, stem: "s", in: dir)
+
+        XCTAssertTrue(MicMuteLog.recoveredIntervals(stem: "s", in: dir, micTrack: nil).isEmpty)
     }
 }
 
@@ -114,5 +123,40 @@ final class MicMuteSnapshotTests: XCTestCase {
             PipelineJob.self, from: JSONSerialization.data(withJSONObject: object),
         )
         XCTAssertTrue(old.micMuteSpansOnTranscript.isEmpty)
+    }
+}
+
+/// Mute times read from disk, a reimported sidecar among them, reach `Int`
+/// conversions that trap, and an overlap would count twice.
+final class MicMuteIntervalSanitizingTests: XCTestCase {
+    func testHugeAndNonFiniteTimesAreClippedOrDropped() {
+        let intervals = [
+            MicMuteInterval(start: 0, end: 1e100),
+            MicMuteInterval(start: .nan, end: 5),
+            MicMuteInterval(start: 3, end: .infinity),
+        ].sanitized
+        XCTAssertEqual(intervals, [MicMuteInterval(start: 0, end: MicMuteInterval.maxSeconds)])
+        XCTAssertGreaterThan(intervals.mutedFrames(rate: 48000), 0, "converts without trapping")
+        XCTAssertFalse(intervals[0].transcriptMarker.isEmpty)
+    }
+
+    func testOverlapsMergeAndEmptyOrBackwardsOnesAreDropped() {
+        let intervals = [
+            MicMuteInterval(start: 8, end: 12),
+            MicMuteInterval(start: 2, end: 4),
+            MicMuteInterval(start: 3, end: 9),
+            MicMuteInterval(start: 20, end: 20),
+            MicMuteInterval(start: 30, end: 25),
+            MicMuteInterval(start: -5, end: 1),
+        ].sanitized
+        XCTAssertEqual(intervals, [MicMuteInterval(start: 0, end: 1), MicMuteInterval(start: 2, end: 12)])
+    }
+
+    func testAJobSanitizesWhatItIsGiven() {
+        let job = PipelineJob(
+            meetingTitle: "t", appName: "Microphone", mixPath: nil, appPath: nil, micPath: nil, micDelay: 0,
+            micMuteIntervals: [MicMuteInterval(start: 0, end: 1e100)],
+        )
+        XCTAssertEqual(job.micMuteSpansOnTranscript, [MicMuteInterval(start: 0, end: MicMuteInterval.maxSeconds)])
     }
 }

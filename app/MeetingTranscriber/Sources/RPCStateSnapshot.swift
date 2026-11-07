@@ -180,8 +180,9 @@
             /// The levels the last poll read, in dBFS. What the tint is
             /// decided from, and absent before the first tick of a recording.
             let micLevelDBFS: Double?
-            /// Whether the user muted the mic in the recording. The level is
-            /// absent while it is: muted speech should not be readable anywhere.
+            /// Whether the user muted the mic in the recording. The level above
+            /// stays the real one, as the health checks see it, so a muted mic
+            /// does not read as a dead one; only the track is silenced.
             let micMuted: Bool
             let appLevelDBFS: Double?
 

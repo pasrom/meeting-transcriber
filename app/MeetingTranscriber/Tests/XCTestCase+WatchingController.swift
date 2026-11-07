@@ -50,6 +50,7 @@ extension XCTestCase {
         channelFaultWindow: TimeInterval = 0,
         makeDetector: @escaping () -> any MeetingDetecting = { makeSilentDetector() },
         makeRecorder: @escaping @MainActor () -> any RecordingProvider = { makeMockRecorder() },
+        micMuteHotkeyRegistrar: any HotkeyRegistering = GlobalHotkeyRegistrar(),
     ) -> WatchingController {
         // Own defaults suite, like `makeRPCTestState`: `AppSettings()` on
         // `.standard` writes into the test host's real preferences, and
@@ -114,6 +115,7 @@ extension XCTestCase {
             joinClock: joinClock,
             makeDetector: makeDetector,
             makeRecorder: makeRecorder,
+            micMuteHotkeyRegistrar: micMuteHotkeyRegistrar,
         )
     }
 }

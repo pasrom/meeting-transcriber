@@ -595,8 +595,10 @@ extension PipelineQueue {
             let mix16k = workDir.appendingPathComponent("mix_16k.wav")
             try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
 
-            // Only a microphone-only recording reaches here with mute times: a
-            // file import has none, and the mix of an app recording has two tracks.
+            // Only a microphone-only recording reaches here with mute times. Every
+            // constructor gives them only to a job with a mic track: the recorder
+            // (`DualSourceRecorder.finish`), a reimport (`PipelineController.enqueueFiles`)
+            // and orphan recovery (`MicMuteLog.recoveredIntervals`). A file import has none.
             if !micMuted.isEmpty, AudioMixer.frameCount(of: mix16k) - mutedFrames(ctx.jobID) < engine.minimumAudioFrames {
                 throw PipelineError.micMutedThroughout
             }

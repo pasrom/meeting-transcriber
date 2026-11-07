@@ -34,9 +34,8 @@ final class WatchingController {
         }
     }
 
-    /// Registered only while a recording can be muted, so the rest of the time
-    /// the key combination still reaches whichever app the user is in.
-    let micMuteHotkeyRegistrar = GlobalHotkeyRegistrar()
+    /// Registered only while a recording can be muted; otherwise the keys reach the frontmost app.
+    let micMuteHotkeyRegistrar: any HotkeyRegistering
 
     /// Non-nil while `toggleWatching`'s async start is in flight — it awaits mic
     /// access before `watchLoop` is assigned, so without this a second toggle in
@@ -156,7 +155,9 @@ final class WatchingController {
         joinClock: any Clock<Duration> = ContinuousClock(),
         makeDetector: (() -> any MeetingDetecting)? = nil,
         makeRecorder: @escaping @MainActor () -> any RecordingProvider = { DualSourceRecorder() },
+        micMuteHotkeyRegistrar: any HotkeyRegistering = GlobalHotkeyRegistrar(),
     ) {
+        self.micMuteHotkeyRegistrar = micMuteHotkeyRegistrar
         self.settings = settings
         self.notifier = notifier
         self.pipeline = pipeline

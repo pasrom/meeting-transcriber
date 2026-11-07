@@ -1,3 +1,4 @@
+import AudioTapLib
 @testable import MeetingTranscriber
 import XCTest
 
@@ -14,6 +15,7 @@ final class RecordingSidecarTests: XCTestCase {
             mixFilename: "20260503_083000_mix.wav",
             appFilename: "20260503_083000_app.wav",
             micFilename: "20260503_083000_mic.wav",
+            micMuteIntervals: [MicMuteInterval(start: 12.5, end: 30)],
         )
     }
 
@@ -102,6 +104,16 @@ final class RecordingSidecarTests: XCTestCase {
         XCTAssertEqual(decoded.micDelaySeconds, 0.12, accuracy: 0.0001)
         XCTAssertEqual(decoded.files.mix, "20260503_083000_mix.wav")
         XCTAssertEqual(decoded.trigger, .manual)
+        XCTAssertEqual(decoded.micMuteIntervals, [MicMuteInterval(start: 12.5, end: 30)])
+    }
+
+    func test_read_sidecarFromBeforeMuteTimesHasNone() throws {
+        let decoded = try XCTUnwrap(readRawSidecar("""
+        {"version": 2, "title": "t", "appName": "a",
+         "startedAt": "2026-05-03T08:30:00Z", "stoppedAt": "2026-05-03T09:00:00Z",
+         "participants": [], "micDelaySeconds": 0, "files": {"mix": "m_mix.wav"}}
+        """))
+        XCTAssertNil(decoded.micMuteIntervals)
     }
 
     func test_read_returnsNilWhenMissing() throws {

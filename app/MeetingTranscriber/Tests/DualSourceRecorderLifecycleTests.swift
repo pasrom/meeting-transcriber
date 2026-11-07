@@ -43,6 +43,9 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         var micOpen = true
         var muteTimeline = MicMuteTimeline()
         var micMuteIntervals: [MicMuteInterval] = []
+        var hasOpenMic: Bool {
+            micOpen
+        }
 
         func setMicMuted(_ muted: Bool) -> MicMuteTimeline? {
             guard micOpen else { return nil }

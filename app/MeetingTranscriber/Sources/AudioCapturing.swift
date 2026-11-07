@@ -37,6 +37,8 @@ protocol AudioCapturing: AnyObject {
     var appSignalAges: ChannelSignalAges { get }
     var micSignalAges: ChannelSignalAges { get }
 
+    var hasOpenMic: Bool { get }
+
     /// Silence or restore the microphone track. Nil when the session has no open
     /// microphone, otherwise the timeline after the change.
     @discardableResult

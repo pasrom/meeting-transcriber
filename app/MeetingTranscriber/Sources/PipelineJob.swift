@@ -375,7 +375,7 @@ struct PipelineJob: Identifiable, Codable {
         self.appPath = appPath
         self.micPath = micPath
         self.micDelay = micDelay
-        self.micMuteIntervals = micMuteIntervals
+        self.micMuteIntervals = micMuteIntervals.sanitized
         self.participants = participants
         self.enqueuedAt = Date()
         self.meetingStartTime = meetingStartTime

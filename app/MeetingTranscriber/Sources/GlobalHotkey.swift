@@ -13,11 +13,22 @@ struct GlobalHotkey: Codable, Equatable {
     /// named without the keyboard layout that produced it.
     let displayName: String
 
+    /// Command plus one of these is a standard app or system shortcut, or one of
+    /// this app's menu items. A Carbon hotkey pre-empts it in every app.
+    static let reservedCommandKeys: Set<String> = ["q", "w", "h", "m", ",", "s", ".", "r", "n", "p", "o"]
+    /// Tab and Space, which have no character to match on.
+    static let reservedCommandKeyCodes: Set<UInt16> = [UInt16(kVK_Tab), UInt16(kVK_Space)]
+
     /// Nil unless Command, Control or Option is held: anything less would swallow
-    /// ordinary typing in every app for the length of a recording.
+    /// ordinary typing in every app for the length of a recording. Nil too for a
+    /// reserved Command shortcut, which would stop ⌘Q quitting anything, say.
     init?(keyCode: UInt16, modifiers: NSEvent.ModifierFlags, characters: String?) {
         guard !modifiers.isDisjoint(with: [.command, .control, .option]),
               let characters, !characters.isEmpty else { return nil }
+        if modifiers.intersection([.command, .control, .option, .shift]) == .command,
+           Self.reservedCommandKeyCodes.contains(keyCode) || Self.reservedCommandKeys.contains(characters.lowercased()) {
+            return nil
+        }
 
         var carbon: UInt32 = 0
         var name = ""
@@ -46,10 +57,19 @@ extension GlobalHotkey {
     }
 }
 
+/// What `WatchingController` needs of a registrar, so a test can stand in for Carbon.
+@MainActor
+protocol HotkeyRegistering: AnyObject {
+    /// False when the system refused the combination.
+    @discardableResult
+    func register(_ hotkey: GlobalHotkey, action: @escaping () -> Void) -> Bool
+    func unregister()
+}
+
 /// Holds at most one registered `GlobalHotkey`. Carbon's API, because it needs no
 /// permission: an `NSEvent` global monitor would need the Accessibility grant.
 @MainActor
-final class GlobalHotkeyRegistrar {
+final class GlobalHotkeyRegistrar: HotkeyRegistering {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var action: (() -> Void)?

@@ -313,7 +313,7 @@
                 appNoiseFloorOnly: channelHealth.appNoiseFloorOnly,
                 micFault: channelHealth.micFault?.rawValue,
                 appFault: channelHealth.appFault?.rawValue,
-                micLevelDBFS: isMicMuted ? nil : channelHealth.micLevelDBFS,
+                micLevelDBFS: channelHealth.micLevelDBFS,
                 micMuted: isMicMuted,
                 appLevelDBFS: channelHealth.appLevelDBFS,
                 micSecondsSinceLastBuffer: channelHealth.micAges.secondsSinceLastBuffer,
