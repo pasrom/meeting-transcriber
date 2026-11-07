@@ -1,3 +1,4 @@
+import AudioTapLib
 import Foundation
 
 /// A transcribed segment with timestamps and optional speaker label.
@@ -49,11 +50,16 @@ extension [TimestampedSegment] {
     /// sites, so a fourth cannot quietly reintroduce the duplicates. The note
     /// rides here for that same reason, and `note` has no default so a site
     /// with nothing to add says `nil` rather than forgets: applying it at each
-    /// *write* site instead missed the mid-pipeline draft.
-    func transcriptText(note: String?) -> String {
-        TranscriptNote.prepend(
-            note, to: filter { !$0.suppressed }.map(\.formattedLine).joined(separator: "\n"),
-        )
+    /// *write* site instead missed the mid-pipeline draft. Mute markers ride
+    /// here for the same reason, placed by time among the lines.
+    func transcriptText(note: String?, micMuted: [MicMuteInterval]) -> String {
+        let spoken = filter { !$0.suppressed }.map { (start: $0.start, line: $0.formattedLine) }
+        let markers = micMuted.map { (start: $0.start, line: $0.transcriptMarker) }
+        // Markers first, so one sorts ahead of a line starting at the same moment.
+        let lines = (markers + spoken).enumerated()
+            .sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }
+            .map(\.element.line)
+        return TranscriptNote.prepend(note, to: lines.joined(separator: "\n"))
     }
 }
 
@@ -71,13 +77,17 @@ extension TimestampedSegment {
 
     /// Format timestamp as [MM:SS] or [H:MM:SS] for long recordings.
     var formattedTimestamp: String {
-        let total = Int(start)
+        "[\(Self.clockTime(start))]"
+    }
+
+    static func clockTime(_ time: TimeInterval) -> String {
+        let total = Int(time)
         let h = total / 3600
         let m = (total % 3600) / 60
         let s = total % 60
         return h > 0
-            ? String(format: "[%d:%02d:%02d]", h, m, s)
-            : String(format: "[%02d:%02d]", m, s)
+            ? String(format: "%d:%02d:%02d", h, m, s)
+            : String(format: "%02d:%02d", m, s)
     }
 
     /// Format as "[MM:SS] Speaker: text" or "[MM:SS] text" if no speaker.

@@ -584,10 +584,9 @@ extension PipelineQueue {
             var job = PipelineJob(
                 meetingTitle: "Recovered Recording (\(group.stem))",
                 appName: "Unknown",
-                mixPath: mixURL,
-                appPath: group.app,
-                micPath: group.mic,
+                mixPath: mixURL, appPath: group.app, micPath: group.mic,
                 micDelay: 0,
+                micMuteIntervals: MicMuteLog.recoveredIntervals(stem: group.stem, in: recordingsDir, track: group.mic ?? mixURL),
             )
             stampTranscriptOutputOptions(on: &job)
             jobs.append(job)

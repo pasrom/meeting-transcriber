@@ -18,6 +18,8 @@ struct RecordingResult {
     /// Not derived from `systemUptime` (which doesn't advance during sleep, so
     /// a meeting spanning a sleep would skew the anchor) — this is exact.
     let recordingStartDate: Date
+    /// The stretches of the mic track the user muted, in seconds of that track.
+    var micMuteIntervals: [MicMuteInterval] = []
 }
 
 /// The format `buildRecording` should expect the app track to arrive in, passed
@@ -411,6 +413,23 @@ class DualSourceRecorder: RecordingProvider {
     /// doubles, which record nothing, do not all have to learn it.
     var silentTrackWatchdogEnabled = false
 
+    /// Whether the next recording silences its microphone from the first buffer.
+    /// Set before `start(...)`, like the property above. A microphone-only
+    /// recording ignores it: the microphone is the only thing it records.
+    var micStartsMuted = false
+
+    private(set) var canMuteMic = false
+    private(set) var isMicMuted = false
+
+    /// Mutes this recording only. The call, and the OS microphone indicator, are
+    /// unaffected. Saved at each toggle so a crash cannot lose the mute times.
+    func setMicMuted(_ muted: Bool) {
+        guard let timeline = captureSession?.setMicMuted(muted), let stem = startTimestamp else { return }
+
+        isMicMuted = timeline.isMuted
+        MicMuteLog.write(timeline, stem: stem, in: recordingsDir)
+    }
+
     /// Start recording whichever channels `source` asks for.
     func start(
         source: RecordingSource,
@@ -471,6 +490,7 @@ class DualSourceRecorder: RecordingProvider {
                 silentTrackWatchdog: silentTrackWatchdogEnabled,
                 appLiveSink: appLiveSink,
                 micLiveSink: micLiveSink,
+                micStartsMuted: micStartsMuted && source.capturesAppAudio,
             ))
             try session.start()
         } catch {
@@ -483,6 +503,14 @@ class DualSourceRecorder: RecordingProvider {
             throw error
         }
         captureSession = session
+        // A probe rather than a stored answer: a microphone that failed to open
+        // on an app recording is swallowed by the session, which then returns nil.
+        let openMicTimeline = session.setMicMuted(micStartsMuted && source.capturesAppAudio)
+        canMuteMic = openMicTimeline != nil
+        isMicMuted = openMicTimeline?.isMuted ?? false
+        if let openMicTimeline, openMicTimeline.isMuted {
+            MicMuteLog.write(openMicTimeline, stem: ts, in: recordingsDir)
+        }
 
         isRecording = true
         recordingStartDate = Date()
@@ -513,6 +541,8 @@ class DualSourceRecorder: RecordingProvider {
         }
 
         isRecording = false
+        canMuteMic = false
+        isMicMuted = false
 
         guard let session = captureSession else {
             throw RecorderError.noAudioData

@@ -314,7 +314,7 @@ extension DualSourceRecorder {
     /// The file half of a stop: build the tracks and the mix, then drop the
     /// in-progress marker. Touches no recorder state, so it runs anywhere.
     nonisolated static func finish(_ stopped: StoppedCapture) throws -> RecordingResult {
-        let recording = try buildRecording(
+        var recording = try buildRecording(
             from: stopped.captureResult,
             recordingsDir: stopped.recordingsDir,
             timestamp: stopped.timestamp,
@@ -332,6 +332,8 @@ extension DualSourceRecorder {
         try? FileManager.default.removeItem(
             at: inProgressMarker(stem: stopped.timestamp, in: stopped.recordingsDir),
         )
+        recording.micMuteIntervals = stopped.captureResult.micMuteIntervals
+        MicMuteLog.remove(stem: stopped.timestamp, in: stopped.recordingsDir)
         return recording
     }
 }
