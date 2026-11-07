@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Caption-bar content rendered inside `LiveCaptionsWindow` (a borderless,
@@ -6,7 +7,7 @@ import SwiftUI
 /// Layout (top to bottom): up to `maxFinalsKept` recent finalised utterances
 /// at full opacity, then the per-channel hypotheses at 60 % opacity. Finals
 /// carry their own per-line `LiveCaptionLine.speaker` (resolved by
-/// `LiveSpeakerMatcher` at commit time) so a `speakers.json` rename after
+/// `LiveSpeakerMatcher` for that line) so a `speakers.json` rename after
 /// the line is committed doesn't retroactively re-label it. Live hypothesis
 /// rows fall back to the channel-default `LiveCaptionsState.micLabel` /
 /// `.appLabel` because the partial transcript hasn't reached its end-of-
@@ -37,8 +38,7 @@ struct LiveCaptionsOverlay: View {
                         )
                 }
             }
-            .animation(.easeInOut(duration: 0.15), value: state.hypothesisMic)
-            .animation(.easeInOut(duration: 0.15), value: state.hypothesisApp)
+            // Not keyed on the hypotheses: a cross-fade on each partial overlaid old and new words.
             .animation(.easeInOut(duration: 0.15), value: state.recentFinals)
     }
 
@@ -73,14 +73,48 @@ struct LiveCaptionsOverlay: View {
     }
 
     private func row(speaker: String, text: String, opacity: Double) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             Text(speaker + ":")
                 .foregroundStyle(.white.opacity(min(opacity, 0.85)))
                 .fontWeight(.semibold)
-            Text(text)
-                .foregroundStyle(.white.opacity(opacity))
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .layoutPriority(1)
+            // Bound each channel too, so a long mic row cannot push the app row out of the bar.
+            LiveCaptionTextClip(maxHeight: 2 * Self.lineHeight(fontSize: state.size.fontSize)) {
+                Text(text)
+                    .foregroundStyle(.white.opacity(opacity))
+            }
+            .clipped()
         }
+    }
+
+    /// Line pitch of the row font, which SwiftUI rounds up to whole points (19 / 26 / 33 pt at
+    /// small / medium / large). A clip off this pitch shows a strip of the hidden line's descenders.
+    static func lineHeight(fontSize: CGFloat) -> CGFloat {
+        let medium = NSFont.systemFont(ofSize: fontSize, weight: .medium)
+        let font = medium.fontDescriptor.withDesign(.rounded)
+            .flatMap { NSFont(descriptor: $0, size: fontSize) } ?? medium
+        return (font.ascender - font.descender + font.leading).rounded(.up)
+    }
+}
+
+/// Takes its content's height up to `maxHeight`, never more, and keeps the
+/// content's bottom edge, so overflow leaves at the top.
+struct LiveCaptionTextClip: Layout {
+    let maxHeight: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let size = content.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        return CGSize(width: size.width, height: min(size.height, maxHeight))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        subviews.first?.place(
+            at: CGPoint(x: bounds.minX, y: bounds.maxY),
+            anchor: .bottomLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: nil),
+        )
     }
 }
 
