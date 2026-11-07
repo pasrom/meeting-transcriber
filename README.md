@@ -99,6 +99,7 @@ flowchart TD
 - **Update checker** — Notifies when a new version is available
 - **Background processing** — PipelineQueue runs transcription and meeting notes generation independently from recording
 - **Record-only mode** — Skip the entire post-recording pipeline and drop dual-source recordings + a metadata sidecar into the output folder, for external/fleet processing (e.g. a separate GPU host)
+- **Optional Notion export** — Save the generated meeting notes to a Notion database in the background after a job finishes; retries, protocol re-exports after speaker renaming, and optional speaker-name tags are supported
 - **Local automation API** (Homebrew build): drive the pipeline headlessly over localhost HTTP. POST an audio file, get a diarized transcript back. See [`docs/automation-api.md`](docs/automation-api.md)
 - **Stream Deck and hotkey control** (Homebrew build): start/stop watching from a Stream Deck key, Shortcut, Raycast or any launcher. See [`docs/stream-deck.md`](docs/stream-deck.md)
 - **Distribution** — Install via Homebrew Cask or build from source
@@ -249,12 +250,13 @@ Open Settings via the menu bar item or ⌘,.
 
 | Tab | What's in it |
 |---|---|
-| **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack), detection timing, update checks |
+| **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack), detection timing |
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
 | **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model incl. a custom WhisperKit model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
 | **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
-| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, notes language, output folder, custom prompt |
-| **Advanced** | Permissions status, diagnostics, version info |
+| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, notes language, output folder, custom prompt, optional Notion export |
+| **Advanced** | Permissions status, diagnostics |
+| **About** | Version info, ffmpeg status, update checks |
 
 ### Custom WhisperKit models
 

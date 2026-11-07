@@ -16,7 +16,8 @@ app/MeetingTranscriber/    # Swift macOS menu-bar app (SPM)
                            #   Post-processing: PipelineQueue (transcribe -> diarize -> protocol).
                            #   Live captions overlay + StreamingTranscriber. Settings UI
                            #   (SettingsView + Settings/). Protocol generation:
-                           #   ClaudeCLIProtocolGenerator (#if !APPSTORE) / OpenAIProtocolGenerator.
+                           #   ClaudeCLIProtocolGenerator (#if !APPSTORE) / OpenAIProtocolGenerator,
+                           #   with optional background export to Notion (NotionClient).
                            #   DebugRPCServer + /v1 automation API (#if !APPSTORE).
   Tests/                   # XCTest + ViewInspector; Fixtures/ test audio (two_speakers_de.wav, ...)
   Entitlements/            # Homebrew.entitlements (mic only) + AppStore.entitlements (sandbox)
@@ -29,6 +30,7 @@ scripts/                   # build_release / run_app / e2e-*.sh drivers, lint.sh
 Casks/                     # Homebrew Cask formulae (meeting-transcriber + @beta)
 .github/workflows/         # CI (lint/analyze/test), release, e2e lanes, quality-and-safety, pages
 docs/                      # architecture/ (per-area docs) + architecture-macos.md + plans/ (committed RFCs; .local/ = gitignored scratch)
+site/                      # GitHub Pages marketing site, deployed by pages.yml
 protocols/                 # Protocol output dir (gitignored)
 speakers.json / .env       # Runtime voice profiles + env vars (gitignored)
 ```
@@ -40,8 +42,8 @@ speakers.json / .env       # Runtime voice profiles + env vars (gitignored)
 ## Pipeline
 
 ```
-Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → [WhisperKit | Parakeet] per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
-Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → [WhisperKit | Parakeet] → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
+Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → [WhisperKit | Parakeet] per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol → optional background export to Notion
+Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → [WhisperKit | Parakeet] → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol → optional background export to Notion
 ```
 
 ## Setup
