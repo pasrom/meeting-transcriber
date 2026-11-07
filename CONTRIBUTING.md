@@ -94,6 +94,26 @@ All new features and bug fixes must include tests. Run the full test suite befor
 cd app/MeetingTranscriber && swift test
 ```
 
+A test counts when it fails without your change. For a fix to existing code,
+revert the fix and confirm a test goes red. When the change adds something new
+(a type, a setting, a code path), a full revert is not that check: it also
+removes the new type, so its own tests fail even when nothing calls it. Find the
+one line that carries the change into the running app (the argument that passes
+a new setting on, the allowlist entry, the condition that gates the new path),
+replace it with a constant that still compiles, and confirm a test goes red; a
+build error does not count. Running only the tests that cover it is enough
+(`swift test --filter <TestClass>`); run the full suite once, with the line
+restored. Name that line and the test in the PR template. A change with no
+behaviour to test (docs, CI, a pure refactor or move) writes "n/a" there.
+
+- A test that proves a setting is honoured uses a value other than the default:
+  with the default it passes even when the setting is ignored.
+- New UI controls: see `docs/architecture/gui-testing.md`.
+- Fill in the template's "Not checked" line, for example "not tried on a
+  multi-channel mic".
+- In code comments and the PR text, state a mechanism or a number only when you
+  measured it; otherwise say that you did not.
+
 ## Submitting a PR
 
 1. One PR per feature, bug fix, or refactor — keep it focused

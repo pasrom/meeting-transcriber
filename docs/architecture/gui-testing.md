@@ -80,7 +80,8 @@ feature-level live assertions go in `test_rpc.sh` or the `e2e-app` lanes.
 
 **GUI bug found:** failing test first, at the lowest layer that reproduces it. If only
 the live scene reproduces, drive the real scene window (a minimal probe window does not
-reproduce — #504). Acceptance: revert the fix, test goes red.
+reproduce, #504). Acceptance: the test goes red without the fix, checked as `CONTRIBUTING.md`, Tests,
+describes.
 
 **Don't:** chase snapshot coverage; use `/ui/press` to arrange state (it's for testing
 the pressed control); test SwiftUI framework behavior (e.g. that `.keyboardShortcut`
