@@ -79,9 +79,10 @@ jobs:
           filters: .github/filters.yml
 
   # Advisory by design: this job is NOT among the required checks and must never
-  # be the thing that stops a merge. `main` is not at stake either way, and
-  # scripts/ci/check-merge-commits.sh carries the reason. What it protects is the
-  # review of the open PR, which a merge commit makes unreadable commit by commit.
+  # be the thing that stops a merge. It runs two checks on the PR's own commits:
+  # merge commits (scripts/ci/check-merge-commits.sh carries the reason; a merge
+  # commit makes the open PR unreadable commit by commit) and trailers written by
+  # AI tools (scripts/ci/check-tool-trailers.sh). `main` is not at stake either way.
   #
   # Two deliberate choices, compared with the build and test jobs below:
   #   - No `Cancel run on failure` step (`lint` and `analyze` have none either).
@@ -90,7 +91,7 @@ jobs:
   #     and passes.
   #   - Not gated on `changes`. A merge commit is worth reporting whichever files
   #     the PR touches, and this costs seconds on a free runner.
-  merge-commit-check:
+  branch-hygiene:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -118,6 +119,12 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: bash scripts/ci/check-merge-commits.sh "origin/$BASE_REF"
+      # Runs even when the merge-commit step failed, so one finding never hides the other.
+      - name: Check for AI tool trailers
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: bash scripts/ci/check-tool-trailers.sh "origin/$BASE_REF"
 
   lint:
     needs: changes
