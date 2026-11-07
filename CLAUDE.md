@@ -162,6 +162,7 @@ Read the matching doc before changing or debugging that area. Each holds the are
 ## Cross-Cutting Rules
 
 - Test each behaviour at the cheapest layer that can falsify it: pure logic first, then one ViewInspector wiring test per control, then live `/state`. For a GUI bug, write the failing test first at the lowest layer that reproduces it.
+- A test must fail without the change; for something new, check that at the line that wires it into production, not by a full revert. See `CONTRIBUTING.md`, Tests.
 
 ## Critical Notes
 

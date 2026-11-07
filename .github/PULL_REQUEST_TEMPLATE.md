@@ -2,6 +2,17 @@
 
 <!-- One or two lines. Link the issue if there is one. -->
 
+## Tests
+
+<!-- A fix to existing code: revert it and name the test that went red. Something new
+(type, setting, code path): replace the one line that wires it into the app with a
+constant instead, since a full revert also removes the new type's own tests.
+No behaviour to test (docs, CI, pure refactor): write "n/a". See CONTRIBUTING.md, Tests. -->
+
+- Reverted, or line set to a constant: <!-- file:line -->
+- Test that went red: <!-- test name -->
+- Not checked: <!-- inputs, paths or devices you did not try; "nothing" is a fine answer -->
+
 ## Checklist
 
 - [ ] Rebased on `main`, no merge commits, since a merge commit pulls commits that are
