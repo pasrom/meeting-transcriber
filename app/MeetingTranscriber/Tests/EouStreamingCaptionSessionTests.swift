@@ -211,6 +211,28 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
         XCTAssertTrue(recorder.finals.isEmpty)
     }
 
+    func testDiscontinuityResetsTranscriptAndAudioSlice() async {
+        let asr = MockEouStreamingAsrManaging()
+        let recorder = EventRecorder()
+        let session = makeSession(asr: asr, recorder: recorder)
+
+        await asr.enqueueBatch([.partial("old")])
+        await session.ingest(rampBuffer(base: 0, count: 1600))
+        await session.reset()
+
+        await asr.setEouTimestampsMs([100])
+        await asr.enqueueBatch([.eou("fresh")])
+        await session.ingest(rampBuffer(base: 5000, count: 1600))
+
+        XCTAssertEqual(recorder.partials.map(\.text), ["old", ""])
+        XCTAssertEqual(recorder.finals.map(\.text), ["fresh"])
+        XCTAssertEqual(recorder.finals[0].audio, (5000 ..< 6600).map(Float.init))
+        let resetCount = await asr.resetCount
+        let finishCount = await asr.finishCount
+        XCTAssertEqual(resetCount, 1)
+        XCTAssertEqual(finishCount, 0)
+    }
+
     // MARK: - 2. EOU finalizes with correctly sliced audio
 
     func testEouFinalizesWithSlicedAudioValues() async {

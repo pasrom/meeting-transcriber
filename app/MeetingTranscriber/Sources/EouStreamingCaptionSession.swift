@@ -128,6 +128,13 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         try await asr.loadModels()
     }
 
+    func reset() async {
+        await asr.reset()
+        _ = collector.drain()
+        resetSessionState()
+        onEvent(.partial(""))
+    }
+
     /// Feed a captured buffer into the streaming pipeline. Buffers that don't
     /// match the expected 16 kHz mono shape are dropped silently — upstream
     /// (`LiveTranscriptionController` / `MicCaptureHandler`) normalizes both
@@ -137,7 +144,7 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
     /// order — see the `LiveCaptionPipeline` contract), which is what keeps
     /// ring order == manager feed order and the EOU-ms → ring-slice mapping
     /// valid without any re-entrancy machinery here.
-    func ingest(_ buffer: LiveAudioBuffer) async {
+    func ingest(_ buffer: LiveAudioBuffer, backlog _: @Sendable () -> TimeInterval) async {
         guard buffer.channelCount == 1, buffer.sampleRate == 16000 else { return }
         await installCallbacksIfNeeded()
         guard let pcm = Self.makeBuffer(buffer.samples) else { return }
@@ -186,6 +193,10 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         }
 
         await asr.reset()
+        resetSessionState()
+    }
+
+    private func resetSessionState() {
         ring = UtteranceRingBuffer()
         lastEouMs = 0
         lastFinalizedPrefix = ""

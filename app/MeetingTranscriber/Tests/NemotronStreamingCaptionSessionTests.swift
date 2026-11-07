@@ -95,6 +95,40 @@ final class NemotronStreamingCaptionSessionTests: XCTestCase {
         XCTAssertTrue(finals(recorder.events).isEmpty, "no final without a speechEnd")
     }
 
+    func testDiscontinuityDropsPendingUtteranceAndStartsFresh() async {
+        let manager = MockNemotronManager()
+        await manager.setPartial("old")
+        let detector = ScriptedBoundaryDetector(script: [
+            .speechStart, nil, nil, nil, .speechStart, nil, nil, nil,
+        ])
+        let recorder = EventRecorder()
+        let session = makeSession(manager: manager, detector: detector, recorder: recorder)
+
+        for _ in 0 ..< 4 {
+            await session.ingest(chunkBuffer(value: 0.1))
+        }
+        await manager.setStalePartialAfterReset("stale")
+        await session.reset()
+        let resetCount = await detector.resetCount
+        XCTAssertEqual(resetCount, 1)
+
+        for _ in 0 ..< 2 {
+            await session.ingest(chunkBuffer(value: 0.7))
+        }
+        await manager.setPartial("fresh")
+        await manager.setFinish("fresh final")
+        for _ in 0 ..< 2 {
+            await session.ingest(chunkBuffer(value: 0.7))
+        }
+        await session.flush()
+
+        XCTAssertEqual(partials(recorder.events), ["old", "", "fresh"])
+        let finalEvents = finals(recorder.events)
+        XCTAssertEqual(finalEvents.map(\.text), ["fresh final"])
+        XCTAssertEqual(finalEvents[0].audio.count, 16384)
+        XCTAssertEqual(Set(finalEvents[0].audio), [0.7])
+    }
+
     /// A sub-second utterance (below the 1 s minimum) is dropped as noise
     /// rather than finalized.
     func testSubSecondUtteranceDroppedAsNoise() async {
@@ -218,6 +252,7 @@ final class NemotronStreamingCaptionSessionTests: XCTestCase {
 /// deterministically without the Silero model.
 private actor ScriptedBoundaryDetector: UtteranceBoundaryDetecting {
     private var script: [FluidVAD.StreamEvent.Kind?]
+    private(set) var resetCount = 0
 
     init(script: [FluidVAD.StreamEvent.Kind?]) {
         self.script = script
@@ -229,7 +264,9 @@ private actor ScriptedBoundaryDetector: UtteranceBoundaryDetecting {
     }
 
     // swiftlint:disable:next async_without_await
-    func reset() async {}
+    func reset() async {
+        resetCount += 1
+    }
 }
 
 /// Mock `NemotronStreamingAsrManaging` modelling the real contract:
@@ -239,6 +276,8 @@ private actor ScriptedBoundaryDetector: UtteranceBoundaryDetecting {
 private actor MockNemotronManager: NemotronStreamingAsrManaging {
     private var partial = ""
     private var finishText = ""
+    private var stalePartialAfterReset: String?
+    private var queuedStalePartial: String?
 
     func setPartial(_ text: String) {
         partial = text
@@ -248,6 +287,10 @@ private actor MockNemotronManager: NemotronStreamingAsrManaging {
         finishText = text
     }
 
+    func setStalePartialAfterReset(_ text: String) {
+        stalePartialAfterReset = text
+    }
+
     // swiftlint:disable:next async_without_await
     func prepare() async {}
 
@@ -255,7 +298,11 @@ private actor MockNemotronManager: NemotronStreamingAsrManaging {
     func process(_: [Float]) async {}
 
     func latestTranscript() -> String? {
-        partial.isEmpty ? nil : partial
+        if let queuedStalePartial {
+            self.queuedStalePartial = nil
+            return queuedStalePartial
+        }
+        return partial.isEmpty ? nil : partial
     }
 
     // swiftlint:disable:next async_without_await
@@ -270,6 +317,8 @@ private actor MockNemotronManager: NemotronStreamingAsrManaging {
     func reset() async {
         partial = ""
         finishText = ""
+        queuedStalePartial = stalePartialAfterReset
+        stalePartialAfterReset = nil
     }
 }
 

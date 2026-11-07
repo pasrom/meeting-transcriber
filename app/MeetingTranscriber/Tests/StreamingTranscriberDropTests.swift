@@ -7,14 +7,6 @@ import XCTest
 /// be dropped before they reach VAD or the engine — without that guard
 /// the actor would happily push 48 kHz stereo into a 16 kHz mono VAD
 /// and the engine would receive scrambled samples.
-///
-/// All three scenarios live in a single test method on purpose — under
-/// `swift test --parallel` each XCTest method spins up its own worker
-/// process, and the empty-buffer scenario does load FluidVAD lazily.
-/// Folding keeps these as one worker so they don't pile parallel-load
-/// pressure on the neighbouring `LiveTranscriptionE2ETests` on the
-/// 3-core macos-26 runner. See
-/// `feedback_coreml_e5rt_cache_race_under_parallel_xctest`.
 final class StreamingTranscriberDropTests: XCTestCase {
     func testDropContract() async {
         let observer = OnEventObserver()
@@ -36,12 +28,7 @@ final class StreamingTranscriberDropTests: XCTestCase {
         XCTAssertEqual(observer.finals.count, 0)
         XCTAssertEqual(observer.transcribeCalls, 0)
 
-        // (3) Right shape, zero samples — must not advance into the VAD
-        // event loop nor emit anything. Mainly a smoke test that we
-        // don't divide-by-zero. Note: this path *does* lazily initialise
-        // FluidVAD inside drainChunks() because the shape guard passes,
-        // which is why all three checks live in one method (one xctest
-        // worker per method → one VAD load instead of three).
+        // (3) Empty input must neither load VAD nor emit captions.
         let empty = LiveAudioBuffer(
             samples: [], channelCount: 1, sampleRate: 16000, hostTime: 0,
         )

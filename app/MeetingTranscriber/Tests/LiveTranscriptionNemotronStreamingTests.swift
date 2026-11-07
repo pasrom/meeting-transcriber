@@ -36,8 +36,8 @@ final class LiveTranscriptionNemotronStreamingTests: XCTestCase {
     }
 
     private actor NoopPipeline: LiveCaptionPipeline {
-        // swiftlint:disable:next async_without_await
-        func ingest(_: LiveAudioBuffer) async {}
+        func ingest(_: LiveAudioBuffer, backlog _: @Sendable () -> TimeInterval) {}
+        func reset() {}
         // swiftlint:disable:next async_without_await
         func flush() async {}
     }
