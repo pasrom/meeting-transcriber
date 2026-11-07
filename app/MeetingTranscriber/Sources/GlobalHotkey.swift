@@ -20,15 +20,10 @@ struct GlobalHotkey: Codable, Equatable {
     static let reservedCommandKeyCodes: Set<UInt16> = [UInt16(kVK_Tab), UInt16(kVK_Space)]
 
     /// Nil unless Command, Control or Option is held: anything less would swallow
-    /// ordinary typing in every app for the length of a recording. Nil too for a
-    /// reserved Command shortcut, which would stop ⌘Q quitting anything, say.
+    /// ordinary typing in every app for the length of a recording.
     init?(keyCode: UInt16, modifiers: NSEvent.ModifierFlags, characters: String?) {
         guard !modifiers.isDisjoint(with: [.command, .control, .option]),
               let characters, !characters.isEmpty else { return nil }
-        if modifiers.intersection([.command, .control, .option, .shift]) == .command,
-           Self.reservedCommandKeyCodes.contains(keyCode) || Self.reservedCommandKeys.contains(characters.lowercased()) {
-            return nil
-        }
 
         var carbon: UInt32 = 0
         var name = ""
@@ -39,6 +34,52 @@ struct GlobalHotkey: Codable, Equatable {
         self.keyCode = UInt32(keyCode)
         self.carbonModifiers = carbon
         self.displayName = name + characters.uppercased()
+    }
+}
+
+/// A system shortcut as `CopySymbolicHotKeys` reports it, with Carbon modifiers.
+struct SystemShortcut: Equatable {
+    let keyCode: UInt32
+    let carbonModifiers: UInt32
+}
+
+extension GlobalHotkey {
+    private static let modifierMask = UInt32(cmdKey | shiftKey | optionKey | controlKey)
+
+    /// Why this combination cannot be the mute shortcut, or nil when it can.
+    ///
+    /// Only what can be known is checked. Registration is not refused when
+    /// another app holds the combination (measured: two processes both register
+    /// it), and another app's menu shortcuts are not visible without the
+    /// Accessibility grant, so neither is caught here.
+    func conflict(with systemShortcuts: [SystemShortcut]) -> String? {
+        let typed = displayName.last.map { String($0).lowercased() } ?? ""
+        if carbonModifiers == UInt32(cmdKey),
+           Self.reservedCommandKeyCodes.contains(UInt16(keyCode)) || Self.reservedCommandKeys.contains(typed) {
+            return "This is a standard app shortcut, which every app would lose during recordings. Add ⌃ or ⌥."
+        }
+        if systemShortcuts.contains(where: { shortcut in
+            shortcut.keyCode == keyCode && shortcut.carbonModifiers & Self.modifierMask == carbonModifiers & Self.modifierMask
+        }) {
+            return "This is a macOS shortcut. Choose another, or turn it off in System Settings → Keyboard → Keyboard Shortcuts."
+        }
+        return nil
+    }
+
+    /// The enabled system shortcuts (Spotlight, screenshots, Mission Control and
+    /// so on). Empty when the system does not say.
+    static func enabledSystemShortcuts() -> [SystemShortcut] {
+        var list: Unmanaged<CFArray>?
+        guard CopySymbolicHotKeys(&list) == noErr,
+              let entries = list?.takeRetainedValue() as? [[String: Any]] else { return [] }
+
+        return entries.compactMap { entry in
+            guard (entry[kHISymbolicHotKeyEnabled as String] as? Bool) == true,
+                  let code = entry[kHISymbolicHotKeyCode as String] as? Int,
+                  let modifiers = entry[kHISymbolicHotKeyModifiers as String] as? Int else { return nil }
+
+            return SystemShortcut(keyCode: UInt32(truncatingIfNeeded: code), carbonModifiers: UInt32(truncatingIfNeeded: modifiers))
+        }
     }
 }
 

@@ -13,17 +13,48 @@ final class GlobalHotkeyTests: XCTestCase {
         XCTAssertNil(GlobalHotkey(keyCode: 46, modifiers: [.shift], characters: "M"))
     }
 
-    func testStandardCommandShortcutsAreRefused() {
-        XCTAssertNil(GlobalHotkey(keyCode: UInt16(kVK_ANSI_Q), modifiers: [.command], characters: "q"))
-        XCTAssertNil(GlobalHotkey(keyCode: UInt16(kVK_ANSI_W), modifiers: [.command, .capsLock], characters: "W"))
-        XCTAssertNil(GlobalHotkey(keyCode: UInt16(kVK_ANSI_S), modifiers: [.command], characters: "s"), "the menu's Stop")
-        XCTAssertNil(GlobalHotkey(keyCode: UInt16(kVK_Tab), modifiers: [.command], characters: "\t"))
-        XCTAssertNil(GlobalHotkey(keyCode: UInt16(kVK_Space), modifiers: [.command], characters: " "))
+    private func conflict(
+        _ keyCode: Int, _ modifiers: NSEvent.ModifierFlags, _ characters: String, system: [SystemShortcut] = [],
+    ) throws -> String? {
+        try XCTUnwrap(GlobalHotkey(keyCode: UInt16(keyCode), modifiers: modifiers, characters: characters))
+            .conflict(with: system)
     }
 
-    func testAReservedKeyWithAnotherModifierIsAccepted() {
-        XCTAssertNotNil(GlobalHotkey(keyCode: UInt16(kVK_ANSI_Q), modifiers: [.command, .option], characters: "q"))
-        XCTAssertNotNil(GlobalHotkey(keyCode: UInt16(kVK_ANSI_M), modifiers: [.control, .option], characters: "m"))
+    func testStandardCommandShortcutsAreRefused() throws {
+        XCTAssertNotNil(try conflict(kVK_ANSI_Q, [.command], "q"))
+        XCTAssertNotNil(try conflict(kVK_ANSI_W, [.command, .capsLock], "W"))
+        XCTAssertNotNil(try conflict(kVK_ANSI_S, [.command], "s"), "the menu's Stop")
+        XCTAssertNotNil(try conflict(kVK_Tab, [.command], "\t"))
+        XCTAssertNotNil(try conflict(kVK_Space, [.command], " "))
+    }
+
+    func testAReservedKeyWithAnotherModifierIsAccepted() throws {
+        XCTAssertNil(try conflict(kVK_ANSI_Q, [.command, .option], "q"))
+        XCTAssertNil(try conflict(kVK_ANSI_M, [.control, .option], "m"))
+    }
+
+    /// ⌘⇧4 as `CopySymbolicHotKeys` reports a screenshot shortcut, Carbon modifiers.
+    private let screenshot = SystemShortcut(keyCode: UInt32(kVK_ANSI_4), carbonModifiers: UInt32(cmdKey | shiftKey))
+
+    func testAnEnabledSystemShortcutIsRefused() throws {
+        let message = try XCTUnwrap(conflict(kVK_ANSI_4, [.command, .shift], "4", system: [screenshot]))
+        XCTAssertTrue(message.contains("macOS shortcut"))
+    }
+
+    /// The system list carries bits beyond the four modifiers, such as Fn on a
+    /// function key; they must not hide a match.
+    func testASystemShortcutMatchesDespiteExtraModifierBits() throws {
+        let withFn = SystemShortcut(keyCode: screenshot.keyCode, carbonModifiers: screenshot.carbonModifiers | 0x20000)
+        XCTAssertNotNil(try conflict(kVK_ANSI_4, [.command, .shift], "4", system: [withFn]))
+    }
+
+    func testTheSameKeyWithOtherModifiersIsNotASystemShortcut() throws {
+        XCTAssertNil(try conflict(kVK_ANSI_4, [.command, .option], "4", system: [screenshot]))
+    }
+
+    /// Whether the real list can be read at all; its content is the machine's.
+    func testTheSystemListsItsShortcuts() {
+        XCTAssertFalse(GlobalHotkey.enabledSystemShortcuts().isEmpty)
     }
 
     func testModifiersMapToCarbonAndTheName() throws {
