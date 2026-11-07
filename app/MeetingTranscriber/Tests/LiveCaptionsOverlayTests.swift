@@ -5,6 +5,29 @@ import XCTest
 
 @MainActor
 final class LiveCaptionsOverlayTests: XCTestCase {
+    /// The newest final is the line still being read when the next speech
+    /// starts, so it stays bright with or without a hypothesis below it.
+    func testOlderFinalDimsWhileNewestFinalAndHypothesesStayBright() throws {
+        for withHypotheses in [false, true] {
+            let state = LiveCaptionsState()
+            defer { state.clear() }
+            state.applyFinalized("older line", channel: .app)
+            state.applyFinalized("newest line", channel: .mic)
+            if withHypotheses {
+                state.applyPartial("app speaking", channel: .app)
+                state.applyPartial("mic speaking", channel: .mic)
+            }
+            let overlay = try LiveCaptionsOverlay(state: state).inspect()
+
+            XCTAssertEqual(try overlay.find(text: "older line").opacity(), 0.6)
+            XCTAssertEqual(try overlay.find(text: "newest line").opacity(), 1.0)
+            if withHypotheses {
+                XCTAssertEqual(try overlay.find(text: "app speaking").opacity(), 1.0)
+                XCTAssertEqual(try overlay.find(text: "mic speaking").opacity(), 1.0)
+            }
+        }
+    }
+
     /// Trimming the oldest words re-wrapped the whole row on every partial and
     /// moved each word; the full text keeps its line breaks, and the clip hides
     /// the oldest lines instead.
