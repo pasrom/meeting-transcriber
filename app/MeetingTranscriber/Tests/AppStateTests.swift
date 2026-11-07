@@ -135,6 +135,35 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertFalse(state.isWatching)
     }
 
+    // MARK: - Mic mute
+
+    func testMicMuteToggleIsNilWithoutAMutableRecording() {
+        let (state, _) = makeState()
+        XCTAssertNil(state.micMuteToggle)
+        state.watching.watchLoop = makeTestWatchLoop().0
+        XCTAssertNil(state.micMuteToggle)
+    }
+
+    func testMicMuteToggleMutesTheRecording() async throws {
+        let (state, _) = makeState()
+        let (loop, recorder) = makeTestWatchLoop()
+        recorder.canMuteMic = true
+        state.watching.watchLoop = loop
+        try await loop.startManualRecording(pid: getpid(), appName: "Chrome", title: "Meeting")
+        defer { loop.stop() }
+
+        try XCTUnwrap(state.micMuteToggle)()
+        XCTAssertTrue(recorder.isMicMuted)
+        XCTAssertTrue(state.isMicMuted)
+    }
+
+    func testMicMuteShortcutFollowsTheSetting() {
+        let (state, _) = makeState()
+        XCTAssertNil(state.micMuteShortcut)
+        state.settings.micMuteHotkey = GlobalHotkey(keyCode: 46, modifiers: [.control, .option], characters: "m")
+        XCTAssertEqual(state.micMuteShortcut?.modifiers, [.control, .option])
+    }
+
     // MARK: - currentStateLabel
 
     func testCurrentStateLabelWatchingWhenLoopActive() {

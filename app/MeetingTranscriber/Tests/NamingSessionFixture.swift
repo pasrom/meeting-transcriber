@@ -1,3 +1,4 @@
+import AudioTapLib
 @testable import MeetingTranscriber
 import XCTest
 
@@ -79,9 +80,9 @@ final class NamingSessionMockDelegate: SpeakerNamingSessionDelegate {
         throw DiarizationError.notAvailable
     }
 
-    func renderLabeledTranscript(
+    func renderLabeledTranscript( // swiftlint:disable:this function_parameter_count
         run _: DiarizationRun, cachedSegments: [TimestampedSegment],
-        isDualSource _: Bool, autoNames _: [String: String], note _: String?,
+        isDualSource _: Bool, autoNames _: [String: String], note _: String?, micMuted _: [MicMuteInterval],
     ) -> String? {
         renderedSegmentCounts.append(cachedSegments.count)
         return nil

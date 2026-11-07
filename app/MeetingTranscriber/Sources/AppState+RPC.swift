@@ -317,6 +317,7 @@
                 micFault: channelHealth.micFault?.rawValue,
                 appFault: channelHealth.appFault?.rawValue,
                 micLevelDBFS: channelHealth.micLevelDBFS,
+                micMuted: isMicMuted,
                 appLevelDBFS: channelHealth.appLevelDBFS,
                 micSecondsSinceLastBuffer: channelHealth.micAges.secondsSinceLastBuffer,
                 micSecondsSinceLastEnergy: channelHealth.micAges.secondsSinceLastEnergy,
