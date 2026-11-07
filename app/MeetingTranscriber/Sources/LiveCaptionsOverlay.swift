@@ -4,8 +4,9 @@ import SwiftUI
 /// Caption-bar content rendered inside `LiveCaptionsWindow` (a borderless,
 /// status-bar-level NSPanel pinned to the bottom of the main screen).
 ///
-/// Layout (top to bottom): up to `maxFinalsKept` recent finalised utterances
-/// at full opacity, then the per-channel hypotheses at 60 % opacity. Finals
+/// Layout (top to bottom): up to `maxFinalsKept` recent finalised utterances,
+/// the older at 60 % opacity and the newest at full opacity, then the
+/// per-channel hypotheses at full opacity. Finals
 /// carry their own per-line `LiveCaptionLine.speaker` (resolved by
 /// `LiveSpeakerMatcher` for that line) so a `speakers.json` rename after
 /// the line is committed doesn't retroactively re-label it. Live hypothesis
@@ -43,21 +44,23 @@ struct LiveCaptionsOverlay: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let finals = state.recentFinals.suffix(LiveCaptionsState.maxFinalsKept)
+        return VStack(alignment: .leading, spacing: 4) {
             if let backend = state.activeBackend {
                 Text(backend)
                     .font(.system(size: state.size.labelFontSize, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.45))
                     .accessibilityIdentifier(A11yID.liveCaptionBackend)
             }
-            ForEach(state.recentFinals.suffix(LiveCaptionsState.maxFinalsKept), id: \.self) { line in
-                row(speaker: line.speaker, text: line.text, opacity: 1.0)
+            ForEach(Array(finals.enumerated()), id: \.element) { index, line in
+                // The newest final is often still being read, so only older ones dim.
+                row(speaker: line.speaker, text: line.text, opacity: index == finals.count - 1 ? 1.0 : 0.6)
             }
             if !state.hypothesisApp.isEmpty {
-                row(speaker: state.appLabel, text: state.hypothesisApp, opacity: 0.6)
+                row(speaker: state.appLabel, text: state.hypothesisApp, opacity: 1.0)
             }
             if !state.hypothesisMic.isEmpty {
-                row(speaker: state.micLabel, text: state.hypothesisMic, opacity: 0.6)
+                row(speaker: state.micLabel, text: state.hypothesisMic, opacity: 1.0)
             }
         }
         .font(.system(size: state.size.fontSize, weight: .medium, design: .rounded))
@@ -82,7 +85,8 @@ struct LiveCaptionsOverlay: View {
             // Bound each channel too, so a long mic row cannot push the app row out of the bar.
             LiveCaptionTextClip(maxHeight: 2 * Self.lineHeight(fontSize: state.size.fontSize)) {
                 Text(text)
-                    .foregroundStyle(.white.opacity(opacity))
+                    .foregroundStyle(.white)
+                    .opacity(opacity)
             }
             .clipped()
         }
