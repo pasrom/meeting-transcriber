@@ -49,9 +49,10 @@ final class LiveCaptionsState {
     /// matching doesn't return a confident name (unknown remote speaker).
     let appLabel: String
 
-    init(micLabel: String = "Me", appLabel: String = "Remote") {
+    init(micLabel: String = "Me", appLabel: String = "Remote", clock: any Clock<Duration> = ContinuousClock()) {
         self.micLabel = micLabel
         self.appLabel = appLabel
+        self.clock = clock
     }
 
     private(set) var hypothesisMic: String = ""
@@ -60,10 +61,6 @@ final class LiveCaptionsState {
     /// Last few finalised utterances across both channels, oldest first.
     /// Capped at `maxFinalsKept`.
     private(set) var recentFinals: [LiveCaptionLine] = []
-
-    /// Timestamp of the last event (partial or final). Drives fade-out on
-    /// silence — the overlay can compare against `Date()` to dim or hide.
-    private(set) var lastEventAt: Date = .distantPast
 
     /// Human label of the resolved live-caption backend, set by the controller
     /// once it builds the pipelines (e.g. "Nemotron · DE", "Parakeet EOU · EN",
@@ -100,15 +97,18 @@ final class LiveCaptionsState {
     /// overlay collapses to nothing (panel itself stays mounted, just empty).
     static let autoClearSeconds: TimeInterval = 5.0
 
-    private var autoClearTask: Task<Void, Never>?
+    private let clock: any Clock<Duration>
+    /// Target opacity: the overlay animates to transparent when true.
+    private(set) var faded = false
+
+    private var silenceTask: Task<Void, Never>?
 
     func applyPartial(_ text: String, channel: LiveCaptionChannel) {
         switch channel {
         case .mic: hypothesisMic = text
         case .app: hypothesisApp = text
         }
-        lastEventAt = Date()
-        scheduleAutoClear()
+        scheduleSilence()
     }
 
     func applyFinalized(_ text: String, channel: LiveCaptionChannel, speaker: String) {
@@ -120,8 +120,7 @@ final class LiveCaptionsState {
         if recentFinals.count > Self.maxFinalsKept {
             recentFinals.removeFirst(recentFinals.count - Self.maxFinalsKept)
         }
-        lastEventAt = Date()
-        scheduleAutoClear()
+        scheduleSilence()
     }
 
     /// Convenience: speaker defaults to the channel label. Used by tests
@@ -138,38 +137,31 @@ final class LiveCaptionsState {
     }
 
     func clear() {
-        autoClearTask?.cancel()
-        autoClearTask = nil
+        silenceTask?.cancel()
+        silenceTask = nil
+        faded = false
         hypothesisMic = ""
         hypothesisApp = ""
         recentFinals.removeAll()
-        lastEventAt = .distantPast
     }
 
-    /// Compute current opacity from a render-time date. Returns 1.0 within
-    /// the active window, linearly fades to 0 between `fadeStartSeconds` and
-    /// `fadeEndSeconds`, then stays at 0. Pure function so the overlay can
-    /// call it from a `TimelineView` body without touching state.
-    func opacity(at date: Date) -> Double {
-        let elapsed = date.timeIntervalSince(lastEventAt)
-        if elapsed < Self.fadeStartSeconds { return 1.0 }
-        if elapsed >= Self.fadeEndSeconds { return 0.0 }
-        let progress = (elapsed - Self.fadeStartSeconds)
-            / (Self.fadeEndSeconds - Self.fadeStartSeconds)
-        return max(0.0, 1.0 - progress)
-    }
-
-    private func scheduleAutoClear() {
-        autoClearTask?.cancel()
-        autoClearTask = Task { @MainActor [weak self] in
-            let delay = UInt64(Self.autoClearSeconds * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: delay)
-            guard let self, !Task.isCancelled else { return }
-            // Recheck — a newer event may have arrived during sleep.
-            if Date().timeIntervalSince(self.lastEventAt) >= Self.autoClearSeconds {
-                self.clear()
+    private func scheduleSilence() {
+        silenceTask?.cancel()
+        faded = false
+        func schedule(on clock: some Clock<Duration>) {
+            let fadeDeadline = clock.now.advanced(by: .seconds(Self.fadeStartSeconds))
+            let clearDeadline = clock.now.advanced(by: .seconds(Self.autoClearSeconds))
+            silenceTask = Task { @MainActor [weak self] in
+                try? await clock.sleep(until: fadeDeadline, tolerance: nil)
+                guard !Task.isCancelled else { return }
+                self?.faded = true
+                try? await clock.sleep(until: clearDeadline, tolerance: nil)
+                guard !Task.isCancelled else { return }
+                self?.clear()
             }
         }
+        let silenceClock = clock
+        schedule(on: silenceClock)
     }
 
     /// True when there's anything to show.
