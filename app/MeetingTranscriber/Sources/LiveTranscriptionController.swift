@@ -49,9 +49,9 @@ final class LiveTranscriptionController {
     /// language-driven streaming backends (Nemotron/EOU) are engine-independent:
     /// with a non-streaming active engine there is no streaming engine to hold,
     /// and captions still run via those sessions.
-    private let engine: (any StreamingTranscribingEngine)?
-    private let vad: FluidVAD
-    private let captions: LiveCaptionsState
+    let engine: (any StreamingTranscribingEngine)?
+    let vad: FluidVAD
+    let captions: LiveCaptionsState
     private let speakerMatcher: any LiveSpeakerMatching
     /// The active engine's EXPLICITLY-configured language (`de`/`en`/nil), which
     /// picks the streaming backend via `LiveCaptionsGate` (`en` → EOU, a Nemotron-trained
@@ -75,7 +75,34 @@ final class LiveTranscriptionController {
         captionStrategy == .nemotronStreaming || captionStrategy == .englishStreaming
     }
 
-    private let eouSessionFactory: EouSessionFactory
+    typealias ReTranscribePipelineFactory = @MainActor (
+        LiveCaptionChannel, @escaping StreamingTranscriber.TranscribeFunction, @escaping StreamingTranscriber.EventSink,
+    ) -> any LiveCaptionPipeline
+
+    /// Per-recording phase of auto-detect captions (`usesLanguageProbe`).
+    enum RuntimeState { case detecting, preparing, streaming, keeping, stopping }
+    var runtimeState: RuntimeState = .detecting
+    var languageDecision = CaptionLanguageProbeDecision()
+    let speechDetector: CaptionLanguageProbe.SpeechDetector?
+    var detectionArmed = false
+    var recordingStartedAt = Date()
+    let micProbeFeed: CaptionChannelFeed
+    let appProbeFeed: CaptionChannelFeed
+    /// Auto-detect on an engine that can detect the language probes it before
+    /// captioning, so English can stream through EOU.
+    var usesLanguageProbe: Bool {
+        engineLanguage == nil && engine?.supportsCaptionLanguageDetection == true
+    }
+
+    /// Bumped per auto-detect recording; sinks of an older one drop their events.
+    var generation = 0
+    var switchTask: Task<Void, Never>?
+    var probeArmingTask: Task<Void, Never>?
+
+    /// Auto-detect's EOU model load, at most once per controller: nil on failure, never retried.
+    var eouLoad: Task<EouManagers?, Never>?
+    private let reTranscribePipelineFactory: ReTranscribePipelineFactory?
+    let eouSessionFactory: EouSessionFactory
     private let nemotronPipelineFactory: NemotronPipelineFactory
     /// Gate for caption-text logging. Caption strings are spoken user content
     /// — privacy-sensitive — so even with `privacy: .private` on the log
@@ -89,24 +116,25 @@ final class LiveTranscriptionController {
     /// from inside the `Task { @MainActor in ... }` hop in `onEvent`, so the
     /// closure never crosses an isolation boundary.
     private let verboseDiagnostics: () -> Bool
-    private var micPipeline: (any LiveCaptionPipeline)?
-    private var appPipeline: (any LiveCaptionPipeline)?
+    var micPipeline: (any LiveCaptionPipeline)?
+    var appPipeline: (any LiveCaptionPipeline)?
 
     /// One bounded feed per channel (see `CaptionChannelFeed`). The feeds
     /// are (re)armed per recording via `bindFeeds()` and retired by
     /// `flush()`/`retireFeeds()`.
-    private let micFeed: CaptionChannelFeed
-    private let appFeed: CaptionChannelFeed
+    let micFeed: CaptionChannelFeed
+    let appFeed: CaptionChannelFeed
     /// True once `prepare()` resolved to a kept streaming session (German/English),
     /// which `prepareForNextRecording()` keeps instead of rebuilding.
-    private var usingStreamingSession = false
+    var usingStreamingSession = false
     /// True once `prepare()` built the pipelines — distinguishes "not yet resolved"
     /// (pipelines nil → let `prepare()` build) from "resolved to re-transcribe
     /// fallback" (refresh actors), since both have `usingStreamingSession == false`.
     private var strategyResolved = false
     /// Re-transcribe pipelines, including a streaming fallback, run on the shared engine.
+    /// The language probe runs on the engine every recording.
     var usesTranscriptionEngine: Bool {
-        !usingStreamingSession && micPipeline != nil
+        usesLanguageProbe || (!usingStreamingSession && micPipeline != nil)
     }
 
     /// Called before `prepare()` loads the shared engine, so the owner can hold its model.
@@ -125,6 +153,7 @@ final class LiveTranscriptionController {
     /// controller; a model load already running is not interrupted.
     func cancelPrepare() {
         prepareCancelled = true
+        captions.setDetectingLanguage(false)
     }
 
     /// The most recent stop-time flush, kept so the NEXT recording's reset can
@@ -132,14 +161,19 @@ final class LiveTranscriptionController {
     /// fire-and-forget from `WatchingController`, and a slow `asr.finish()` can
     /// otherwise interleave with the next recording's ingests on the same actor —
     /// emitting the old tail as the new recording's caption or zeroing its ring.
-    private var pendingFlush: Task<Void, Never>?
+    var pendingFlush: Task<Void, Never>?
 
     /// Mic-channel live sink. Hand this to `DualSourceRecorder.micLiveSink`
     /// before `recorder.start(...)`. Buffers arrive on the AVAudioEngine tap
     /// thread; the closure yields into the channel's bounded feed and returns
     /// immediately — no task spawn, no actor hop on the audio thread.
     var micSink: LiveAudioSink {
-        micFeed.sink
+        let sink = micFeed.sink
+        let probe = micProbeFeed.sink
+        return { buffer in
+            sink(buffer)
+            probe(buffer)
+        }
     }
 
     /// App-channel live sink. Hand this to `DualSourceRecorder.appLiveSink`
@@ -149,7 +183,12 @@ final class LiveTranscriptionController {
     /// runs them through `LiveAudioResampler`, which passes 16 kHz mono
     /// through unchanged.
     var appSink: LiveAudioSink {
-        appFeed.sink
+        let sink = appFeed.sink
+        let probe = appProbeFeed.sink
+        return { buffer in
+            sink(buffer)
+            probe(buffer)
+        }
     }
 
     /// `verboseDiagnostics` stays the LAST parameter so a trailing closure binds
@@ -170,12 +209,18 @@ final class LiveTranscriptionController {
             )
         },
         // Must exceed the slowest single decode plus the 0.8 s partial gate; see transcription.md.
+        reTranscribePipelineFactory: ReTranscribePipelineFactory? = nil,
         maxQueuedSeconds: TimeInterval = 10,
+        speechDetector: CaptionLanguageProbe.SpeechDetector? = nil,
         verboseDiagnostics: @escaping () -> Bool = { false },
     ) {
         micFeed = CaptionChannelFeed(maxQueuedSeconds: maxQueuedSeconds)
         appFeed = CaptionChannelFeed(maxQueuedSeconds: maxQueuedSeconds)
+        micProbeFeed = CaptionChannelFeed(maxQueuedSeconds: maxQueuedSeconds)
+        appProbeFeed = CaptionChannelFeed(maxQueuedSeconds: maxQueuedSeconds)
         self.engine = engine
+        self.speechDetector = speechDetector
+        self.reTranscribePipelineFactory = reTranscribePipelineFactory
         self.vad = vad
         self.captions = captions
         self.speakerMatcher = speakerMatcher
@@ -211,6 +256,20 @@ final class LiveTranscriptionController {
         guard !prepareCancelled else { return }
         await prewarmSpeakerMatcher()
         guard !prepareCancelled else { return }
+        if usesLanguageProbe, let engine {
+            await loadEngineForLanguageDetection(engine)
+            guard !prepareCancelled else { return }
+            await reTranscribeIfDetectionUnsupported(engine)
+        }
+        if usesLanguageProbe, let engine {
+            if !detectionArmed, runtimeState != .stopping { await armLanguageProbe(recording: false) }
+            strategyResolved = true
+            prepareFailure = engine.modelState == .loaded ? nil : Self.engineLoadFailure
+            if verboseDiagnostics() {
+                logger.info("Live transcription ready (backend: language detection)")
+            }
+            return
+        }
         if micPipeline == nil, appPipeline == nil {
             await buildPipelines()
             // A dropped controller must not publish its backend over its successor's.
@@ -339,36 +398,6 @@ final class LiveTranscriptionController {
         }
     }
 
-    /// Recording stopped — retire the feeds, then flush both channel
-    /// pipelines so any pending tail utterance (speech that was still in
-    /// progress when the recorder stopped, so VAD never emitted a
-    /// `speechEnd`) is committed as a final. Must run at STOP time, before
-    /// the next recording's `prepareForNextRecording()` clears caption state.
-    ///
-    /// Retiring first is the completeness barrier: it stops accepting new
-    /// deliveries and drains everything the recorder already handed over
-    /// into the pipelines, so the pipeline flush below sees the full tail
-    /// instead of racing buffers still in flight. Awaits both channels
-    /// concurrently afterwards.
-    ///
-    /// The work is wrapped in a stored `pendingFlush` Task so the next
-    /// recording's `prepareForNextRecording()` can await it: a kept EOU session
-    /// is reused across recordings, so a slow `asr.finish()` here must finish
-    /// before the next recording ingests into the same actor. Awaiting the task's
-    /// value keeps `flush()`'s own callers (e.g. the stop-transition handler)
-    /// synchronous with completion, exactly as before.
-    func flush() async {
-        let task = Task { [weak self] in
-            guard let self else { return }
-            await self.retireFeeds(logDrops: true)
-            async let mic: Void? = self.micPipeline?.flush()
-            async let app: Void? = self.appPipeline?.flush()
-            _ = await (mic, app)
-        }
-        pendingFlush = task
-        await task.value
-    }
-
     /// Prepare accumulated state for the next recording. Awaits any in-flight
     /// stop-time `flush()` FIRST so a kept EOU session is fully drained before
     /// the new recording reuses it — otherwise the late flush and the new
@@ -396,6 +425,24 @@ final class LiveTranscriptionController {
     func prepareForNextRecording() async {
         await pendingFlush?.value
         pendingFlush = nil
+        await probeArmingTask?.value
+        // Not awaited: a detection or EOU load from the last recording must not delay
+        // this start. The generation bump below drops its result; `eouLoad` keeps the models.
+        switchTask?.cancel()
+        switchTask = nil
+        languageDecision = CaptionLanguageProbeDecision()
+        runtimeState = usesLanguageProbe ? .detecting : .keeping
+        // A detected language holds for one recording; the next one probes afresh.
+        if engineLanguage == nil {
+            generation += 1
+            usingStreamingSession = false
+        }
+
+        if usesLanguageProbe {
+            captions.clear()
+            await armLanguageProbe(recording: true)
+            return
+        }
 
         if usingStreamingSession {
             // Streaming sessions kept (already drained by flush()).
@@ -417,7 +464,7 @@ final class LiveTranscriptionController {
     /// the consumers so every buffer already delivered is ingested. This is
     /// the deterministic "all pre-stop audio is in the pipelines" barrier
     /// that `flush()` and a rebind rely on.
-    private func retireFeeds(logDrops: Bool = false) async {
+    func retireFeeds(logDrops: Bool = false) async {
         let micDrops = await micFeed.retire()
         let appDrops = await appFeed.retire()
         guard logDrops, verboseDiagnostics() else { return }
@@ -434,7 +481,7 @@ final class LiveTranscriptionController {
     /// consumer survives a build-less reset). The app feed's consumer runs a
     /// fresh `LiveAudioResampler` per recording, replacing the old shared
     /// instance + per-recording reset.
-    private func bindFeeds() async {
+    func bindFeeds() async {
         await retireFeeds()
         if let micPipeline {
             await micFeed.bind(to: micPipeline)
@@ -450,16 +497,19 @@ final class LiveTranscriptionController {
     /// Build the engine-independent low-latency English streaming session for one
     /// channel. The backend manager is built via the injected factory (default:
     /// real Parakeet EOU manager) so each channel gets its own instance.
-    private func makeEouPipeline(channel: LiveCaptionChannel) -> EouStreamingCaptionSession {
+    func makeEouPipeline(
+        channel: LiveCaptionChannel,
+        asr: (any EouStreamingAsrManaging)? = nil,
+    ) -> EouStreamingCaptionSession {
         let logChannel = channel.rawValue
         return EouStreamingCaptionSession(
-            asr: eouSessionFactory(),
+            asr: asr ?? eouSessionFactory(),
             channelLabel: logChannel,
             onEvent: makeEventSink(channel: channel, logChannel: logChannel),
         )
     }
 
-    private func makeReTranscribePipeline(
+    func makeReTranscribePipeline(
         channel: LiveCaptionChannel,
         engine: any StreamingTranscribingEngine,
     ) -> any LiveCaptionPipeline {
@@ -469,13 +519,16 @@ final class LiveTranscriptionController {
         // to the main actor on every invocation.
         let proxy = EngineProxy(engine: engine)
         let logChannel = channel.rawValue
+        let sink = makeEventSink(channel: channel, logChannel: logChannel)
+        let transcribe: StreamingTranscriber.TranscribeFunction = { samples in
+            try await proxy.transcribeSamples(samples)
+        }
+        if let reTranscribePipelineFactory { return reTranscribePipelineFactory(channel, transcribe, sink) }
         return StreamingTranscriber(
             channelLabel: logChannel,
             vad: vad,
-            transcribe: { samples in
-                try await proxy.transcribeSamples(samples)
-            },
-            onEvent: makeEventSink(channel: channel, logChannel: logChannel),
+            transcribe: transcribe,
+            onEvent: sink,
         )
     }
 
@@ -496,9 +549,10 @@ final class LiveTranscriptionController {
         channel: LiveCaptionChannel,
         logChannel: String,
     ) -> StreamingTranscriber.EventSink {
-        { [weak self] event in
+        let generation = generation
+        return { [weak self] event in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, generation == self.generation else { return }
                 switch event {
                 case let .partial(text):
                     if self.verboseDiagnostics() {

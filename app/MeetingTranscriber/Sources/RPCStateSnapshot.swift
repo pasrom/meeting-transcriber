@@ -147,9 +147,12 @@
             let warmup: String
             /// The load error when `warmup` is "failed".
             let warmupFailure: String?
+            /// True while auto-detect holds captions to detect the recording's language.
+            let detectingLanguage: Bool
 
             static let empty = Self(
                 hypothesisMic: "", hypothesisApp: "", recentFinals: [], warmup: "none", warmupFailure: nil,
+                detectingLanguage: false,
             )
         }
 

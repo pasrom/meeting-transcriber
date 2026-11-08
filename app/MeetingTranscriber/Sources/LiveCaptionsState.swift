@@ -78,6 +78,18 @@ final class LiveCaptionsState {
         activeBackend = label
     }
 
+    /// Language detection is visible even before either channel has caption text.
+    private(set) var isDetectingLanguage = false
+
+    func setDetectingLanguage(_ detecting: Bool) {
+        isDetectingLanguage = detecting
+        if detecting {
+            silenceTask?.cancel()
+            silenceTask = nil
+            faded = false
+        }
+    }
+
     /// Size preset the overlay renders at. Lives here rather than being read
     /// from `AppSettings` by the view because the overlay is hosted in a panel
     /// that has no settings object, and `LiveCaptionsWindowController` has to
@@ -166,6 +178,7 @@ final class LiveCaptionsState {
         silenceTask?.cancel()
         silenceTask = nil
         faded = false
+        isDetectingLanguage = false
         hypothesisMic = ""
         hypothesisApp = ""
         recentFinals.removeAll()
@@ -213,7 +226,8 @@ final class LiveCaptionsState {
 
     /// True when there's anything to show.
     var hasContent: Bool {
-        !hypothesisMic.isEmpty
+        isDetectingLanguage
+            || !hypothesisMic.isEmpty
             || !hypothesisApp.isEmpty
             || !recentFinals.isEmpty
     }

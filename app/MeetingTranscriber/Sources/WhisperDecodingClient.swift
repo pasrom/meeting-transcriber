@@ -18,6 +18,12 @@ protocol WhisperDecodingClient: AnyObject {
         _ samples: [Float],
         decodeOptions: DecodingOptions,
     ) async throws -> [TranscriptionResult]
+
+    /// False for English-only models, whose language detection throws.
+    var isMultilingual: Bool { get }
+
+    /// Log probability per language code.
+    func languageLogProbabilities(samples: [Float]) async throws -> [String: Float]
 }
 
 extension WhisperKit: WhisperDecodingClient {
@@ -34,5 +40,13 @@ extension WhisperKit: WhisperDecodingClient {
         decodeOptions: DecodingOptions,
     ) async throws -> [TranscriptionResult] {
         try await transcribe(audioArray: samples, decodeOptions: decodeOptions)
+    }
+
+    var isMultilingual: Bool {
+        textDecoder.isModelMultilingual
+    }
+
+    func languageLogProbabilities(samples: [Float]) async throws -> [String: Float] {
+        try await detectLangauge(audioArray: samples).langProbs
     }
 }

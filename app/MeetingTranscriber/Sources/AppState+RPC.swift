@@ -313,6 +313,7 @@
                 recentFinals: liveCaptions.recentFinals,
                 warmup: liveTranscription.warmup.name,
                 warmupFailure: liveTranscription.warmup.failureReason,
+                detectingLanguage: liveCaptions.isDetectingLanguage,
             )
         }
 

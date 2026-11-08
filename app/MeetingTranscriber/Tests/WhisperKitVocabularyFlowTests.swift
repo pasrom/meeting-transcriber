@@ -197,6 +197,12 @@ private final class CapturingWhisperDecodingClient: WhisperDecodingClient {
         samplePrompts.append(PromptObservation(decodeOptions.promptTokens))
         return []
     }
+
+    let isMultilingual = true
+
+    func languageLogProbabilities(samples _: [Float]) -> [String: Float] {
+        [:]
+    }
 }
 
 private enum PromptObservation: Equatable {

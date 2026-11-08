@@ -26,11 +26,24 @@ protocol TranscribingEngine: AnyObject {
     /// had.
     var minimumAudioFrames: Int { get }
 
+    /// Whether auto-detect captions should probe speech before starting transcription.
+    var supportsCaptionLanguageDetection: Bool { get }
+    func detectLanguage(samples: [Float]) async throws -> CaptionLanguageDetection?
+
     func loadModel() async
     func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment]
 }
 
 extension TranscribingEngine {
+    var supportsCaptionLanguageDetection: Bool {
+        false
+    }
+
+    /// Engines without a standalone language detector keep their existing caption route.
+    func detectLanguage(samples _: [Float]) -> CaptionLanguageDetection? {
+        nil
+    }
+
     /// Most engines produce per-utterance timestamps; only the exceptions
     /// override this.
     var providesTimestamps: Bool {
@@ -54,4 +67,10 @@ extension TranscribingEngine {
 @MainActor
 protocol StreamingTranscribingEngine: TranscribingEngine {
     func transcribeSamples(_ samples: [Float]) async throws -> String
+}
+
+/// One standalone language probe; probability is linear, in the range 0...1.
+struct CaptionLanguageDetection: Sendable {
+    let language: String
+    let probability: Float
 }

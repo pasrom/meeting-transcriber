@@ -46,6 +46,10 @@ struct LiveCaptionsOverlay: View {
     private var content: some View {
         let finals = state.recentFinals.suffix(LiveCaptionsState.maxFinalsKept)
         return VStack(alignment: .leading, spacing: 4) {
+            if state.isDetectingLanguage {
+                Text("Detecting language…")
+                    .foregroundStyle(.white.opacity(0.85))
+            }
             if let backend = state.activeBackend {
                 Text(backend)
                     .font(.system(size: state.size.labelFontSize, weight: .semibold, design: .rounded))

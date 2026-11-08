@@ -181,6 +181,19 @@ final class LiveCaptionsWarmupTests: XCTestCase {
         XCTAssertNil(controller.prepareFailure)
     }
 
+    func testLanguageDetectionWarmupFailsOnlyWhenTheEngineLoadLeavesNoModel() async {
+        for loads in [false, true] {
+            let engine = WarmupTestEngine(loads: loads)
+            engine.detectsLanguage = true
+            let controller = makeController(engine: engine)
+
+            await controller.prepare()
+
+            XCTAssertEqual(engine.loadCount, 1)
+            XCTAssertEqual(controller.prepareFailure, loads ? nil : LiveTranscriptionController.engineLoadFailure)
+        }
+    }
+
     func testWarmupFailsWhenTheLoadAfterARecordingBuiltThePipelinesLeavesNoModel() async {
         let engine = WarmupTestEngine(loads: false)
         let controller = makeController(engine: engine)
@@ -467,6 +480,11 @@ private final class WarmupTestEngine: StreamingTranscribingEngine {
 
     func transcribeSamples(_: [Float]) -> String {
         ""
+    }
+
+    var detectsLanguage = false
+    var supportsCaptionLanguageDetection: Bool {
+        detectsLanguage
     }
 }
 

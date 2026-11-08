@@ -217,6 +217,8 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `NamingWindowPolicy.swift` | Pins the "Name Speakers" window so it stays available while the user works in other apps (issue #504) |
 | `LiveTranscriptionController.swift` | Wires the per-channel live-caption pipeline (streaming or re-transcribe) to both `DualSourceRecorder` sinks (mic + app), feeds `LiveCaptionsState` |
 | `LiveTranscriptionController+Nemotron.swift` | Nemotron streaming-pipeline construction, split out for size; injectable factory for testing the build + model-load-failure fallback |
+| `LiveTranscriptionController+LanguageProbe.swift` | Auto-detect captions with WhisperKit: holds caption audio, detects the recording's language, then installs Parakeet EOU (English) or re-transcribe; also the stop-time `flush()` |
+| `CaptionLanguageProbe.swift` | Per-channel VAD probe that collects 4 s of speech for language detection, and the pure decision rule (probability ≥ 0.8, two English windows for EOU, up to 4 attempts) |
 | `LiveTranscriptionCoordinator.swift` | `@Observable` coordinator: builds + arms `LiveTranscriptionController`, feeds `LiveCaptionsState` |
 | `LiveCaptionPipeline.swift` | Per-channel live captioning strategy protocol (English EOU streaming \| Nemotron streaming \| WhisperKit/Parakeet re-transcribe) |
 | `LiveCaptionsGate.swift` | Pure decision logic for live captions routing: master toggle + explicit engine language (`en` → English EOU streaming, a language in `LiveCaptionLanguages` → Nemotron streaming, auto-detect or any other language → re-transcribe or none) — shared by `AppState`, coordinator, and controller. Overlay visibility is a separate UI AND (`overlayVisible`); it is not a strategy input |
@@ -557,6 +559,10 @@ function — shared by `AppState`, `LiveTranscriptionCoordinator`, and `LiveTran
 | a language Nemotron was trained on (`LiveCaptionLanguages`) | Nemotron streaming | `NemotronStreamingCaptionSession` / `NemotronAsrManager` (FluidAudio Nemotron multilingual) |
 | auto-detect (`nil`) or any other language | re-transcribe | `StreamingTranscriber` via the active engine's `transcribeSamples`, if supported |
 | auto-detect or any other language + engine doesn't support live re-transcribe | none | captions off |
+
+The gate's re-transcribe for auto-detect is where a recording starts. With WhisperKit active,
+`LiveTranscriptionController` first detects each recording's language and streams English through
+Parakeet EOU instead (see `docs/architecture/transcription.md`).
 
 Both streaming sessions are engine-independent (they drive their own FluidAudio models directly),
 so they're available even when the active `TranscribingEngine` has no live re-transcribe hook.
