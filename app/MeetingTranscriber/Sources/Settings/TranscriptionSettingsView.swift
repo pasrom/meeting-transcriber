@@ -399,7 +399,7 @@ struct TranscriptionSettingsView: View {
             + "click-through bar at the bottom of the screen; turn it off to hide "
             + "the bar without stopping transcription. Hold ⌥ (Option) "
             + "to drag it; the position is remembered across sessions. "
-            + "Caption text is **not** logged by default — enable "
+            + "Caption text is not logged by default — enable "
             + "\"Verbose Diagnostic Logging\" in Advanced to see "
             + "partials + finals in Console.app (subsystem "
             + "com.meetingtranscriber, category LiveTranscription). "
