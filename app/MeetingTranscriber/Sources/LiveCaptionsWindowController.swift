@@ -309,8 +309,12 @@ final class LiveCaptionsWindowController {
             MainActor.assumeIsolated {
                 guard let self, let panel else { return }
                 if event.type == .leftMouseDown {
+                    self.dragTranslation = nil
                     self.droppedOrigin = nil
-                    guard event.window === panel else { return }
+                    guard event.window === panel else {
+                        self.dragSession.reset()
+                        return
+                    }
                     self.dragSession.mouseDown()
                     if !panel.ignoresMouseEvents {
                         self.dragTranslation = CaptionDragTranslation(

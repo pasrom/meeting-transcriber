@@ -282,6 +282,29 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
         XCTAssertNil(stored(in: defaults))
     }
 
+    func testAMouseDownInAnotherWindowCancelsTheDrag() async throws {
+        let (controller, defaults) = try makeController()
+        let panel = try showPanel(controller)
+        try await setOption(true, on: panel)
+        mouse.location = panel.frame.origin
+        try send(.leftMouseDown, to: panel)
+        let start = panel.frame.origin
+        let other = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 200, height: 200),
+            styleMask: .borderless, backing: .buffered, defer: false,
+        )
+        defer { other.orderOut(nil) }
+
+        try send(.leftMouseDown, to: other)
+        mouse.location = CGPoint(x: start.x + 30, y: start.y + 20)
+        try send(.leftMouseDragged, to: other)
+
+        XCTAssertEqual(panel.frame.origin, start)
+        XCTAssertNil(stored(in: defaults))
+        panel.setFrameOrigin(CGPoint(x: start.x + 40, y: start.y + 20))
+        XCTAssertNil(stored(in: defaults))
+    }
+
     /// The controller's own placement is never saved, also in the middle of
     /// a drag: a preset change while the button is down saves only the
     /// re-centred saved origin, never where the live panel was placed.
