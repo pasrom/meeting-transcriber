@@ -1,4 +1,5 @@
 @testable import MeetingTranscriber
+import SwiftUI
 import XCTest
 
 /// The invariant the preset design exists for: the font and the panel can
@@ -87,4 +88,49 @@ final class LiveCaptionsWindowControllerSizeTests: XCTestCase {
 
         XCTAssertEqual(panel.frame.size, LiveCaptionsSize.medium.panelSize)
     }
+
+    /// Content taller than the bar clips the oldest lines at the top; the
+    /// newest line, the one being read, stays inside. Ordinary speech gets
+    /// there: two finals plus a hypothesis that wraps once more than the
+    /// preset budgets for.
+    func testOverflowKeepsTheNewestLineInsideTheBar() throws {
+        let state = LiveCaptionsState()
+        state.applyFinalized(
+            "We moved the release to Thursday because the signing certificate expires on Friday morning.",
+            channel: .app,
+        )
+        state.applyFinalized(
+            "That leaves Wednesday for the last round of manual checks on the caption bar and the importer.",
+            channel: .app,
+        )
+        state.applyPartial(
+            "Then the beta goes out on Wednesday night and the stable build follows a day later, once the crash reports look quiet",
+            channel: .app,
+        )
+        state.applyPartial("and I will write the notes for it tonight", channel: .mic)
+
+        let reported = ContentFrameBox()
+        let size = LiveCaptionsSize.medium.panelSize
+        let host = NSHostingView(rootView: LiveCaptionsOverlay(state: state)
+            .onPreferenceChange(LiveCaptionsContentFrameKey.self) { frame in
+                MainActor.assumeIsolated { reported.frame = frame }
+            })
+        host.sizingOptions = []
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless], backing: .buffered, defer: false,
+        )
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+
+        let frame = try XCTUnwrap(reported.frame)
+        XCTAssertGreaterThan(frame.height, size.height, "the text must overflow the bar for this test to mean anything")
+        XCTAssertLessThanOrEqual(frame.maxY, size.height + 0.5, "content \(frame) ends below the \(size.height) pt bar")
+    }
+}
+
+@MainActor
+private final class ContentFrameBox {
+    var frame: CGRect?
 }
