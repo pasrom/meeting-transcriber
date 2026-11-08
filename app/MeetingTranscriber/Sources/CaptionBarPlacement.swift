@@ -56,10 +56,13 @@ enum CaptionBarPlacement {
             return origin
         }
         guard let target = screenOwning(bar, among: usable) else { return nil }
-        let visible = target.visibleFrame
-        return CGPoint(
-            x: min(max(bar.minX, visible.minX), visible.maxX - bar.width),
-            y: min(max(bar.minY, visible.minY), visible.maxY - bar.height),
+        return clampedOrigin(origin, size: bar.size, visibleFrame: target.visibleFrame)
+    }
+
+    static func clampedOrigin(_ origin: CGPoint, size: CGSize, visibleFrame: CGRect) -> CGPoint {
+        CGPoint(
+            x: min(max(origin.x, visibleFrame.minX), visibleFrame.maxX - size.width),
+            y: min(max(origin.y, visibleFrame.minY), visibleFrame.maxY - size.height),
         )
     }
 
@@ -102,13 +105,15 @@ enum CaptionBarPlacement {
     /// holding the bar's centre, then to the leftmost, then to the lowest:
     /// only the primary screen's place in `NSScreen.screens` is documented,
     /// so list order would let the same bar land on different screens.
-    private static func screenOwning(_ bar: CGRect, among screens: [CaptionScreen]) -> CaptionScreen? {
+    static func screenOwning(_ bar: CGRect, among screens: [CaptionScreen]) -> CaptionScreen? {
         let centre = CGPoint(x: bar.midX, y: bar.midY)
         func key(_ screen: CaptionScreen) -> (CGFloat, Int, CGFloat, CGFloat) {
             let overlap = bar.intersection(screen.frame)
             let holdsCentre = screen.frame.contains(centre) ? 1 : 0
             return (overlap.width * overlap.height, holdsCentre, -screen.frame.minX, -screen.frame.minY)
         }
-        return screens.filter { key($0).0 > 0 }.max { key($0) < key($1) }
+        return screens.filter { screen in
+            isUsable(screen.frame) && isUsable(screen.visibleFrame) && key(screen).0 > 0
+        }.max { key($0) < key($1) }
     }
 }
