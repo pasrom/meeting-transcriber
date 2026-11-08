@@ -353,13 +353,18 @@ struct TranscriptionSettingsView: View {
         Self.captionBackendFootnote(
             strategy: Self.captionStrategy(for: settings),
             languageIsSet: settings.activeEngineLanguageOrNil != nil,
+            detectsLanguage: activeEngine.supportsCaptionLanguageDetection,
         )
     }
 
     /// Describes the backend `LiveCaptionsGate` selects for the current transcription
     /// language: English → Parakeet EOU, a language Nemotron was trained on → Nemotron
-    /// streaming, auto-detect or any other language → the standard re-transcribe engine.
-    static func captionBackendFootnote(strategy: LiveCaptionsGate.Strategy, languageIsSet: Bool) -> String {
+    /// streaming, any other language → the standard re-transcribe engine; auto-detect too, unless the engine detects English first.
+    static func captionBackendFootnote(
+        strategy: LiveCaptionsGate.Strategy,
+        languageIsSet: Bool,
+        detectsLanguage: Bool,
+    ) -> String {
         switch strategy {
         case .englishStreaming:
             "Caption backend follows your transcription language. English uses the "
@@ -371,12 +376,16 @@ struct TranscriptionSettingsView: View {
 
         // `.none` cannot be reached with a language set: both engines support re-transcribe.
         case .reTranscribe, .none:
-            languageIsSet
-                ? "Caption backend follows your transcription language. This language has no "
-                + "low-latency streaming model, so captions use the standard re-transcribe engine."
-                : "Caption backend follows your transcription language. Auto-detect uses the "
-                + "standard re-transcribe engine; set a specific language for low-latency "
-                + "streaming captions."
+            if languageIsSet {
+                "Caption backend follows your transcription language. This language has no "
+                    + "low-latency streaming model, so captions use the standard re-transcribe engine."
+            } else if detectsLanguage {
+                "Caption backend follows your transcription language. Auto-detect listens to the first few seconds of speech: "
+                    + "English then streams through the low-latency Parakeet model; other languages use the standard re-transcribe engine."
+            } else {
+                "Caption backend follows your transcription language. Auto-detect uses the "
+                    + "standard re-transcribe engine; set a specific language for low-latency streaming captions."
+            }
         }
     }
 
