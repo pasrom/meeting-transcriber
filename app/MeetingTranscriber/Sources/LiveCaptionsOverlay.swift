@@ -87,8 +87,11 @@ struct LiveCaptionsOverlay: View {
                 Text(text)
                     .foregroundStyle(.white)
                     .opacity(opacity)
+                    // New words swap in at once; only the position eases, so a full line slides out the top.
+                    .contentTransition(.identity)
             }
             .clipped()
+            .animation(.easeOut(duration: 0.2), value: text)
         }
     }
 
