@@ -64,7 +64,7 @@ actor StreamingTranscriber: LiveCaptionPipeline {
     private static let partialIntervalSeconds: TimeInterval = 0.8
     /// 5 seconds at 16 kHz — force a final when speech keeps going without an end event.
     private static let forceFlushSamples = 16000 * 5
-    /// Below 1 second of accumulated speech, drop instead of transcribing (noise).
+    /// Finals below 1 second are dropped as noise, including at flush.
     private static let minFinalSamples = 16000
 
     init(
@@ -111,18 +111,15 @@ actor StreamingTranscriber: LiveCaptionPipeline {
         await drainChunks(backlog: backlog)
     }
 
-    /// Recording stopped — commit any pending speech as a final so the last
-    /// utterance isn't dropped when the recorder stops mid-speech (no VAD
-    /// `speechEnd` event ever arrives for the tail). `commitFinal()` keeps the
-    /// ≥1 s `minFinalSamples` guard, so sub-second pending speech is still
-    /// dropped as noise. Reset `isSpeaking` afterwards so the actor returns to
-    /// a clean idle state (the controller recreates pipelines per recording, so
-    /// this is belt-and-suspenders against any reuse).
+    /// Recording stop — include any incomplete VAD chunk in active
+    /// speech, then decode the pending tail if it meets the one-second noise
+    /// cutoff. No subsequent audio will reach this pipeline.
     func flush() async {
-        // The driver retires the channel feed before flushing, so every
-        // buffer delivered before the stop has already been ingested — only
-        // a sub-chunk remainder can still sit in the accumulator.
         if !inputAccumulator.isEmpty { await drainChunks() }
+        // drainChunks only consumes full VAD chunks. Preserve the original
+        // unpadded remainder when speech is active instead of abandoning it.
+        if isSpeaking { speechSamples.append(contentsOf: inputAccumulator) }
+        inputAccumulator = []
         await commitFinal()
         isSpeaking = false
     }

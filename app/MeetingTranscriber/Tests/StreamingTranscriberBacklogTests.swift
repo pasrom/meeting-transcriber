@@ -127,6 +127,59 @@ final class StreamingTranscriberBacklogTests: XCTestCase {
         XCTAssertEqual(Set(recorder.finalAudio), [2])
     }
 
+    func testFlushDecodesEveryAcceptedSampleAfterLastPartial() async {
+        let detector = ScriptedBoundaryDetector([.speechStart, nil, nil, nil])
+        let recorder = CaptionTranscriptionRecorder()
+        let transcriber = makeTranscriber(detector: detector, recorder: recorder)
+
+        for value in [Float(1), 2, 3, 4] {
+            await transcriber.ingest(chunk(value: value)) { 0 }
+        }
+        XCTAssertFalse(recorder.partials.isEmpty)
+        await transcriber.ingest(chunk(sampleCount: 2048, value: 5)) { 0 }
+        await transcriber.flush()
+
+        let expectedAudio = [Float](repeating: 1, count: 4096)
+            + [Float](repeating: 2, count: 4096)
+            + [Float](repeating: 3, count: 4096)
+            + [Float](repeating: 4, count: 4096)
+            + [Float](repeating: 5, count: 2048)
+        XCTAssertEqual(recorder.lastTranscribedAudio, expectedAudio)
+        XCTAssertEqual(recorder.finalSampleCounts, [4 * 4096 + 2048])
+
+        let callsAfterFirstFlush = recorder.transcribedSampleCounts.count
+        await transcriber.flush()
+        XCTAssertEqual(recorder.transcribedSampleCounts.count, callsAfterFirstFlush)
+        XCTAssertEqual(recorder.finalSampleCounts, [4 * 4096 + 2048])
+    }
+
+    func testFlushDropsShortActiveSpeechAtStop() async {
+        let detector = ScriptedBoundaryDetector([.speechStart, nil])
+        let recorder = CaptionTranscriptionRecorder()
+        let transcriber = makeTranscriber(detector: detector, recorder: recorder)
+
+        await transcriber.ingest(chunk(value: 1)) { 3 }
+        await transcriber.ingest(chunk(value: 2)) { 3 }
+        await transcriber.flush()
+
+        XCTAssertTrue(recorder.transcribedSampleCounts.isEmpty)
+        XCTAssertTrue(recorder.finalSampleCounts.isEmpty)
+    }
+
+    func testSpeechEndStillDropsShortNoiseBeforeFlush() async {
+        let detector = ScriptedBoundaryDetector([.speechStart, nil, .speechEnd])
+        let recorder = CaptionTranscriptionRecorder()
+        let transcriber = makeTranscriber(detector: detector, recorder: recorder)
+
+        for _ in 0 ..< 3 {
+            await transcriber.ingest(chunk()) { 3 }
+        }
+        await transcriber.flush()
+
+        XCTAssertTrue(recorder.transcribedSampleCounts.isEmpty)
+        XCTAssertTrue(recorder.finalSampleCounts.isEmpty)
+    }
+
     private func makeTranscriber(
         detector: ScriptedBoundaryDetector,
         recorder: CaptionTranscriptionRecorder,
@@ -135,7 +188,7 @@ final class StreamingTranscriberBacklogTests: XCTestCase {
             channelLabel: "test",
             detector: detector,
             transcribe: { samples in
-                recorder.recordTranscription(samples.count)
+                recorder.recordTranscription(samples)
                 return "words"
             },
             onEvent: { recorder.record($0) },
@@ -190,6 +243,7 @@ private actor ScriptedBoundaryDetector: UtteranceBoundaryDetecting {
 private final class CaptionTranscriptionRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var _transcribedSampleCounts: [Int] = []
+    private var _lastTranscribedAudio: [Float] = []
     private var _partialTexts: [String] = []
     private var _finalSampleCounts: [Int] = []
 
@@ -213,11 +267,17 @@ private final class CaptionTranscriptionRecorder: @unchecked Sendable {
         return _finalAudio
     }
 
+    var lastTranscribedAudio: [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return _lastTranscribedAudio
+    }
+
     private var _finalAudio: [Float] = []
 
-    func recordTranscription(_ count: Int) {
+    func recordTranscription(_ samples: [Float]) {
         lock.lock(); defer { lock.unlock() }
-        _transcribedSampleCounts.append(count)
+        _transcribedSampleCounts.append(samples.count)
+        _lastTranscribedAudio = samples
     }
 
     func record(_ event: StreamingTranscriber.Event) {
