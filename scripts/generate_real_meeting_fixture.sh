@@ -56,7 +56,10 @@ ANNO_ZIP="$CACHE_DIR/ami_public_manual_1.6.2.zip"
 ANNO_DIR="$CACHE_DIR/anno"
 
 fetch() {
-    curl -fsSL --retry 3 -o "$2.part" "$1"
+    # Retry flags: see the download in scripts/ci/install-lint-tool.sh. No
+    # --max-time for these large files; the speed limit ends a stalled attempt.
+    curl -fsSL --connect-timeout 10 --speed-limit 10240 --speed-time 60 \
+        --retry 6 --retry-all-errors -o "$2.part" "$1"
     mv "$2.part" "$2"
 }
 

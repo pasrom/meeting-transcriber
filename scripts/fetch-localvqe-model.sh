@@ -83,11 +83,15 @@ trap 'rm -f "$TMP"' EXIT
 #
 # Timeouts are not optional: a network that blackholes rather than refuses
 # would otherwise hang a build indefinitely with no output, and --retry would
-# multiply the stall. 2.9 MB over any usable link fits in 60 s.
+# multiply the stall. 2.9 MB over any usable link fits in 60 s, and
+# --retry-max-time stops new attempts after 120 s, so one source stalls at
+# most about three minutes before the fallback; a source that is gone for good
+# (404) costs about a minute of retries before it. The retry flags themselves are
+# explained at the download in scripts/ci/install-lint-tool.sh.
 fetch_from() {
     local label="$1" url="$2"
     echo "fetch-localvqe-model: downloading $FILE from $label" >&2
-    if ! curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 -o "$TMP" "$url"; then
+    if ! curl -fsSL --connect-timeout 10 --max-time 60 --retry 6 --retry-max-time 120 --retry-all-errors -o "$TMP" "$url"; then
         echo "fetch-localvqe-model: $label did not answer" >&2
         return 1
     fi
