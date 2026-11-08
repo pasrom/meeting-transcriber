@@ -2,7 +2,7 @@
 import ViewInspector
 import XCTest
 
-/// The live-caption backend footnote in Settings → Transcription, per engine.
+/// The live-caption footnotes in Settings → Transcription.
 @MainActor
 final class TranscriptionSettingsCaptionFootnoteTests: XCTestCase {
     // swiftlint:disable:next implicitly_unwrapped_optional
@@ -62,5 +62,20 @@ final class TranscriptionSettingsCaptionFootnoteTests: XCTestCase {
         )
         XCTAssertTrue(footnote.contains("Auto-detect uses the standard re-transcribe engine"))
         XCTAssertNoThrow(try view.inspect().find(text: footnote))
+    }
+
+    /// The footnote is a plain String, so Markdown emphasis would show its asterisks.
+    func testLiveTranscriptionFootnoteUsesPlainLoggingText() throws {
+        let view = TranscriptionSettingsView(
+            settings: makeSettings(),
+            whisperKitEngine: WhisperKitEngine(),
+            parakeetEngine: ParakeetEngine(),
+        )
+        let footnote = try view.inspect().find(ViewType.Text.self) { text in
+            try text.string().contains("Caption text is")
+        }.string()
+
+        XCTAssertTrue(footnote.contains("Caption text is not logged by default"))
+        XCTAssertFalse(footnote.contains("**"))
     }
 }
