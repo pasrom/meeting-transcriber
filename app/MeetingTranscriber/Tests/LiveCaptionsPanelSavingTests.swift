@@ -12,12 +12,9 @@ import XCTest
 /// the tests are skipped on a runner without one.
 @MainActor
 final class LiveCaptionsPanelSavingTests: XCTestCase {
-    /// The left button and the clock the controller reads. Events injected
-    /// with `sendEvent` change neither the real button state nor the time,
-    /// so `send` sets the button and tests advance the clock.
+    /// Injected events do not change the physical mouse state.
     private final class FakeMouse {
         var pressed = false
-        var time: TimeInterval = 1000
         var location = CGPoint.zero
     }
 
@@ -88,7 +85,7 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
         let screen = screen
         let controller = LiveCaptionsWindowController(
             state: LiveCaptionsState(), size: .small, defaults: defaults,
-            buttonPressed: { mouse.pressed }, now: { mouse.time }, mouseLocation: { mouse.location },
+            buttonPressed: { mouse.pressed }, mouseLocation: { mouse.location },
             screens: { [screen] }, mainScreen: { screen },
         )
         return (controller, defaults)
@@ -121,13 +118,31 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
     /// Sends a left mouse button event to `panel` through the application,
     /// which is where the controller's local monitor sees it.
     private func send(_ type: NSEvent.EventType, to panel: NSWindow) throws {
+        try send(type, to: panel, buttonPressed: type == .leftMouseDown || type == .leftMouseDragged)
+    }
+
+    private func send(_ type: NSEvent.EventType, to panel: NSWindow, buttonPressed: Bool) throws {
         let event = try XCTUnwrap(NSEvent.mouseEvent(
             with: type, location: NSPoint(x: 10, y: 10), modifierFlags: [],
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
             context: nil, eventNumber: 0, clickCount: 1, pressure: 1,
         ))
-        mouse.pressed = type == .leftMouseDown || type == .leftMouseDragged
+        mouse.pressed = buttonPressed
         NSApplication.shared.sendEvent(event)
+    }
+
+    private func setOption(_ held: Bool, on panel: NSWindow) async throws {
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .flagsChanged, location: .zero, modifierFlags: held ? .option : [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+            context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 58,
+        ))
+        NSApplication.shared.sendEvent(event)
+        for _ in 0 ..< 100 {
+            if panel.ignoresMouseEvents == !held { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(panel.ignoresMouseEvents, !held)
     }
 
     /// Moves the panel the way a user's drag does: button down on the panel,
@@ -139,18 +154,21 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
         try send(.leftMouseUp, to: panel)
     }
 
-    func testOptionDragEventsMoveAndSaveThePanelUntilMouseUp() throws {
+    func testOptionDragEventsMoveAndSaveThePanelUntilMouseUp() async throws {
         let (controller, defaults) = try makeController()
         let panel = try showPanel(controller)
         let start = panel.frame.origin
-        panel.ignoresMouseEvents = false
+        try await setOption(true, on: panel)
 
         mouse.location = CGPoint(x: 300, y: 250)
         try send(.leftMouseDown, to: panel)
         mouse.location = CGPoint(x: 335, y: 230)
         try send(.leftMouseDragged, to: panel)
+        XCTAssertEqual(panel.frame.origin, CGPoint(x: start.x + 35, y: start.y - 20))
 
-        let moved = CGPoint(x: start.x + 35, y: start.y - 20)
+        mouse.location = CGPoint(x: 350, y: 240)
+        try send(.leftMouseDragged, to: panel)
+        let moved = CGPoint(x: start.x + 50, y: start.y - 10)
         XCTAssertEqual(panel.frame.origin, moved)
         XCTAssertEqual(stored(in: defaults), moved)
 
@@ -158,6 +176,21 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
         mouse.location = CGPoint(x: 400, y: 250)
         try send(.leftMouseDragged, to: panel)
         XCTAssertEqual(panel.frame.origin, moved)
+    }
+
+    func testDraggedEventsClampAndSaveThePanelInsideTheVisibleFrame() async throws {
+        let (controller, defaults) = try makeController()
+        let panel = try showPanel(controller)
+        try await setOption(true, on: panel)
+        mouse.location = panel.frame.origin
+        try send(.leftMouseDown, to: panel)
+
+        mouse.location = CGPoint(x: visible.maxX - 10, y: screen.frame.minY)
+        try send(.leftMouseDragged, to: panel)
+
+        let expected = CGPoint(x: visible.maxX - panel.frame.width, y: visible.minY)
+        XCTAssertEqual(panel.frame.origin, expected)
+        XCTAssertEqual(stored(in: defaults), expected)
     }
 
     /// A move with no drag of the user's behind it, such as the system
@@ -175,79 +208,78 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
         XCTAssertEqual(stored(in: defaults), dragged, "a drag was not saved")
     }
 
-    /// Holding Option does not make a move the user's: the restore's own
-    /// `setFrame` while drag mode is on is not saved.
-    func testAPlacementInDragModeWithoutADragIsNotSaved() throws {
+    func testAPlacementInDragModeWithoutADragIsNotSaved() async throws {
         let (controller, defaults) = try makeController()
         let panel = try showPanel(controller)
-        panel.setFrameOrigin(CGPoint(x: visible.minX + 120, y: visible.minY + 70))
+        try await setOption(true, on: panel)
+        let placed = panel.frame.origin
+        let relocated = CGPoint(x: placed.x + 30, y: placed.y + 20)
+        panel.setFrameOrigin(relocated)
 
-        panel.isMovableByWindowBackground = true
+        mouse.location = CGPoint(x: 120, y: 70)
+        try send(.leftMouseDragged, to: panel)
+        XCTAssertEqual(panel.frame.origin, relocated)
         controller.show()
-        panel.isMovableByWindowBackground = false
 
-        XCTAssertNil(stored(in: defaults), "the restore's move was saved")
+        XCTAssertEqual(panel.frame.origin, placed)
+        XCTAssertNil(stored(in: defaults))
     }
 
-    /// Releasing Option mid-drag turns drag mode off, but the panel keeps
-    /// following the mouse while the button is down (measured: one drag ran
-    /// on some 600 pt), so those moves are saved too.
-    func testMovesAfterOptionIsReleasedMidDragAreSaved() throws {
+    func testMovesAfterOptionIsReleasedMidDragAreSaved() async throws {
         let (controller, defaults) = try makeController()
         let panel = try showPanel(controller)
-
+        let start = panel.frame.origin
+        try await setOption(true, on: panel)
+        mouse.location = CGPoint(x: 300, y: 250)
         try send(.leftMouseDown, to: panel)
-        panel.isMovableByWindowBackground = true
-        panel.setFrameOrigin(CGPoint(x: visible.minX + 120, y: visible.minY + 70))
-        panel.isMovableByWindowBackground = false
-        let rest = CGPoint(x: visible.minX + 400, y: visible.minY + 90)
-        panel.setFrameOrigin(rest)
+        mouse.location = CGPoint(x: 320, y: 260)
+        try send(.leftMouseDragged, to: panel)
+
+        try await setOption(false, on: panel)
+        XCTAssertTrue(panel.ignoresMouseEvents)
+        mouse.location = CGPoint(x: 350, y: 270)
+        try send(.leftMouseDragged, to: panel)
         try send(.leftMouseUp, to: panel)
 
+        let rest = CGPoint(x: start.x + 50, y: start.y + 20)
+        XCTAssertEqual(panel.frame.origin, rest)
         XCTAssertEqual(stored(in: defaults), rest)
     }
 
-    /// A drag held longer than the settle window, with the button down the
-    /// whole time, is saved to its end: while the button is physically down
-    /// the session stays open whatever the clock says.
-    func testAHeldDragLongerThanTheSettleWindowIsSavedToItsEnd() throws {
+    func testADragCutOffByHideSavesNoLaterMove() async throws {
         let (controller, defaults) = try makeController()
         let panel = try showPanel(controller)
-
+        try await setOption(true, on: panel)
+        mouse.location = panel.frame.origin
         try send(.leftMouseDown, to: panel)
-        panel.setFrameOrigin(CGPoint(x: visible.minX + 120, y: visible.minY + 70))
-        mouse.time += 10 * CaptionDragSession.settleWindow
-        let rest = CGPoint(x: visible.minX + 400, y: visible.minY + 90)
-        panel.setFrameOrigin(rest)
-
-        XCTAssertEqual(stored(in: defaults), rest)
-    }
-
-    /// A recording that ends mid-drag orders the panel out, and the mouse-up
-    /// may then go elsewhere. A later move by anything else, even with the
-    /// button still held, is not taken for that drag.
-    func testADragCutOffByHideSavesNoLaterMove() throws {
-        let (controller, defaults) = try makeController()
-        let panel = try showPanel(controller)
-        try send(.leftMouseDown, to: panel)
+        let start = panel.frame.origin
 
         controller.hide()
-        panel.setFrameOrigin(CGPoint(x: visible.minX + 120, y: visible.minY + 70))
+        mouse.location = CGPoint(x: start.x + 30, y: start.y + 20)
+        try send(.leftMouseDragged, to: panel)
 
-        XCTAssertNil(stored(in: defaults), "a move after hide() was taken for the cut-off drag")
+        XCTAssertEqual(panel.frame.origin, start)
+        XCTAssertNil(stored(in: defaults))
+        controller.show()
+        try send(.leftMouseDragged, to: panel)
+        XCTAssertEqual(panel.frame.origin, start)
+        XCTAssertNil(stored(in: defaults))
     }
 
-    /// The same for `show()` while the panel is still up (a second show with
-    /// no hide between): it starts without the drag that was open.
-    func testShowingAgainMidDragSavesNoLaterMove() throws {
+    func testShowingAgainMidDragSavesNoLaterMove() async throws {
         let (controller, defaults) = try makeController()
         let panel = try showPanel(controller)
+        try await setOption(true, on: panel)
+        mouse.location = panel.frame.origin
         try send(.leftMouseDown, to: panel)
+        let start = panel.frame.origin
 
         controller.show()
-        panel.setFrameOrigin(CGPoint(x: visible.minX + 120, y: visible.minY + 70))
+        mouse.location = CGPoint(x: start.x + 30, y: start.y + 20)
+        try send(.leftMouseDragged, to: panel)
 
-        XCTAssertNil(stored(in: defaults), "a move after show() was taken for the open drag")
+        XCTAssertEqual(panel.frame.origin, start)
+        XCTAssertNil(stored(in: defaults))
     }
 
     /// The controller's own placement is never saved, also in the middle of
@@ -270,17 +302,62 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
         XCTAssertEqual(stored(in: defaults), recentred)
     }
 
-    /// After mouse-up the panel keeps sliding (measured: 200 to 400 ms, often
-    /// to a screen edge); where it comes to rest is saved.
-    func testTheSlideAfterMouseUpIsSaved() throws {
+    /// The system's relocation of a bar dropped with the pointer on a screen
+    /// edge is neither saved nor left standing.
+    func testAMoveAfterMouseUpIsNotSavedAndIsUndone() async throws {
         let (controller, defaults) = try makeController()
         let panel = try showPanel(controller)
+        let dragged = try await optionDrag(panel, to: CGPoint(x: visible.minX + 120, y: visible.minY + 70))
 
-        try drag(panel, to: CGPoint(x: visible.minX + 120, y: visible.minY + 70))
-        let rest = CGPoint(x: visible.minX, y: visible.minY + 70)
-        panel.setFrameOrigin(rest)
+        panel.setFrameOrigin(CGPoint(x: visible.midX - 260, y: visible.minY + 300))
 
-        XCTAssertEqual(stored(in: defaults), rest)
+        XCTAssertEqual(stored(in: defaults), dragged)
+        XCTAssertEqual(panel.frame.origin, dragged)
+    }
+
+    /// Past `dropRelocationWindow`, a move by the system (a display going
+    /// away, say) stands, as it does without a drag.
+    func testAMoveLongAfterMouseUpStands() async throws {
+        let (controller, defaults) = try makeController()
+        let panel = try showPanel(controller)
+        let dragged = try await optionDrag(panel, to: CGPoint(x: visible.minX + 120, y: visible.minY + 70))
+
+        try await Task.sleep(for: .seconds(LiveCaptionsWindowController.dropRelocationWindow + 0.2))
+        let relocated = CGPoint(x: visible.midX - 260, y: visible.minY + 300)
+        panel.setFrameOrigin(relocated)
+
+        XCTAssertEqual(stored(in: defaults), dragged)
+        XCTAssertEqual(panel.frame.origin, relocated)
+    }
+
+    /// A dragged event handled after the button is already up, as one queued
+    /// behind a main-thread stall is, does not move the panel either, so
+    /// what stands and what is saved stay the same.
+    func testADraggedEventWithTheButtonUpDoesNotMoveThePanel() async throws {
+        let (controller, defaults) = try makeController()
+        let panel = try showPanel(controller)
+        let start = panel.frame.origin
+        try await setOption(true, on: panel)
+        mouse.location = start
+        try send(.leftMouseDown, to: panel)
+
+        mouse.location = CGPoint(x: start.x + 30, y: start.y + 20)
+        try send(.leftMouseDragged, to: panel, buttonPressed: false)
+
+        XCTAssertEqual(panel.frame.origin, start)
+        XCTAssertNil(stored(in: defaults))
+    }
+
+    /// Option-drags the panel so its origin lands on `origin`, then releases.
+    private func optionDrag(_ panel: NSWindow, to origin: CGPoint) async throws -> CGPoint {
+        try await setOption(true, on: panel)
+        mouse.location = panel.frame.origin
+        try send(.leftMouseDown, to: panel)
+        mouse.location = origin
+        try send(.leftMouseDragged, to: panel)
+        try send(.leftMouseUp, to: panel)
+        XCTAssertEqual(panel.frame.origin, origin, "fixture: the drag did not land")
+        return origin
     }
 
     /// Parked by the user with its bottom over the Dock strip (flush with the
