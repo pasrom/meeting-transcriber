@@ -2,6 +2,19 @@
 // with times passed in, so every case can be pinned without a mouse.
 import Foundation
 
+/// Screen-coordinate translation from the mouse and panel origins at drag start.
+struct CaptionDragTranslation {
+    let startMouseLocation: CGPoint
+    let startOrigin: CGPoint
+
+    func origin(at mouseLocation: CGPoint) -> CGPoint {
+        CGPoint(
+            x: startOrigin.x + mouseLocation.x - startMouseLocation.x,
+            y: startOrigin.y + mouseLocation.y - startMouseLocation.y,
+        )
+    }
+}
+
 /// A user's drag of the caption bar, as seen from the panel's move
 /// notifications.
 ///

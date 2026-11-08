@@ -1,5 +1,8 @@
 import AppKit
+import os
 import SwiftUI
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveCaptionsWindowController")
 
 /// Borderless, click-through, status-bar-level NSPanel that hosts the live
 /// caption-bar overlay. By default sits above regular app windows and
@@ -7,8 +10,10 @@ import SwiftUI
 /// below (Teams / Zoom / browser).
 ///
 /// To reposition: hold ⌥ (Option) and drag — the modifier monitor below
-/// flips `ignoresMouseEvents` off and `isMovableByWindowBackground` on,
-/// then back when the key is released. Only the user's drag is saved
+/// flips `ignoresMouseEvents` off, then back when the key is released.
+/// The local mouse monitor moves the panel by the screen-coordinate mouse
+/// delta with `setFrameOrigin`; AppKit background dragging stays disabled.
+/// Only the user's drag is saved
 /// (`originDefaultsKey`, see `CaptionDragSession`), and every `show()` puts
 /// the bar back there, moving it only when it could not be reached (see
 /// `CaptionBarPlacement`).
@@ -37,7 +42,8 @@ final class LiveCaptionsWindowController {
     private var localModifierMonitor: Any?
     private var mouseMonitor: Any?
     private var dragSession = CaptionDragSession()
-    /// Set while the controller moves the panel itself, so the move observer
+    private var dragTranslation: CaptionDragTranslation?
+    /// Set while the controller restores or resizes the panel, so the move observer
     /// never saves that, whatever AppKit posts for it.
     private var isPlacing = false
     private var moveObserver: (any NSObjectProtocol)?
@@ -57,11 +63,12 @@ final class LiveCaptionsWindowController {
     /// The caption panel's window identifier.
     static let panelIdentifier = NSUserInterfaceItemIdentifier("live-captions")
 
-    /// Whether the left mouse button is physically down, and the monotonic
-    /// clock the drag session runs on. Production passes nothing; tests
-    /// drive both, since events they inject change neither.
+    /// The physical left button, monotonic clock, and screen mouse location.
+    /// Production passes nothing; tests drive these since injected events
+    /// do not change them.
     private let buttonPressed: () -> Bool
     private let now: () -> TimeInterval
+    private let mouseLocation: () -> CGPoint
 
     /// The attached screens and the main one, read on every placement.
     /// Production passes nothing and gets the real displays; tests pin a
@@ -76,6 +83,7 @@ final class LiveCaptionsWindowController {
         defaults: UserDefaults = .standard,
         buttonPressed: @escaping () -> Bool = { NSEvent.pressedMouseButtons & 1 != 0 },
         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        mouseLocation: @escaping () -> CGPoint = { NSEvent.mouseLocation },
         screens: @escaping () -> [CaptionScreen] = { NSScreen.screens.map(CaptionScreen.init) },
         mainScreen: @escaping () -> CaptionScreen? = { NSScreen.main.map(CaptionScreen.init) },
     ) {
@@ -84,6 +92,7 @@ final class LiveCaptionsWindowController {
         self.defaults = defaults
         self.buttonPressed = buttonPressed
         self.now = now
+        self.mouseLocation = mouseLocation
         self.screens = screens
         self.mainScreen = mainScreen
         state.setSize(size)
@@ -103,6 +112,7 @@ final class LiveCaptionsWindowController {
     func show() {
         let panel = ensurePanel()
         dragSession.reset()
+        dragTranslation = nil
         positionAtSavedOrDefault(panel)
         panel.orderFrontRegardless()
     }
@@ -163,6 +173,7 @@ final class LiveCaptionsWindowController {
     /// cheap and the underlying SwiftUI host stays bound to the same state.
     func hide() {
         dragSession.reset()
+        dragTranslation = nil
         panel?.orderOut(nil)
     }
 
@@ -190,6 +201,7 @@ final class LiveCaptionsWindowController {
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         panel.ignoresMouseEvents = true
+        panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = true
@@ -277,24 +289,38 @@ final class LiveCaptionsWindowController {
     private func applyModifierState(to panel: NSPanel, flags: NSEvent.ModifierFlags) {
         let dragMode = flags.contains(.option)
         panel.ignoresMouseEvents = !dragMode
-        panel.isMovableByWindowBackground = dragMode
+        panel.isMovableByWindowBackground = false
     }
 
-    /// Feeds the left button's down and up on the panel to `dragSession`. In
-    /// drag mode the panel accepts mouse events, and a local monitor sees the
-    /// down and up of every drag on it (measured). Only a down on the panel
-    /// starts a session; an up without one is ignored by the session.
+    /// Feeds the left button's down and up to `dragSession`, and moves the
+    /// panel explicitly for a drag begun on it in Option mode. Screen-space
+    /// deltas keep the grab point fixed as the panel moves beneath the mouse.
+    /// An up ends movement even when delivered to another window.
     private func installMouseMonitor(for panel: NSPanel) {
         guard mouseMonitor == nil else { return }
         mouseMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .leftMouseUp],
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp],
         ) { [weak self, weak panel] event in
             MainActor.assumeIsolated {
                 guard let self, let panel else { return }
                 if event.type == .leftMouseDown {
-                    if event.window === panel { self.dragSession.mouseDown() }
+                    if event.window === panel {
+                        self.dragSession.mouseDown()
+                        if !panel.ignoresMouseEvents {
+                            self.dragTranslation = CaptionDragTranslation(
+                                startMouseLocation: self.mouseLocation(),
+                                startOrigin: panel.frame.origin,
+                            )
+                            logger.notice("Live caption panel drag started")
+                        }
+                    }
+                } else if event.type == .leftMouseDragged {
+                    if let drag = self.dragTranslation {
+                        panel.setFrameOrigin(drag.origin(at: self.mouseLocation()))
+                    }
                 } else {
                     self.dragSession.mouseUp(at: self.now())
+                    self.dragTranslation = nil
                 }
             }
             return event
