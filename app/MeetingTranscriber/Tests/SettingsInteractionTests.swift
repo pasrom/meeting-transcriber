@@ -398,7 +398,7 @@ final class SettingsInteractionTests: XCTestCase {
             whisperKitEngine: WhisperKitEngine(),
             parakeetEngine: ParakeetEngine(),
         )
-        let footnote = TranscriptionSettingsView.captionBackendFootnote(strategy: .reTranscribe, languageIsSet: true)
+        let footnote = TranscriptionSettingsView.captionBackendFootnote(strategy: .reTranscribe, languageIsSet: true, detectsLanguage: true)
         XCTAssertFalse(footnote.contains("Nemotron"))
         XCTAssertNoThrow(try view.inspect().find(text: footnote))
     }
@@ -416,7 +416,7 @@ final class SettingsInteractionTests: XCTestCase {
             whisperKitEngine: WhisperKitEngine(),
             parakeetEngine: ParakeetEngine(),
         )
-        let footnote = TranscriptionSettingsView.captionBackendFootnote(strategy: .nemotronStreaming, languageIsSet: true)
+        let footnote = TranscriptionSettingsView.captionBackendFootnote(strategy: .nemotronStreaming, languageIsSet: true, detectsLanguage: true)
         XCTAssertTrue(footnote.contains("Nemotron"))
         XCTAssertNoThrow(try view.inspect().find(text: footnote))
     }
