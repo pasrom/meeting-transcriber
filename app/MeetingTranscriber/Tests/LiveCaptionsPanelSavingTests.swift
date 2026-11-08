@@ -18,6 +18,7 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
     private final class FakeMouse {
         var pressed = false
         var time: TimeInterval = 1000
+        var location = CGPoint.zero
     }
 
     private let mouse = FakeMouse()
@@ -87,7 +88,7 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
         let screen = screen
         let controller = LiveCaptionsWindowController(
             state: LiveCaptionsState(), size: .small, defaults: defaults,
-            buttonPressed: { mouse.pressed }, now: { mouse.time },
+            buttonPressed: { mouse.pressed }, now: { mouse.time }, mouseLocation: { mouse.location },
             screens: { [screen] }, mainScreen: { screen },
         )
         return (controller, defaults)
@@ -125,7 +126,7 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
             context: nil, eventNumber: 0, clickCount: 1, pressure: 1,
         ))
-        mouse.pressed = type == .leftMouseDown
+        mouse.pressed = type == .leftMouseDown || type == .leftMouseDragged
         NSApplication.shared.sendEvent(event)
     }
 
@@ -136,6 +137,27 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
         try send(.leftMouseDown, to: panel)
         panel.setFrameOrigin(origin)
         try send(.leftMouseUp, to: panel)
+    }
+
+    func testOptionDragEventsMoveAndSaveThePanelUntilMouseUp() throws {
+        let (controller, defaults) = try makeController()
+        let panel = try showPanel(controller)
+        let start = panel.frame.origin
+        panel.ignoresMouseEvents = false
+
+        mouse.location = CGPoint(x: 300, y: 250)
+        try send(.leftMouseDown, to: panel)
+        mouse.location = CGPoint(x: 335, y: 230)
+        try send(.leftMouseDragged, to: panel)
+
+        let moved = CGPoint(x: start.x + 35, y: start.y - 20)
+        XCTAssertEqual(panel.frame.origin, moved)
+        XCTAssertEqual(stored(in: defaults), moved)
+
+        try send(.leftMouseUp, to: panel)
+        mouse.location = CGPoint(x: 400, y: 250)
+        try send(.leftMouseDragged, to: panel)
+        XCTAssertEqual(panel.frame.origin, moved)
     }
 
     /// A move with no drag of the user's behind it, such as the system
