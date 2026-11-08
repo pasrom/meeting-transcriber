@@ -16,7 +16,8 @@ import SwiftUI
 ///
 /// The content is bottom-anchored inside the fixed-size NSPanel (see
 /// `LiveCaptionsWindowController`) so the bar visually grows upward as new
-/// captions arrive instead of jittering top-down.
+/// captions arrive instead of jittering top-down; past the panel's height
+/// the oldest lines clip at the top.
 struct LiveCaptionsOverlay: View {
     @Bindable var state: LiveCaptionsState
 
@@ -24,19 +25,20 @@ struct LiveCaptionsOverlay: View {
         // TimelineView re-evaluates the opacity expression every 200 ms while
         // visible so the >2 s-silence fade is smooth without a manual timer.
         // It's gated behind `state.hasContent` so the timeline stops when the
-        // bar is empty (idle bar → zero recurring work).
-        VStack {
-            Spacer(minLength: 0)
-            if state.hasContent {
-                TimelineView(.periodic(from: .now, by: 0.2)) { context in
-                    content.opacity(state.opacity(at: context.date))
+        // bar is empty (idle bar → zero recurring work). An overlay doesn't
+        // pass its content's height up, so overflow clips the oldest lines at
+        // the top instead of centring and cutting off the newest.
+        Color.clear
+            .overlay(alignment: .bottom) {
+                if state.hasContent {
+                    TimelineView(.periodic(from: .now, by: 0.2)) { context in
+                        content.opacity(state.opacity(at: context.date))
+                    }
                 }
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .animation(.easeInOut(duration: 0.15), value: state.hypothesisMic)
-        .animation(.easeInOut(duration: 0.15), value: state.hypothesisApp)
-        .animation(.easeInOut(duration: 0.15), value: state.recentFinals)
+            .animation(.easeInOut(duration: 0.15), value: state.hypothesisMic)
+            .animation(.easeInOut(duration: 0.15), value: state.hypothesisApp)
+            .animation(.easeInOut(duration: 0.15), value: state.recentFinals)
     }
 
     private var content: some View {
@@ -64,6 +66,9 @@ struct LiveCaptionsOverlay: View {
         .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 4)
+        .background(GeometryReader { proxy in
+            Color.clear.preference(key: LiveCaptionsContentFrameKey.self, value: proxy.frame(in: .global))
+        })
     }
 
     private func row(speaker: String, text: String, opacity: Double) -> some View {
@@ -75,5 +80,14 @@ struct LiveCaptionsOverlay: View {
                 .foregroundStyle(.white.opacity(opacity))
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// The caption box's frame in the hosting view, so tests can see which end clips.
+struct LiveCaptionsContentFrameKey: PreferenceKey {
+    static let defaultValue: CGRect? = nil
+
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        value = nextValue() ?? value
     }
 }

@@ -16,14 +16,14 @@ import SwiftUI
 /// Uses a fixed-size panel (no `sizingOptions = .preferredContentSize`)
 /// because auto-sizing produced an infinite layout-feedback loop with the
 /// caption-bar content — the SwiftUI hierarchy's ideal size republished on
-/// every layout pass, NSHostingController called `setFrame`, which fired
-/// another layout, recursing until the stack overflowed. The hosting view
-/// also gets no `sizingOptions`: its default min-size constraint made the
+/// every layout pass, the panel's frame was set again, which fired another
+/// layout, recursing until the stack overflowed. The hosting view gets no
+/// `sizingOptions` either: its default min-size constraint made the
 /// `fixedSize` caption text the window's minimum height, so the bar grew to
 /// thousands of points, off the top of the screen. The fixed-size
-/// trade-off: very long captions clip vertically once they exceed the
-/// preset's panel height; that's acceptable for the PoC and the surrounding
-/// overlay only renders a few lines anyway. The dimensions come from
+/// trade-off: captions taller than the preset's panel height clip, the
+/// oldest lines at the top, while the newest stays visible (the overlay
+/// anchors its content to the bottom). The dimensions come from
 /// `LiveCaptionsSize` (Settings → Transcription → Caption size), which pairs
 /// each panel size with the font it was measured for; `apply(size:)` swaps
 /// both together.
