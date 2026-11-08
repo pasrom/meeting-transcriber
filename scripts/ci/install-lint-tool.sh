@@ -63,7 +63,14 @@ fi
 
 bin_dir="$RUNNER_TEMP/$tool-bin"
 archive="$RUNNER_TEMP/$tool.zip"
-curl -fsSL -o "$archive" "https://github.com/${repo}/releases/download/${version}/${asset}"
+# GitHub's release download answers a transient 504 now and then. Plain
+# --retry is not enough: on the runner that 504 surfaced as exit 56, not 22,
+# and curl reads the HTTP status for a retry only after a 22 or a success.
+# No --retry-delay: curl then doubles the wait from 1 s, so six retries span
+# about a minute, longer than the 504 spells seen on the runners.
+# --max-time bounds an attempt that stalls mid-body; a timeout is retried too.
+curl -fsSL --connect-timeout 10 --max-time 120 --retry 6 --retry-all-errors \
+    -o "$archive" "https://github.com/${repo}/releases/download/${version}/${asset}"
 
 echo "$sha256  $archive" | shasum -a 256 -c - || {
     echo "::error::Checksum mismatch for $tool $version. Expected $sha256, got $(shasum -a 256 "$archive" | cut -d' ' -f1)."
