@@ -345,7 +345,7 @@ Meeting Transcriber is built with help from many people: code, bug reports, test
 <a href="https://github.com/DevUrandomFoo"><img src="https://avatars.githubusercontent.com/u/15967780?v=4&amp;s=80" width="40" height="40" alt="Manuel J." title="Manuel J."/></a>
 <a href="https://github.com/nsanitas"><img src="https://avatars.githubusercontent.com/u/909637?v=4&amp;s=80" width="40" height="40" alt="Nicolas Sanitas" title="Nicolas Sanitas"/></a>
 
-And [37 more](<CONTRIBUTORS.md>), credited in full there.
+And [38 more](<CONTRIBUTORS.md>), credited in full there.
 <!-- CONTRIBUTORS-PREVIEW:END -->
 
 [CONTRIBUTING.md](CONTRIBUTING.md) explains how to join them.
