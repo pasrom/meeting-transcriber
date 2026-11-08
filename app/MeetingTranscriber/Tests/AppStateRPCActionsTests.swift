@@ -328,6 +328,12 @@
             XCTAssertNil(warming.rpcStateSnapshot().liveCaptions.warmupFailure)
         }
 
+        func test_snapshot_liveCaptions_carriesLanguageDetection() {
+            XCTAssertFalse(state.rpcStateSnapshot().liveCaptions.detectingLanguage)
+            state.liveCaptions.setDetectingLanguage(true)
+            XCTAssertTrue(state.rpcStateSnapshot().liveCaptions.detectingLanguage)
+        }
+
         func test_snapshot_liveCaptions_carriesTheWarmupFailure() async throws {
             let error = URLError(.notConnectedToInternet)
             let warming = try makeWarmingState(loadError: error)

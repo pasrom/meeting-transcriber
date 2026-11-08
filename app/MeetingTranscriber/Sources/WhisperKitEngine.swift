@@ -80,6 +80,8 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Transcription progress (0.0–1.0) based on WhisperKit's 30s window processing.
     private(set) var transcriptionProgress: Double = 0
     private var pipe: WhisperKit?
+    /// The released model's kind, so Settings keeps describing it while it is unloaded.
+    private var releasedModelIsEnglishOnly = false
     /// Whether a model is loaded, for the load loop in `WhisperKitEngine+ModelLoad.swift`.
     var pipeInstalled: Bool {
         pipe != nil
@@ -261,6 +263,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         modelOrigin = origin
         // Whatever failed, it was another model.
         loadFailureReason = nil
+        releasedModelIsEnglishOnly = false
         guard pipe != nil else { return }
         unloadModel()
     }
@@ -278,7 +281,10 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     func releaseModel() {
         modelGeneration += 1
         // A launch download holds no model; its status, progress and reason stay.
-        if !downloadOnlyInFlight { unloadModel() }
+        if !downloadOnlyInFlight {
+            if let decodingClient { releasedModelIsEnglishOnly = !decodingClient.isMultilingual }
+            unloadModel()
+        }
         vocabularyPromptCache.invalidate()
         vocabularyPromptTokenCount = 0
     }
@@ -314,7 +320,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Installs a capturing decoder for focused engine tests. Keeping this seam
     /// at the last boundary before WhisperKit lets tests observe real engine
     /// flow options without downloading or loading a speech model.
-    func installDecodingClientForTesting(_ client: any WhisperDecodingClient) {
+    func installDecodingClientForTesting(_ client: (any WhisperDecodingClient)?) {
         decodingClientOverride = client
     }
 
@@ -401,6 +407,29 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             decodeOptions: options,
         )
         return Self.filteredSegments(results).map(\.text).joined(separator: " ")
+    }
+
+    /// Unknown until a model is loaded; an English-only model then reports false.
+    var supportsCaptionLanguageDetection: Bool {
+        decodingClient?.isMultilingual ?? !releasedModelIsEnglishOnly
+    }
+
+    /// Probe the language, loading the model on demand as live caption transcription does.
+    func detectLanguage(samples: [Float]) async throws -> CaptionLanguageDetection? {
+        try await ensureModel()
+        guard let decodingClient else { throw TranscriptionError.modelNotLoaded() }
+        guard decodingClient.isMultilingual else { return nil }
+        try Task.checkCancellation()
+        let logProbabilities = try await decodingClient.languageLogProbabilities(samples: samples)
+        try Task.checkCancellation()
+        return Self.languageDetection(logProbabilities: logProbabilities)
+    }
+
+    static func languageDetection(logProbabilities: [String: Float]) -> CaptionLanguageDetection? {
+        guard let top = logProbabilities.max(by: { $0.value < $1.value }),
+              top.value.isFinite, top.value <= 0 else { return nil }
+        // WhisperKit's langProbs contains natural-log probabilities from its token sampler.
+        return CaptionLanguageDetection(language: top.key, probability: exp(top.value))
     }
 
     // Build the WhisperKit `DecodingOptions` for a transcription run.

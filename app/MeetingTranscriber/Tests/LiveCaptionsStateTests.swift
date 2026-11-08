@@ -11,6 +11,27 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertFalse(state.hasContent)
     }
 
+    func testDetectingLanguageKeepsEmptyOverlayVisibleUntilDecisionOrReset() {
+        let state = LiveCaptionsState()
+
+        state.setDetectingLanguage(true)
+
+        XCTAssertTrue(state.isDetectingLanguage)
+        XCTAssertTrue(state.hasContent)
+        XCTAssertFalse(state.faded)
+        XCTAssertTrue(state.recentFinals.isEmpty)
+        XCTAssertEqual(state.hypothesisMic, "")
+        XCTAssertEqual(state.hypothesisApp, "")
+
+        state.setDetectingLanguage(false)
+        XCTAssertFalse(state.hasContent)
+
+        state.setDetectingLanguage(true)
+        state.clear()
+        XCTAssertFalse(state.isDetectingLanguage)
+        XCTAssertFalse(state.hasContent)
+    }
+
     func testApplyPartialMicSetsHypothesisOnlyForMic() {
         let state = LiveCaptionsState()
         state.applyPartial("hello", channel: .mic)

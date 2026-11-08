@@ -279,6 +279,158 @@ final class LiveCaptionFeedTests: XCTestCase {
         XCTAssertEqual(appended, [0] + (7 ... 16).map(Float.init))
     }
 
+    func testHoldingDeliversEverySampleExactlyOnce() async {
+        let feed = CaptionChannelFeed(maxQueuedSeconds: 5)
+        let pipeline = RecordingCaptionPipeline(blockFirst: false)
+        await feed.hold()
+        func numbered(_ range: Range<Int>) -> LiveAudioBuffer {
+            LiveAudioBuffer(samples: range.map(Float.init), channelCount: 1, sampleRate: 16000, hostTime: 0)
+        }
+        feed.sink(numbered(0 ..< 20))
+        feed.sink(numbered(20 ..< 40))
+        feed.installHeld(to: pipeline)
+        feed.sink(numbered(40 ..< 60))
+        await feed.retire()
+        let samples = await pipeline.samples
+        XCTAssertEqual(samples, (0 ..< 60).map(Float.init))
+    }
+
+    func testHoldingKeepsNumberedSamplesDuringDetectionAndCatchUp() async {
+        let feed = CaptionChannelFeed(maxQueuedSeconds: 5)
+        let pipeline = RecordingCaptionPipeline()
+        await feed.hold()
+        func numbered(_ range: Range<Int>) -> LiveAudioBuffer {
+            LiveAudioBuffer(samples: range.map(Float.init), channelCount: 1, sampleRate: 16000, hostTime: 0)
+        }
+        // Twelve seconds of capture while detection/preparation is pending.
+        for second in 0 ..< 12 {
+            feed.sink(numbered(second * 16000 ..< (second + 1) * 16000))
+        }
+        feed.installHeld(to: pipeline)
+        await pipeline.waitUntilBlocked()
+        // Installing must not shrink the bound while held audio is catching up.
+        feed.sink(numbered(12 * 16000 ..< 13 * 16000))
+        await pipeline.release()
+        await feed.retire()
+
+        let samples = await pipeline.samples
+        let expected = (0 ..< 13 * 16000).map(Float.init)
+        XCTAssertEqual(samples.count, expected.count)
+        XCTAssertEqual(samples, expected, "every held sample must arrive in order, exactly once")
+        let events = await pipeline.events
+        XCTAssertFalse(events.contains(.reset), "replay must not introduce an audio gap")
+    }
+
+    func testHoldingAppliesFreshTransformToReplayAndLiveAudio() async {
+        let feed = CaptionChannelFeed(maxQueuedSeconds: 5)
+        let pipeline = RecordingCaptionPipeline()
+        await feed.hold()
+        feed.sink(buffer(value: 0))
+        feed.sink(buffer(value: 10))
+        feed.installHeld(to: pipeline) {
+            var ordinal: Float = 0
+            return { input in
+                defer { ordinal += 1 }
+                return LiveAudioBuffer(
+                    samples: [input.samples[0] + ordinal], channelCount: 1,
+                    sampleRate: input.sampleRate, hostTime: input.hostTime,
+                )
+            }
+        }
+        await pipeline.waitUntilBlocked()
+        feed.sink(buffer(value: 20))
+        await pipeline.release()
+        await feed.retire()
+        let events = await pipeline.events
+        XCTAssertEqual(events, [.buffer(0), .buffer(11), .buffer(22)])
+    }
+
+    func testReplayingHeldTailResetsBeforeNewestSecondsThenLiveAudio() async {
+        // The production bound: the replayed tail and the next buffer fit under it.
+        let feed = CaptionChannelFeed(maxQueuedSeconds: 10)
+        let pipeline = RecordingCaptionPipeline(blockFirst: false)
+        await feed.hold()
+        for index in 1 ... 12 {
+            feed.sink(buffer(value: Float(index), sampleCount: 16000))
+        }
+        feed.installHeld(to: pipeline, replayLast: 8)
+        feed.sink(buffer(value: 13, sampleCount: 16000))
+        await feed.retire()
+        let events = await pipeline.events
+        XCTAssertEqual(events, [.reset] + (5 ... 13).map { .buffer(Float($0)) })
+    }
+
+    func testReplayingNoHeldAudioResetsBeforeFirstLiveBuffer() async {
+        let feed = CaptionChannelFeed(maxQueuedSeconds: 5)
+        let pipeline = RecordingCaptionPipeline(blockFirst: false)
+        await feed.hold()
+        feed.sink(buffer(value: 1))
+        feed.sink(buffer(value: 2))
+        feed.installHeld(to: pipeline, replayLast: 0)
+        feed.sink(buffer(value: 3))
+        await feed.retire()
+        let events = await pipeline.events
+        XCTAssertEqual(events, [.reset, .buffer(3)])
+    }
+
+    func testHoldingQueueRemainsBoundedAtSixtySeconds() async {
+        let feed = CaptionChannelFeed(maxQueuedSeconds: 5)
+        let pipeline = RecordingCaptionPipeline(blockFirst: false)
+        await feed.hold()
+        for index in 1 ... 62 {
+            feed.sink(buffer(value: Float(index), sampleCount: 16000))
+        }
+        feed.installHeld(to: pipeline)
+        await feed.retire()
+        let events = await pipeline.events
+        // Overflow drops only the oldest excess, as in a bound feed.
+        XCTAssertEqual(events, [.reset] + (3 ... 62).map { .buffer(Float($0)) })
+    }
+
+    func testHoldingRestoresNormalBoundAfterCatchUp() async {
+        let feed = CaptionChannelFeed(maxQueuedSeconds: 5)
+        let pipeline = RecordingCaptionPipeline()
+        await feed.hold()
+        feed.sink(buffer(value: 0, sampleCount: 16000))
+        feed.installHeld(to: pipeline)
+        await pipeline.waitUntilBlocked() // Held queue is now empty.
+        for index in 1 ... 7 {
+            feed.sink(buffer(value: Float(index), sampleCount: 16000))
+        }
+        await pipeline.release()
+        await feed.retire()
+        let events = await pipeline.events
+        XCTAssertEqual(events, [.buffer(0), .reset] + (3 ... 7).map { .buffer(Float($0)) })
+    }
+
+    func testStopDuringHoldingPreventsLateInstallation() async {
+        let feed = CaptionChannelFeed(maxQueuedSeconds: 5)
+        let pipeline = RecordingCaptionPipeline(blockFirst: false)
+        await feed.hold()
+        feed.sink(buffer(value: 1))
+        feed.closeAcceptance()
+        feed.installHeld(to: pipeline)
+        feed.sink(buffer(value: 2))
+        await feed.retire()
+        let events = await pipeline.events
+        XCTAssertTrue(events.isEmpty)
+    }
+
+    func testCancelStopsQueuedProbeAudioBeforeRetirement() async {
+        let feed = CaptionChannelFeed(maxQueuedSeconds: 5)
+        let pipeline = RecordingCaptionPipeline()
+        await feed.bind(to: pipeline)
+        feed.sink(buffer(value: 1))
+        await pipeline.waitUntilBlocked()
+        feed.sink(buffer(value: 2))
+        feed.cancel()
+        feed.sink(buffer(value: 3))
+        await pipeline.release()
+        await feed.retire()
+        let events = await pipeline.events
+        XCTAssertEqual(events, [.buffer(1)])
+    }
+
     // MARK: - Helpers
 
     private func makeController(factory: ChannelMockFactory) -> LiveTranscriptionController {
@@ -302,50 +454,6 @@ final class LiveCaptionFeedTests: XCTestCase {
             sampleRate: 16000,
             hostTime: 0,
         )
-    }
-}
-
-private actor RecordingCaptionPipeline: LiveCaptionPipeline {
-    enum Event: Equatable {
-        case buffer(Float)
-        case reset
-    }
-
-    private(set) var events: [Event] = []
-    private(set) var peakBacklogSeconds: TimeInterval = 0
-    private var firstIngest = true
-    private var releaseContinuation: CheckedContinuation<Void, Never>?
-    private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
-
-    func ingest(_ buffer: LiveAudioBuffer, backlog: @Sendable () -> TimeInterval) async {
-        if firstIngest {
-            firstIngest = false
-            await withCheckedContinuation { continuation in
-                releaseContinuation = continuation
-                for waiter in blockedWaiters {
-                    waiter.resume()
-                }
-                blockedWaiters.removeAll()
-            }
-        }
-        peakBacklogSeconds = max(peakBacklogSeconds, backlog())
-        events.append(.buffer(buffer.samples[0]))
-    }
-
-    func reset() {
-        events.append(.reset)
-    }
-
-    func flush() {}
-
-    func waitUntilBlocked() async {
-        if releaseContinuation != nil { return }
-        await withCheckedContinuation { blockedWaiters.append($0) }
-    }
-
-    func release() {
-        releaseContinuation?.resume()
-        releaseContinuation = nil
     }
 }
 

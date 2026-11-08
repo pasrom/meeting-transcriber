@@ -5,6 +5,23 @@ import XCTest
 
 @MainActor
 final class LiveCaptionsOverlayTests: XCTestCase {
+    func testDetectingLanguageRendersWithoutCaptionsAndClearsAfterDecision() throws {
+        let state = LiveCaptionsState()
+        state.setDetectingLanguage(true)
+
+        XCTAssertNoThrow(try LiveCaptionsOverlay(state: state).inspect().find(text: "Detecting language…"))
+
+        state.setDetectingLanguage(false)
+        state.setActiveBackend("Parakeet EOU · EN")
+        state.applyPartial("hello", channel: .mic)
+        defer { state.clear() }
+
+        let overlay = try LiveCaptionsOverlay(state: state).inspect()
+        XCTAssertThrowsError(try overlay.find(text: "Detecting language…"))
+        XCTAssertNoThrow(try overlay.find(text: "Parakeet EOU · EN"))
+        XCTAssertNoThrow(try overlay.find(text: "hello"))
+    }
+
     /// The newest final is the line still being read when the next speech
     /// starts, so it stays bright with or without a hypothesis below it.
     func testOlderFinalDimsWhileNewestFinalAndHypothesesStayBright() throws {
