@@ -77,7 +77,11 @@ runs:
           echo "Using the cached ffmpeg"
         else
           wheel="$RUNNER_TEMP/ffmpeg.whl"
-          curl -fsSL --retry 3 --max-time 300 -o "$wheel" "$WHEEL_URL"
+          # Retry flags: see the download in scripts/ci/install-lint-tool.sh. The
+          # speed limit ends a stalled attempt after a minute, so six retries
+          # cannot multiply a 300 s stall.
+          curl -fsSL --connect-timeout 10 --speed-limit 10240 --speed-time 60 --max-time 300 \
+            --retry 6 --retry-all-errors -o "$wheel" "$WHEEL_URL"
           if [ "$(sha_of "$wheel")" != "$WHEEL_SHA256" ]; then
             echo "::error::The ffmpeg wheel does not match its pinned SHA-256"
             exit 1
