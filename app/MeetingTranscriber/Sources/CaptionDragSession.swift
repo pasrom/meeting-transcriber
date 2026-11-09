@@ -6,6 +6,10 @@ import Foundation
 struct CaptionDragTranslation {
     let startMouseLocation: CGPoint
     let startOrigin: CGPoint
+    /// The origin the drag last set: the drop, since the frame at mouse-up
+    /// may already be the system's. Nil until the drag has moved the panel,
+    /// so an Option-click is no drop.
+    var lastOrigin: CGPoint?
 
     func origin(at mouseLocation: CGPoint) -> CGPoint {
         CGPoint(

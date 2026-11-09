@@ -1,3 +1,6 @@
+// One class so every case shares the panel, screen and event helpers,
+// which the test-case accessibility rule keeps private.
+// swiftlint:disable file_length
 import AppKit
 @testable import MeetingTranscriber
 import XCTest
@@ -11,7 +14,7 @@ import XCTest
 /// `screen` is drawn inside the real main display (see `screenInside`) and
 /// the tests are skipped on a runner without one.
 @MainActor
-final class LiveCaptionsPanelSavingTests: XCTestCase {
+final class LiveCaptionsPanelSavingTests: XCTestCase { // swiftlint:disable:this type_body_length
     /// Injected events do not change the physical mouse state.
     private final class FakeMouse {
         var pressed = false
@@ -82,11 +85,12 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
             defaults.set(["x": saved.x, "y": saved.y], forKey: LiveCaptionsWindowController.originDefaultsKey)
         }
         let mouse = mouse
-        let screen = screen
+        // Read at each call, so a test can change the screen between events.
         let controller = LiveCaptionsWindowController(
             state: LiveCaptionsState(), size: .small, defaults: defaults,
             buttonPressed: { mouse.pressed }, mouseLocation: { mouse.location },
-            screens: { [screen] }, mainScreen: { screen },
+            screens: { [weak self] in self.map { [$0.screen] } ?? [] },
+            mainScreen: { [weak self] in self?.screen },
         )
         return (controller, defaults)
     }
@@ -338,6 +342,120 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
         XCTAssertEqual(panel.frame.origin, dragged)
     }
 
+    /// The same relocation handled before the drag's mouse-up, as it was in
+    /// most live runs on macOS 27.2: the button is already up when the move
+    /// arrives, and the frame the mouse-up then finds is the system's. The
+    /// drop is where the drag last put the panel, so the panel goes back there,
+    /// and a further move in the window is undone to it too, not to the jump.
+    func testAMoveHandledBeforeMouseUpIsUndoneToTheDrop() async throws {
+        let (controller, defaults) = try makeController()
+        let panel = try showPanel(controller)
+        let dragged = try await optionPressAndDrag(panel, to: CGPoint(x: visible.minX + 120, y: visible.minY + 70))
+
+        mouse.pressed = false
+        panel.setFrameOrigin(CGPoint(x: visible.midX - 260, y: visible.minY + 300))
+        try send(.leftMouseUp, to: panel, buttonPressed: false)
+
+        XCTAssertEqual(panel.frame.origin, dragged)
+        panel.setFrameOrigin(CGPoint(x: visible.minX + 400, y: visible.minY + 200))
+        XCTAssertEqual(panel.frame.origin, dragged)
+        XCTAssertEqual(stored(in: defaults), dragged)
+    }
+
+    /// The relocation handled while the button still reads down is saved as
+    /// the drag's own move; the mouse-up then puts back both the panel and
+    /// the saved origin, so the next `show()` does not open at the jump.
+    func testAMoveSavedBeforeMouseUpIsUndoneAndUnsaved() async throws {
+        let (controller, defaults) = try makeController()
+        let panel = try showPanel(controller)
+        let dragged = try await optionPressAndDrag(panel, to: CGPoint(x: visible.minX + 120, y: visible.minY + 70))
+
+        let jumped = CGPoint(x: visible.midX - 260, y: visible.minY + 300)
+        panel.setFrameOrigin(jumped)
+        XCTAssertEqual(stored(in: defaults), jumped, "fixture: the move was not taken as the drag's")
+        try send(.leftMouseUp, to: panel, buttonPressed: false)
+
+        XCTAssertEqual(panel.frame.origin, dragged)
+        XCTAssertEqual(stored(in: defaults), dragged)
+    }
+
+    /// A visible frame that shrank between the last dragged event and the
+    /// mouse-up (a display change, say) is no system move: the mouse-up
+    /// neither moves the bar nor saves anything over the drop.
+    func testAVisibleFrameThatShrankBeforeMouseUpLeavesTheDrop() async throws {
+        let (controller, defaults) = try makeController()
+        let panel = try showPanel(controller)
+        let topFlush = CGPoint(x: visible.minX + 100, y: visible.maxY - panel.frame.height)
+        let dragged = try await optionPressAndDrag(panel, to: topFlush)
+
+        shrinkVisibleFrameFromTop(by: 25)
+        try send(.leftMouseUp, to: panel, buttonPressed: false)
+
+        XCTAssertEqual(panel.frame.origin, dragged)
+        XCTAssertEqual(stored(in: defaults), dragged)
+    }
+
+    /// A system move inside the relocation window while the visible frame is
+    /// smaller puts the bar back inside it, but the user's drop stays saved,
+    /// so the next `show()` returns to it once the display is back.
+    func testUndoingInsideAShrunkVisibleFrameKeepsTheDropSaved() async throws {
+        let (controller, defaults) = try makeController()
+        let panel = try showPanel(controller)
+        let topFlush = CGPoint(x: visible.minX + 100, y: visible.maxY - panel.frame.height)
+        let dragged = try await optionDrag(panel, to: topFlush)
+
+        shrinkVisibleFrameFromTop(by: 25)
+        panel.setFrameOrigin(CGPoint(x: visible.midX - 260, y: visible.minY + 100))
+
+        XCTAssertEqual(panel.frame.origin, CGPoint(x: dragged.x, y: dragged.y - 25))
+        XCTAssertEqual(stored(in: defaults), dragged)
+    }
+
+    /// A preset change during an Option-drag ends the drag: later dragged
+    /// events no longer move the bar, a move with the button still down is
+    /// not saved as the user's, and the mouse-up leaves the re-centred bar.
+    func testAPresetChangeDuringAnOptionDragEndsTheDrag() async throws {
+        let (controller, defaults) = try makeController()
+        let panel = try showPanel(controller)
+        _ = try await optionPressAndDrag(panel, to: CGPoint(x: visible.minX + 120, y: visible.minY + 70))
+        controller.apply(size: .large)
+        let placed = panel.frame.origin
+        let saved = stored(in: defaults)
+
+        mouse.location = CGPoint(x: mouse.location.x + 40, y: mouse.location.y + 10)
+        try send(.leftMouseDragged, to: panel)
+        XCTAssertEqual(panel.frame.origin, placed)
+        panel.setFrameOrigin(CGPoint(x: placed.x + 30, y: placed.y + 20))
+        XCTAssertEqual(stored(in: defaults), saved)
+        try send(.leftMouseUp, to: panel)
+        XCTAssertEqual(stored(in: defaults), saved)
+    }
+
+    /// Lowers the top of the injected screen's visible frame, as a menu bar
+    /// or a display change would.
+    private func shrinkVisibleFrameFromTop(by points: CGFloat) {
+        var shrunk = screen.visibleFrame
+        shrunk.size.height -= points
+        screen = CaptionScreen(frame: screen.frame, visibleFrame: shrunk)
+    }
+
+    /// An Option-click that never moves the panel is no drop: a move before
+    /// its mouse-up stands.
+    func testAnOptionClickWithoutADragHoldsNoDrop() async throws {
+        let (controller, _) = try makeController()
+        let panel = try showPanel(controller)
+        try await setOption(true, on: panel)
+        mouse.location = panel.frame.origin
+        try send(.leftMouseDown, to: panel)
+
+        let moved = CGPoint(x: visible.midX - 260, y: visible.minY + 300)
+        mouse.pressed = false
+        panel.setFrameOrigin(moved)
+        try send(.leftMouseUp, to: panel, buttonPressed: false)
+
+        XCTAssertEqual(panel.frame.origin, moved)
+    }
+
     /// Past `dropRelocationWindow`, a move by the system (a display going
     /// away, say) stands, as it does without a drag.
     func testAMoveLongAfterMouseUpStands() async throws {
@@ -373,12 +491,20 @@ final class LiveCaptionsPanelSavingTests: XCTestCase {
 
     /// Option-drags the panel so its origin lands on `origin`, then releases.
     private func optionDrag(_ panel: NSWindow, to origin: CGPoint) async throws -> CGPoint {
+        let dragged = try await optionPressAndDrag(panel, to: origin)
+        try send(.leftMouseUp, to: panel)
+        XCTAssertEqual(panel.frame.origin, origin, "fixture: the drop moved the panel")
+        return dragged
+    }
+
+    /// Presses on the panel in Option mode and drags its origin onto
+    /// `origin`, leaving the button down.
+    private func optionPressAndDrag(_ panel: NSWindow, to origin: CGPoint) async throws -> CGPoint {
         try await setOption(true, on: panel)
         mouse.location = panel.frame.origin
         try send(.leftMouseDown, to: panel)
         mouse.location = origin
         try send(.leftMouseDragged, to: panel)
-        try send(.leftMouseUp, to: panel)
         XCTAssertEqual(panel.frame.origin, origin, "fixture: the drag did not land")
         return origin
     }
