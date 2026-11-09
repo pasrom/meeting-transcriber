@@ -35,6 +35,23 @@ protocol UtteranceBoundaryDetecting: Actor {
     func reset() async
 }
 
+/// VAD attempts per chunk before a live-caption session gives up on that chunk.
+let vadAttemptsPerChunk = 3
+
+extension UtteranceBoundaryDetecting {
+    func boundaryWithRetries(in chunk: [Float]) async throws -> FluidVAD.StreamEvent.Kind? {
+        var failures = 0
+        while true {
+            do {
+                return try await boundary(in: chunk)
+            } catch {
+                failures += 1
+                if failures >= vadAttemptsPerChunk { throw error }
+            }
+        }
+    }
+}
+
 // MARK: - Session
 
 /// Live captions for one channel via FluidAudio's cache-aware
@@ -136,9 +153,12 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
             }
             let event: FluidVAD.StreamEvent.Kind?
             do {
-                event = try await detector.boundary(in: chunk)
+                event = try await detector.boundaryWithRetries(in: chunk)
             } catch {
-                logger.warning("[\(self.channelLabel, privacy: .public)] vad error: \(error.localizedDescription, privacy: .public)")
+                // The ASR stream already consumed the chunk; skipping it there would splice audio.
+                logger.warning(
+                    "[\(self.channelLabel, privacy: .public)] vad error after \(vadAttemptsPerChunk) attempts: \(error.localizedDescription, privacy: .public)",
+                )
                 event = nil
             }
             await handleEvent(event, chunk: chunk)
