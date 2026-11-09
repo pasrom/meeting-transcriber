@@ -2,6 +2,12 @@ import AudioTapLib
 @testable import MeetingTranscriber
 import XCTest
 
+extension LiveCaptionPipeline {
+    func ingest(_ buffer: LiveAudioBuffer) async {
+        await ingest(buffer) { 0 }
+    }
+}
+
 /// Coverage for the `LiveCaptionPipeline.flush()` contract: when recording
 /// stops mid-utterance (no trailing silence → no VAD `speechEnd` event), the
 /// pending speech must still be committed as a final so the user sees the

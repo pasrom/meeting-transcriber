@@ -29,6 +29,7 @@ final class StreamingTranscriberBacklogTests: XCTestCase {
 
         await transcriber.ingest(chunk()) { 0.0 }
         await transcriber.ingest(chunk()) { 0.0 }
+        // The 0.8 s wall-clock lastPartialAt guard suppresses further partials during these calls.
         XCTAssertEqual(recorder.partials, ["words"])
 
         await transcriber.ingest(chunk()) { 1.0 }
@@ -49,6 +50,7 @@ final class StreamingTranscriberBacklogTests: XCTestCase {
 
         await transcriber.ingest(large) { 0 }
 
+        // The 0.8 s wall-clock lastPartialAt guard suppresses further partials while this buffer drains.
         XCTAssertEqual(recorder.partials, ["words"])
         XCTAssertGreaterThanOrEqual(recorder.transcribedSampleCounts.first ?? 0, 5 * 4096)
     }
