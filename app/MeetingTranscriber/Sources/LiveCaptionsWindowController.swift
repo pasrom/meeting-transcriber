@@ -147,6 +147,8 @@ final class LiveCaptionsWindowController {
         guard size != self.size else { return }
         let previous = self.size
         self.size = size
+        dragSession.reset()
+        dragTranslation = nil
         droppedOrigin = nil
         state.setSize(size)
         if let saved = storedOrigin() {
@@ -326,9 +328,7 @@ final class LiveCaptionsWindowController {
                 } else if event.type == .leftMouseDragged {
                     self.followDrag(panel)
                 } else {
-                    self.dragSession.mouseUp()
-                    if self.dragTranslation != nil { self.holdDroppedOrigin(panel.frame.origin) }
-                    self.dragTranslation = nil
+                    self.endDrag(panel)
                 }
             }
             return event
@@ -353,9 +353,8 @@ final class LiveCaptionsWindowController {
                 guard let self, let panel, !self.isPlacing else { return }
                 if self.dragSession.shouldSaveMove(buttonPressed: self.buttonPressed()) {
                     self.persistOrigin(panel.frame.origin)
-                } else if let dropped = self.droppedOrigin,
-                          let origin = CaptionBarPlacement.restoredOrigin(dropped, size: self.size, screens: self.screens()) {
-                    self.place(panel, at: origin)
+                } else if let dropped = self.droppedOrigin {
+                    self.undoRelocation(of: panel, to: dropped)
                 }
             }
         }
@@ -370,6 +369,31 @@ final class LiveCaptionsWindowController {
         guard let screen = CaptionBarPlacement.screenOwning(proposed, among: screens)
             ?? CaptionBarPlacement.screenOwning(panel.frame, among: screens) else { return }
         panel.setFrameOrigin(CaptionBarPlacement.clampedOrigin(origin, size: panel.frame.size, visibleFrame: screen.visibleFrame))
+        dragTranslation?.lastOrigin = panel.frame.origin
+    }
+
+    /// Holds where the drag left the panel and, when the system already moved
+    /// it before this mouse-up was handled, puts it back at once.
+    private func endDrag(_ panel: NSPanel) {
+        dragSession.mouseUp()
+        if let dropped = dragTranslation?.lastOrigin {
+            holdDroppedOrigin(dropped)
+            if panel.frame.origin != dropped { undoRelocation(of: panel, to: dropped) }
+        }
+        dragTranslation = nil
+    }
+
+    /// Puts a panel the system moved after a drop back where the drag left
+    /// it, through `restoredOrigin` so a screen that has gone is not reused,
+    /// and saves the drop itself: a system move handled while the button
+    /// still read down was saved as the drag's. The drop, not the restored
+    /// origin, so a screen that is smaller for a moment does not overwrite
+    /// the user's choice; `show()` clamps it again if it still has to.
+    private func undoRelocation(of panel: NSPanel, to dropped: CGPoint) {
+        guard let origin = CaptionBarPlacement.restoredOrigin(dropped, size: size, screens: screens()),
+              origin != panel.frame.origin else { return }
+        place(panel, at: origin)
+        persistOrigin(dropped)
     }
 
     private func holdDroppedOrigin(_ origin: CGPoint) {
