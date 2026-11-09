@@ -197,6 +197,12 @@ jobs:
         run: bash scripts/ci/install-lint-tool.sh swiftlint
       - name: Verify pinned SwiftLint
         run: bash scripts/ci/install-lint-tool.sh swiftlint --verify
+      # Retried, so a 504 on a binary-target download does not fail the build.
+      # The build below must keep using the default package location (no
+      # -derivedDataPath / -clonedSourcePackagesDirPath) to reuse this result.
+      - name: Resolve packages
+        timeout-minutes: 20
+        run: cd app/MeetingTranscriber && bash "$GITHUB_WORKSPACE/scripts/ci/resolve-packages.sh" -scheme MeetingTranscriber
       # `scripts/lint.sh --analyze` mirrors this step locally; keep the two in step.
       - name: Build & Analyze
         run: |
