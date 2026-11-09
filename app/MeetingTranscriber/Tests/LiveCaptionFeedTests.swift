@@ -121,6 +121,7 @@ final class LiveCaptionFeedTests: XCTestCase {
     }
 
     func testFeedKeepsFixtureBurstForSmallAndLargeBuffers() async {
+        // 176 × 4530 and 1360 × 587 cover the 49.8 s fixture at 16 kHz with two buffer shapes.
         for (sampleCount, bufferCount) in [(176, 4530), (1360, 587)] {
             let feed = CaptionChannelFeed()
             let pipeline = RecordingCaptionPipeline()

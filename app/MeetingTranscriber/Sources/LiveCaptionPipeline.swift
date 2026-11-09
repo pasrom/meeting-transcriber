@@ -24,9 +24,3 @@ protocol LiveCaptionPipeline: Actor {
     /// Recording stopped — flush any pending utterance as a final.
     func flush() async
 }
-
-extension LiveCaptionPipeline {
-    func ingest(_ buffer: LiveAudioBuffer) async {
-        await ingest(buffer) { 0 }
-    }
-}

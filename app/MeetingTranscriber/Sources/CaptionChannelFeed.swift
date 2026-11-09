@@ -72,6 +72,7 @@ final class CaptionChannelFeed {
 
 /// Stores buffer references without copying samples on the capture callback.
 private final class CaptionAudioQueue: Sendable {
+    // Must hold the whole 49.8 s E2E fixture burst losslessly; see testFeedKeepsFixtureBurstForSmallAndLargeBuffers.
     private static let capacitySeconds: TimeInterval = 60
 
     private final class Node {
