@@ -103,6 +103,28 @@ final class StreamingTranscriberBacklogTests: XCTestCase {
         XCTAssertEqual(recorder.finalSampleCounts, [5 * 4096])
     }
 
+    func testPersistentDetectorFailureDropsChunksAndLaterSpeechTranscribes() async {
+        let detector = ScriptedBoundaryDetector([.speechStart, nil, nil, nil])
+        await detector.setFailing(true)
+        let recorder = CaptionTranscriptionRecorder()
+        let transcriber = makeTranscriber(detector: detector, recorder: recorder)
+
+        for _ in 0 ..< 8 {
+            await transcriber.ingest(chunk(value: 1)) { 1.0 }
+        }
+        let failedCalls = await detector.boundaryCallCount
+        XCTAssertEqual(failedCalls, 8 * 3)
+
+        await detector.setFailing(false)
+        for _ in 0 ..< 4 {
+            await transcriber.ingest(chunk(value: 2)) { 1.0 }
+        }
+        await transcriber.flush()
+
+        XCTAssertEqual(recorder.finalSampleCounts, [4 * 4096])
+        XCTAssertEqual(Set(recorder.finalAudio), [2])
+    }
+
     private func makeTranscriber(
         detector: ScriptedBoundaryDetector,
         recorder: CaptionTranscriptionRecorder,
@@ -133,7 +155,9 @@ private actor ScriptedBoundaryDetector: UtteranceBoundaryDetecting {
 
     private var events: [FluidVAD.StreamEvent.Kind?]
     private(set) var resetCount = 0
+    private(set) var boundaryCallCount = 0
     private var failNext = false
+    private var isFailing = false
 
     init(_ events: [FluidVAD.StreamEvent.Kind?]) {
         self.events = events
@@ -143,8 +167,13 @@ private actor ScriptedBoundaryDetector: UtteranceBoundaryDetecting {
         failNext = true
     }
 
+    func setFailing(_ value: Bool) {
+        isFailing = value
+    }
+
     func boundary(in _: [Float]) throws -> FluidVAD.StreamEvent.Kind? {
-        if failNext {
+        boundaryCallCount += 1
+        if failNext || isFailing {
             failNext = false
             throw Failure.temporary
         }

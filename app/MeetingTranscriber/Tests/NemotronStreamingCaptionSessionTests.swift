@@ -243,6 +243,42 @@ final class NemotronStreamingCaptionSessionTests: XCTestCase {
         XCTAssertFalse(finals(recorder.events).isEmpty, "force-flush emits a final past 5 s")
         XCTAssertEqual(finals(recorder.events).first?.text, "langer monolog")
     }
+
+    func testPersistentDetectorFailureKeepsFeedingAsrAndLaterSpeechFinalizes() async {
+        let manager = MockNemotronManager()
+        await manager.setFinish("fresh speech")
+        let detector = ScriptedBoundaryDetector(script: [.speechStart, nil, nil, nil, .speechEnd])
+        await detector.setFailing(true)
+        let recorder = EventRecorder()
+        let session = makeSession(manager: manager, detector: detector, recorder: recorder)
+
+        for _ in 0 ..< 8 {
+            await session.ingest(chunkBuffer(value: 0.1))
+        }
+        let failedCalls = await detector.boundaryCallCount
+        let processedBeforeRecovery = await manager.processCount
+        XCTAssertEqual(failedCalls, 8 * 3)
+        XCTAssertEqual(processedBeforeRecovery, 8, "ASR keeps every chunk so its stream is not spliced")
+
+        await detector.setFailing(false)
+        await detector.failNextAttempt()
+        for _ in 0 ..< 2 {
+            await session.ingest(chunkBuffer(value: 0.7))
+        }
+        await detector.failNextAttempt()
+        for _ in 0 ..< 3 {
+            await session.ingest(chunkBuffer(value: 0.7))
+        }
+
+        let finalEvents = finals(recorder.events)
+        let processedAfterRecovery = await manager.processCount
+        let totalCalls = await detector.boundaryCallCount
+        XCTAssertEqual(totalCalls, 8 * 3 + 5 + 2)
+        XCTAssertEqual(processedAfterRecovery, 8 + 5)
+        XCTAssertEqual(finalEvents.map(\.text), ["fresh speech"])
+        XCTAssertEqual(finalEvents.first?.audio.count, 4 * 4096)
+        XCTAssertEqual(Set(finalEvents.first?.audio ?? []), [0.7])
+    }
 }
 
 // MARK: - Test doubles
@@ -253,15 +289,33 @@ final class NemotronStreamingCaptionSessionTests: XCTestCase {
 private actor ScriptedBoundaryDetector: UtteranceBoundaryDetecting {
     private var script: [FluidVAD.StreamEvent.Kind?]
     private(set) var resetCount = 0
+    private(set) var boundaryCallCount = 0
+    private var isFailing = false
+    private var failNext = false
 
     init(script: [FluidVAD.StreamEvent.Kind?]) {
         self.script = script
     }
 
-    // swiftlint:disable:next async_without_await
-    func boundary(in _: [Float]) async -> FluidVAD.StreamEvent.Kind? {
-        script.isEmpty ? nil : script.removeFirst()
+    func setFailing(_ value: Bool) {
+        isFailing = value
     }
+
+    func failNextAttempt() {
+        failNext = true
+    }
+
+    func boundary(in _: [Float]) throws -> FluidVAD.StreamEvent.Kind? {
+        boundaryCallCount += 1
+        if failNext {
+            failNext = false
+            throw Failure.temporary
+        }
+        if isFailing { throw Failure.temporary }
+        return script.isEmpty ? nil : script.removeFirst()
+    }
+
+    private enum Failure: Error { case temporary }
 
     // swiftlint:disable:next async_without_await
     func reset() async {
@@ -278,6 +332,7 @@ private actor MockNemotronManager: NemotronStreamingAsrManaging {
     private var finishText = ""
     private var stalePartialAfterReset: String?
     private var queuedStalePartial: String?
+    private(set) var processCount = 0
 
     func setPartial(_ text: String) {
         partial = text
@@ -294,8 +349,9 @@ private actor MockNemotronManager: NemotronStreamingAsrManaging {
     // swiftlint:disable:next async_without_await
     func prepare() async {}
 
-    // swiftlint:disable:next async_without_await
-    func process(_: [Float]) async {}
+    func process(_: [Float]) {
+        processCount += 1
+    }
 
     func latestTranscript() -> String? {
         if let queuedStalePartial {

@@ -132,14 +132,12 @@ actor StreamingTranscriber: LiveCaptionPipeline {
             let chunk = Array(inputAccumulator.prefix(Self.chunkSize))
             inputAccumulator.removeFirst(Self.chunkSize)
             do {
-                let event = try await detector.boundary(in: chunk)
+                let event = try await detector.boundaryWithRetries(in: chunk)
                 await handleEvent(event, chunk: chunk, backlog: backlog)
             } catch {
                 logger.warning(
-                    "[\(self.channelLabel, privacy: .public)] vad chunk error: \(error.localizedDescription, privacy: .public)",
+                    "[\(self.channelLabel, privacy: .public)] dropping chunk after \(vadAttemptsPerChunk) VAD failures: \(error.localizedDescription, privacy: .public)",
                 )
-                inputAccumulator.insert(contentsOf: chunk, at: 0)
-                return
             }
         }
     }
