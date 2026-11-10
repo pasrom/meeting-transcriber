@@ -723,12 +723,44 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
     func testShownErrorBodyKeepsTheBoundAndSeparatesLines() {
         let lines = (0 ..< 20).map { String(repeating: Character(String($0 % 10)), count: 100) }
 
-        // Five lines reach exactly 500, the sixth takes it past the bound.
+        // Cut at the bound, newlines included, never at a whole line past it.
         XCTAssertEqual(
             OpenAIProtocolGenerator.shownErrorBody(lines),
-            lines.prefix(6).joined(separator: "\n"),
+            String(lines.joined(separator: "\n").prefix(OpenAIProtocolGenerator.errorBodyShownCap)),
         )
         XCTAssertEqual(OpenAIProtocolGenerator.shownErrorBody(["Bad Request", "x"]), "Bad Request\nx")
+    }
+
+    /// A compact JSON error arrives as one line. Some servers echo the
+    /// request, transcript included, in a validation error, so the shown
+    /// body must stay bounded however long that line is.
+    func testShownErrorBodyBoundsASingleLongLine() {
+        let line = #"{"detail":[{"msg":"bad","input":""# + String(repeating: "z", count: 5000) + #""}]}"#
+        let shown = OpenAIProtocolGenerator.shownErrorBody([line])
+        XCTAssertEqual(shown.count, OpenAIProtocolGenerator.errorBodyShownCap)
+        XCTAssertTrue(line.hasPrefix(shown))
+    }
+
+    /// The read loop keeps at most the read cap, also when the body is one
+    /// line, and still keeps a multi-line body under the cap whole.
+    func testErrorBodyLinesKeepsAtMostTheReadCap() async throws {
+        let cap = OpenAIProtocolGenerator.errorBodyReadCap
+        let long = String(repeating: "q", count: cap * 3)
+        let kept = try await OpenAIProtocolGenerator.errorBodyLines(from: Self.lineStream(["head", long, "tail"]))
+        // Compared by length so a failure does not print the long line.
+        XCTAssertEqual(kept.map(\.count), [4, cap - 4])
+        XCTAssertEqual(kept.first, "head")
+
+        let short = ["{", #"  "error": "temperature""#, "}"]
+        let whole = try await OpenAIProtocolGenerator.errorBodyLines(from: Self.lineStream(short))
+        XCTAssertEqual(whole, short)
+    }
+
+    private static func lineStream(_ lines: [String]) -> AsyncStream<String> {
+        AsyncStream { continuation in
+            lines.forEach { continuation.yield($0) }
+            continuation.finish()
+        }
     }
 
     func testGenerateRetriesSamplingRefusalSpreadOverLines() async throws {

@@ -114,7 +114,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         let shownBody: String
     }
 
-    /// How much of an error body is read, in characters with line separators
+    /// How much of an error body is kept, in characters with line separators
     /// excluded: enough for a pretty-printed refusal spread over many lines (as
     /// LiteLLM sends them) to arrive whole and parse.
     static let errorBodyReadCap = 4096
@@ -122,18 +122,33 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     /// the read cap was raised.
     static let errorBodyShownCap = 500
 
-    /// The leading lines of an error body that are logged and shown: up to and
-    /// including the line that takes the running character count past
-    /// `errorBodyShownCap`. Lines are joined with newlines, like the full body,
-    /// because joining without a separator fuses words across lines.
-    static func shownErrorBody(_ lines: [String]) -> String {
-        var kept: [String] = []
-        var count = 0
-        for line in lines where count <= errorBodyShownCap {
-            kept.append(line)
-            count += line.count
+    /// The leading lines of an error body, at most `errorBodyReadCap`
+    /// characters of them. The line that reaches the cap is cut, not kept
+    /// whole: a compact JSON error is a single line, and a server that echoes
+    /// the request in it would otherwise be kept at any length.
+    static func errorBodyLines<Lines: AsyncSequence>(
+        from source: Lines,
+    ) async throws -> [String] where Lines.Element == String {
+        var lines: [String] = []
+        var room = errorBodyReadCap
+        for try await line in source {
+            let kept = String(line.prefix(room))
+            lines.append(kept)
+            room -= kept.count
+            if room <= 0 { break }
         }
-        return kept.joined(separator: "\n")
+        return lines
+    }
+
+    /// The start of an error body that is logged and shown: the lines joined
+    /// with newlines, like the full body (joining without a separator fuses
+    /// words across lines), then cut at `errorBodyShownCap` characters. A
+    /// character bound rather than a line bound, because a single line can
+    /// hold the whole body, transcript included when the server echoes the
+    /// request. The fallbacks read the full `body`, so the cut never affects a
+    /// retry.
+    static func shownErrorBody(_ lines: [String]) -> String {
+        String(lines.joined(separator: "\n").prefix(errorBodyShownCap))
     }
 
     /// The parts of the request body a refusal can make `generate()` change.
@@ -346,13 +361,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         }
 
         guard (200 ... 299).contains(httpResponse.statusCode) else {
-            var lines: [String] = []
-            var count = 0
-            for try await line in bytes.lines {
-                lines.append(line)
-                count += line.count
-                if count > errorBodyReadCap { break }
-            }
+            let lines = try await errorBodyLines(from: bytes.lines)
             let shownBody = shownErrorBody(lines)
             logger.error(
                 "openai_http_error status=\(httpResponse.statusCode, privacy: .public) endpoint=\(requestURL.absoluteString, privacy: .public) body=\(shownBody, privacy: .public)",
