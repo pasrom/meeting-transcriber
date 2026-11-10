@@ -314,6 +314,31 @@ final class SpeakerNamingSession {
         let autoMatched = matched.count { $0.key != $0.value }
         logger.info("[recognition] \(matched.count) speakers, \(autoMatched) auto, \(matched.count - autoMatched) unknown")
 
+        // Stash recognition forensics so the late-confirm path can write the
+        // JSONL row when the user actually confirms (possibly later, via the
+        // re-openable dialog). The headless row below reads them too.
+        stashedSuggestedAtDialog[jobID] = suggestedAtDialog
+        stashedTopCandidates[jobID] = topCandidates
+
+        if delegate?.job(withID: jobID)?.autoSkipNaming == true {
+            // Headless blocking-transcribe: accept the auto-assigned names
+            // (exactly like a `.skipped` dialog result) so the job finishes on
+            // its own. No naming data, kept or written: nobody will resolve it,
+            // parking would wedge the job until the 24h stale-cleanup, and a
+            // file on disk makes a quit during the protocol call re-run the
+            // whole job (`ProtocolResumePolicy`). The mode is for stage timings.
+            delegate?.setNamingMetadata(jobID: jobID, slug: slug, usedDiarizerMode: diarizeProcess.mode, wroteSidecarsIn: nil)
+            // Log it as a resolution like every other path, tagged `.headless`:
+            // the names still land in the transcript, so leaving no row would
+            // hide an auto-accept nobody reviewed.
+            recordRecognition(
+                jobID: jobID, title: title,
+                userMapping: nil, fallback: autoNames,
+                source: .headless,
+            )
+            return autoNames
+        }
+
         // Use persisted 16kHz path (survives workDir cleanup).
         let persistedAudioPath = outputDir.appendingPathComponent("recordings")
             .appendingPathComponent("\(slug)_16k.wav")
@@ -338,29 +363,6 @@ final class SpeakerNamingSession {
             wroteSidecarsIn: saved ? outputDir : nil,
         )
 
-        // Stash recognition forensics so the late-confirm path can write the
-        // JSONL row when the user actually confirms (possibly later, via the
-        // re-openable dialog).
-        stashedSuggestedAtDialog[jobID] = suggestedAtDialog
-        stashedTopCandidates[jobID] = topCandidates
-
-        if delegate?.job(withID: jobID)?.autoSkipNaming == true {
-            // Headless blocking-transcribe: accept the auto-assigned names
-            // (exactly like a `.skipped` dialog result) so the job finishes on
-            // its own. Don't stash naming data: there is no interactive client
-            // to resolve it, and parking would wedge the job until the next
-            // launch's 24h stale-cleanup.
-            //
-            // Log it as a resolution like every other path, tagged `.headless`:
-            // the names still land in the transcript, so leaving no row would
-            // hide an auto-accept nobody reviewed.
-            recordRecognition(
-                jobID: jobID, title: title,
-                userMapping: nil, fallback: autoNames,
-                source: .headless,
-            )
-            return autoNames
-        }
         // Production/interactive: stash the naming data so the queue parks the
         // job at `.speakerNamingPending` and pops the (re-openable) dialog. The
         // pipeline continues with the auto-names; the dialog confirms later via
