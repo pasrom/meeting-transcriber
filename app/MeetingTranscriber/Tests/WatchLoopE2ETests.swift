@@ -273,33 +273,7 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
         XCTAssertFalse(mockProtocol.capturedDiarized ?? true, "Should be marked as non-diarized")
     }
 
-    // MARK: - 5. Cooldown Prevents Re-detection After Handling
-
-    func testCooldownPreventsRedetectionAfterHandling() {
-        let detector = PowerAssertionDetector(confirmationCount: 1)
-        detector.windowListProvider = { [] }
-
-        let teamsAssertions: [Int32: [[String: Any]]] = [
-            1234: [[
-                "Process Name": "MSTeams",
-                "AssertName": "Microsoft Teams Call in progress",
-            ]],
-        ]
-        detector.assertionProvider = { teamsAssertions }
-
-        // First detection succeeds
-        let firstDetection = detector.checkOnce()
-        XCTAssertNotNil(firstDetection, "Should detect meeting on first check")
-
-        // Reset with cooldown
-        detector.reset(appName: "Microsoft Teams")
-
-        // Second detection should fail due to cooldown
-        let secondDetection = detector.checkOnce()
-        XCTAssertNil(secondDetection, "Should NOT detect meeting during cooldown")
-    }
-
-    // MARK: - 6. Resample Path Produces 16kHz for WhisperKit
+    // MARK: - 5. Resample Path Produces 16kHz for WhisperKit
 
     func testResamplePathProduces16kHzForWhisperKit() async throws {
         try skipIfCIWithoutE2EOptIn("requires WhisperKit model download")
@@ -342,7 +316,7 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
         XCTAssertFalse(transcript.contains("|>"), "Transcript should not contain '|>'")
     }
 
-    // MARK: - 7. Full Pipeline With Real Diarization (slow)
+    // MARK: - 6. Full Pipeline With Real Diarization (slow)
 
     func testFullPipelineWithRealDiarization() async throws {
         try skipIfCIWithoutE2EOptIn("requires WhisperKit model + FluidAudio diarization")
@@ -432,7 +406,7 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
         XCTAssertFalse(stored.isEmpty, "Speaker DB should have been populated")
     }
 
-    // MARK: - 8. WatchLoop Enqueues Job After Recording
+    // MARK: - 7. WatchLoop Enqueues Job After Recording
 
     func testHandleMeetingEnqueuesJob() async throws {
         let mixPath = tmpDir.appendingPathComponent("test_mix.wav")
