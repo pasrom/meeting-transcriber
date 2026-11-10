@@ -13,16 +13,16 @@
 #   - Pixel-level visual regression: with --screenshot, asserts the
 #     menubar actually renders red-tinted pixels via assert-red-pixels.swift
 #
-# What this does NOT cover (see docs/plans/.local/open/2026-05-17-channel-health-live-e2e.md):
+# What this does NOT cover:
 #   - The polling task lifecycle (start/cancel on `.recording` transitions)
 #   - `.recovered` event path (flag clears back to false on channel unmute)
-#
-# The first two of those gaps are now covered by scripts/e2e-channel-fault.sh,
-# which drives the real CATapDescription tap → LevelPublisher → polling task
-# chain and asserts on what is notified. Note that as of issue #614 a latched
-# episode does NOT notify by itself: the notification follows the capture
-# fault, not the silence episode.
 #   - Real-world false-positive resistance during legitimate recordings
+#
+# The first two are covered by scripts/e2e-channel-fault.sh, which drives the
+# real CATapDescription tap → LevelPublisher → polling task chain and asserts
+# on what is notified. Note that as of issue #614 a latched episode does NOT
+# notify by itself: the notification follows the capture fault, not the
+# silence episode.
 #
 # Runs on:
 #   - Any macOS host with Xcode + zsh + jq

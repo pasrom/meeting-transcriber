@@ -45,8 +45,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     /// stray Enter/Escape keystrokes that leak from another app's focus when
     /// `bringWindowToFront` steals focus mid-keystroke. Historical pipeline_log data
     /// shows ~19% of speaker-naming sessions exiting within 2-3 s — an isolated cluster
-    /// outside the log-normal human-confirm distribution. See
-    /// `docs/plans/.local/research/2026-05-19-late-speaker-renaming-after-done.md`.
+    /// outside the log-normal human-confirm distribution.
     static let defaultKeyboardGracePeriod: TimeInterval = 0.75
 
     let gracePeriod: TimeInterval
