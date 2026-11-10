@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 /// Badge overlay kind for the menu bar icon.
 ///
@@ -62,9 +63,21 @@ enum MenuBarIcon {
     /// open (cosmetic, sub-second) and resumes when tracking ends.
     nonisolated static let animationRunLoopMode: RunLoop.Mode = .default
 
+    /// The ticks that drive `AnimatedMenuBarIcon`'s frame: the 0.4 s timer
+    /// for an animated badge, nothing for a static one. A static badge ignores
+    /// ticks anyway (`nextFrame`), so subscribing to the timer for it would only
+    /// wake the main run loop 2.5 times a second while the app idles in the
+    /// menu bar, which is its normal state.
+    static func animationTicks(for badge: BadgeKind) -> AnyPublisher<Date, Never> {
+        guard badge.isAnimated else { return Empty().eraseToAnyPublisher() }
+        return Timer.publish(every: 0.4, on: .main, in: animationRunLoopMode)
+            .autoconnect()
+            .eraseToAnyPublisher()
+    }
+
     /// Returns the next animation frame for `badge`, or `current` if `badge`
-    /// is non-animated. Static badges (idle, error, …) ignore the timer tick
-    /// so the App scene's body does not re-evaluate every 0.4 s. Pure math —
+    /// is non-animated. A static badge gets no ticks (`animationTicks`); this
+    /// keeps the frame still should one arrive anyway. Pure math —
     /// `nonisolated` so it can be called from any context (tests, off-main).
     nonisolated static func nextFrame(_ current: Int, badge: BadgeKind) -> Int {
         guard badge.isAnimated else { return current }
