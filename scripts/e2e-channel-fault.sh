@@ -121,23 +121,19 @@ WINDOW_SECONDS=30
 # empty state as the app failing to notice a dead channel.
 SIM_SECONDS=$((WINDOW_SECONDS * 8))
 
-# The dev bundle has a pre-existing container at
-# `~/Library/Containers/<bundle>/…`, and macOS routes the app's UserDefaults
-# reads there whether or not this binary is sandboxed. A plain
-# `defaults write <bundle>` from outside lands in the standard domain and is
-# then silently a no-op, so this lane would run against whatever the container
-# happened to hold: a stale 90 s window makes phase 1 wait too little,
-# `autoWatch=false` means no recording at all, and a disabled indicator means
-# no monitors. Both domains are written, and both are restored. Same reasoning
-# and same shape as `_set_dev_default` in scripts/e2e-app.sh.
+# The dev .app is not sandboxed, so it reads its UserDefaults from the
+# standard-domain plist. A plain `defaults write <bundle-id>` from a shell does
+# not reach that file once containermanagerd has registered a container for
+# the identifier: it is redirected into the container, which the app does not
+# read. Measured on this runner, where the standard file carries the app's own
+# window geometry, which only a running app writes, and every shell write by
+# bundle id landed in the container. Written that way, this lane ran against
+# the app's built-in defaults, racing a threshold three times longer than the
+# one it had set.
+# So the settings go through write_dev_default, which writes the standard plist
+# by path, and the container plist too when it exists, and both are restored
+# (see write_dev_default in scripts/lib/e2e-helpers.sh).
 CONTAINER_PLIST="$(dev_container_plist)"
-# The one the app actually uses on this runner. Measured, not assumed: the
-# standard file is the one carrying the app's own window geometry, which only a
-# running app writes, while every `defaults write <bundle-id>` from a shell
-# landed in the container. The helper's note has the redirect the other way
-# round, so writing only the two documented targets left the app reading its
-# built-in defaults and the lane racing a threshold three times longer than it
-# had set.
 STANDARD_PLIST="$(dev_standard_plist)"
 
 set_dev_default() {
