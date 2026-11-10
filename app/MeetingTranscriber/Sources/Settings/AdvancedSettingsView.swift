@@ -53,7 +53,7 @@ struct AdvancedSettingsView: View {
                 )
                 PermissionRow(
                     label: "Accessibility",
-                    detail: "Optional — enables mute detection and meeting naming",
+                    detail: "Optional — reads Teams participant names",
                     granted: accessibilityOK,
                     optional: true,
                     help: "System Settings → Privacy & Security → Accessibility → enable Meeting Transcriber",
@@ -129,11 +129,10 @@ struct AdvancedSettingsView: View {
         .onAppear { refreshPermissions() }
     }
 
-    #if APPSTORE
-        private static let screenRecordingDetail = "Required for app audio capture"
-    #else
-        private static let screenRecordingDetail = "Required for meeting detection and app audio capture"
-    #endif
+    /// Meeting detection reads no window titles. The grant sharpens the meeting
+    /// title and is one of the two grants the app-audio tap accepts, the other
+    /// being Audio Recording, which has no row because it cannot be checked.
+    private static let screenRecordingDetail = "Meeting titles, and app audio capture without Audio Recording"
 
     private func refreshPermissions() {
         micPermission = AVCaptureDevice.authorizationStatus(for: .audio)

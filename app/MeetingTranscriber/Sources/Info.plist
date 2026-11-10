@@ -29,8 +29,8 @@
     <key>NSMicrophoneUsageDescription</key>
     <string>Meeting Transcriber needs microphone access to record meeting audio for transcription.</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Meeting Transcriber needs Screen Recording permission to detect active meetings by reading window titles.</string>
+    <string>Meeting Transcriber uses Screen Recording to read the meeting title from the meeting window, and as a fallback permission for recording the meeting app’s audio.</string>
     <key>NSAccessibilityUsageDescription</key>
-    <string>Meeting Transcriber uses Accessibility to detect mute state and read meeting participants.</string>
+    <string>Meeting Transcriber uses Accessibility to read the participant names of a Microsoft Teams meeting.</string>
 </dict>
 </plist>

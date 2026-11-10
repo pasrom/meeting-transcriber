@@ -264,8 +264,8 @@ final class WatchLoopTests: XCTestCase {
             HealthCheckResult(screenRecording: .healthy, microphone: .healthy, accessibility: .denied)
         }
 
-        // Accessibility feeds participant reading and mute detection, neither of
-        // which this path uses, and Settings presents it as optional. Refusing
+        // Accessibility feeds only Teams participant reading, which this path
+        // does not use, and Settings presents it as optional. Refusing
         // over it left the app recording an auto-detected meeting while turning
         // down the one the user asked for by hand.
         try await loop.startManualRecording(pid: 123, appName: "Test", title: "Test")
