@@ -12,7 +12,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT/scripts/lib/e2e-helpers.sh"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# Set at the very end; see test_kill_and_verify_gone.sh for why a `set -u`
+# abort would otherwise read as a pass.
+COMPLETED=0
+cleanup() {
+    local rc=$?
+    rm -rf "$TMP"
+    if [ "$COMPLETED" -ne 1 ]; then
+        echo "FAIL: the test aborted before reaching its end" >&2
+        exit 1
+    fi
+    exit "$rc"
+}
+trap cleanup EXIT
 PASSED=0
 ok()  { echo "$1 ... PASS"; PASSED=$(( PASSED + 1 )); }
 bad() { echo "$1 ... FAIL: $2"; exit 1; }
@@ -51,4 +63,5 @@ out="$(RUNNER_TEMP="$TMP" fail_on_host_skips)" || status=$?
 rm -f "$TMP/e2e-host-skips"
 RUNNER_TEMP="$TMP" fail_on_host_skips && ok gate_passes_without_skips || bad gate_passes_without_skips "non-zero"
 
+COMPLETED=1
 echo "$PASSED passed"
