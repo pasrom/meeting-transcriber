@@ -413,7 +413,7 @@ enum ProtocolError: LocalizedError {
             case .timeout: "Claude CLI took too long (>10 min)"
         #endif
 
-        case .emptyProtocol: "Meeting notes are empty. Tip: Test manually: echo Hello | claude --print"
+        case .emptyProtocol: "Meeting notes are empty: the provider returned no text."
 
         case let .httpError(code, body): "HTTP \(code)\(body.isEmpty ? "" : ": \(body)")"
 
