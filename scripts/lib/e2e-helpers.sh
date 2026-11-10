@@ -864,6 +864,102 @@ read_dev_default_effective() {
     fi
 }
 
+# --- settings as launch arguments ---------------------------------------------
+#
+# A lane that writes its settings into the dev bundle's preferences has to
+# record and restore them, and a killed run leaves them changed for the next
+# lane. Passed as launch arguments instead (`open <app> --args -key value`),
+# they land in the process's argument domain, which UserDefaults.standard
+# consults before the stored preferences and never writes back: nothing to
+# restore, nothing a killed run can leave behind, and the container redirect
+# described at write_dev_default does not matter.
+#
+# Only keys whose read in the app takes an argument-domain value are listed.
+# Arguments arrive as strings: "YES", or a raw value. AppSettings reads the four
+# below through `UserDefaults.flag(forKey:)` (`bool(forKey:default:)`), which
+# accepts "YES"/"NO", and `string(forKey:)` for the engine; the app shell's own
+# auto-watch start reads `bool(forKey: "autoWatch")`, which takes "YES" too.
+# The upgrade lane passes the same kind of arguments to the binary and asserts
+# them. Keys read as `object(forKey:) as? Int` or `as? Double` (numSpeakers,
+# pollInterval, the OpenAI sampling values) would not cast from a string and
+# are deliberately absent. Each listed key has its /state.settings path, which
+# is how the helper proves the argument arrived.
+_e2e_launch_setting() {
+    case "$1" in
+        autoWatch) echo "bool .settings.detection.autoWatch" ;;
+        recordOnly) echo "bool .settings.recording.recordOnly" ;;
+        liveTranscriptionEnabled) echo "bool .settings.recording.liveTranscriptionEnabled" ;;
+        transcriptionEngine) echo "string .settings.transcription.engine" ;;
+        *) return 1 ;;
+    esac
+}
+
+# launch_dev_app <bundle> [--env NAME=VALUE]... [--] [<key>=<value>]...
+# Start the bundle with `open`, the settings as launch arguments (`true`/`false`
+# for a boolean key), wait up to RPC_READY_TIMEOUT_S (default 30) for the RPC
+# server (rpc_ready, so the caller's RPC_TOKEN_FILE), then read
+# /state.settings and require every setting to be what was passed. `--env`
+# goes to `open`, the one way an environment variable reaches a process
+# LaunchServices starts (MEETINGTRANSCRIBER_DEBUG_RPC=1 brings the RPC server
+# up without the debugRPCEnabled preference). The app must not be running:
+# `open` only activates a running app and drops the arguments, which the
+# readback then reports.
+# 0: launched and every setting in effect. 1: the RPC server did not come up,
+# or the app reports another value (a launch argument that did not arrive). 2:
+# a key or value this helper cannot pass, refused before anything starts. On
+# 1 and 2 the reason is in E2E_LAUNCH_ERR.
+# shellcheck disable=SC2034 # E2E_LAUNCH_ERR is the caller's to read
+launch_dev_app() {
+    local bundle="$1" pair key value spec path got
+    shift
+    local -a open_args=() app_args=() settings=()
+    E2E_LAUNCH_ERR=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --env) open_args+=(--env "$2"); shift 2 ;;
+            --) shift; break ;;
+            -*) E2E_LAUNCH_ERR="launch_dev_app: unknown option $1"; return 2 ;;
+            *) break ;;
+        esac
+    done
+    for pair in "$@"; do
+        key="${pair%%=*}" value="${pair#*=}"
+        spec="$(_e2e_launch_setting "$key")" \
+            || { E2E_LAUNCH_ERR="launch_dev_app: $key cannot be passed as a launch argument (see _e2e_launch_setting)"; return 2; }
+        case "${spec%% *}:$value" in
+            bool:true) app_args+=("-$key" YES) ;;
+            bool:false) app_args+=("-$key" NO) ;;
+            bool:*) E2E_LAUNCH_ERR="launch_dev_app: $key takes true or false, not '$value'"; return 2 ;;
+            *) app_args+=("-$key" "$value") ;;
+        esac
+        settings+=("$key|$value|$spec")
+    done
+    # `${a[@]+...}`: bash 3.2 under `set -u` calls an empty array unbound.
+    open ${open_args[@]+"${open_args[@]}"} "$bundle" ${app_args[@]+--args "${app_args[@]}"} \
+        || { E2E_LAUNCH_ERR="\`open\` could not launch $bundle (see its message above)"; return 1; }
+    local ready_s="${RPC_READY_TIMEOUT_S:-30}"
+    poll_until "$ready_s" 1 rpc_ready \
+        || { E2E_LAUNCH_ERR="RPC /healthz did not respond within ${ready_s}s of launching $bundle"; return 1; }
+    [ "${#settings[@]}" -gt 0 ] || return 0
+    local rc=0
+    local readback_s="${E2E_LAUNCH_READBACK_S:-20}"
+    poll_state "$readback_s" 1 state_is '.settings | type == "object"' || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        E2E_LAUNCH_ERR="$(state_why "$rc" "the app answered, but no /state carrying settings arrived within ${readback_s}s, so whether the launch arguments took effect could not be read back")"
+        return 1
+    fi
+    for pair in "${settings[@]}"; do
+        IFS='|' read -r key value spec <<<"$pair"
+        path="${spec#* }"
+        got="$(jq -r "$path | if . == null then \"<absent>\" else tostring end" <<<"$STATE_BODY" 2>/dev/null)" || got="<unreadable>"
+        if [ "$got" != "$value" ]; then
+            E2E_LAUNCH_ERR="the app was launched with $key=$value but reports ${path#.}=$got: the launch argument did not reach it (an app that was already running when \`open\` ran, or an \`open\` that dropped the arguments), so the lane would run on the stored setting instead"
+            return 1
+        fi
+    done
+    return 0
+}
+
 # --- mic-stall lane state that outlives one run -------------------------------
 #
 # The --mic-stall lane of e2e-app.sh switches the dev bundle's protocolProvider
