@@ -109,8 +109,8 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testEndGraceBoundaryValue() {
-        settings.endGrace = 5.0
-        XCTAssertEqual(settings.endGrace, 5.0)
+        settings.endGrace = 1.0
+        XCTAssertEqual(settings.endGrace, 1.0)
     }
 
     func testNumSpeakersClampedToMinimum() {
@@ -133,7 +133,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.asymmetricSilenceWarningSeconds, 120)
     }
 
-    func testNumSpeakersClampedToMinimumZero() {
+    func testNumSpeakersAcceptsTheMinimumZero() {
         settings.numSpeakers = 0
         XCTAssertEqual(settings.numSpeakers, 0)
     }
@@ -415,9 +415,12 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(settings.includePreReleases)
     }
 
+    /// Read back through a fresh instance: the default is `true`, so only a
+    /// reload can tell a persisted `false` from a key that was never written.
     func testCheckForUpdatesPersistence() {
         settings.checkForUpdates = false
-        XCTAssertFalse(defaults.bool(forKey: "checkForUpdates"))
+        let reloaded = AppSettings(defaults: defaults, apiKeyAccount: apiKeyAccount)
+        XCTAssertFalse(reloaded.checkForUpdates)
     }
 
     func testIncludePreReleasesPersistence() {
