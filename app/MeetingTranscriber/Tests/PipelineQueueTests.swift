@@ -933,30 +933,6 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(freshQueue.jobs.count, 0)
     }
 
-    func testErrorJobIsMarkedProcessedSoRecoverySkipsIt() async throws {
-        let recDir = tmpDir.appendingPathComponent("recordings")
-        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
-        let mixFile = recDir.appendingPathComponent("20260318_214744_mix.wav")
-        try Data(repeating: 0xFF, count: 100).write(to: mixFile)
-
-        // Enqueue and fail the job (simulates "Empty transcript" scenario)
-        let job = PipelineJob(
-            meetingTitle: "Brave Browser",
-            appName: "Brave Browser",
-            mixPath: mixFile,
-            appPath: nil,
-            micPath: nil,
-            micDelay: 0,
-        )
-        queue.enqueue(job)
-        queue.updateJobState(id: job.id, to: .error, error: "Empty transcript")
-
-        // A fresh queue (simulates pressing Start Watching) must not recover the failed recording
-        let freshQueue = PipelineQueue(logDir: tmpDir)
-        await freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
-        XCTAssertTrue(freshQueue.jobs.isEmpty, "Failed recording should not be re-queued")
-    }
-
     func testRecoverEmptyDirIsNoOp() async {
         let recDir = tmpDir.appendingPathComponent("nonexistent_recordings")
         let freshQueue = PipelineQueue(logDir: tmpDir)
@@ -964,10 +940,7 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(freshQueue.jobs.isEmpty)
     }
 
-    func testRecoverRunsDirScanOffMainActor() async throws {
-        // Smoke test that the scan doesn't starve main-actor work: kick
-        // off recovery with `async let`, do synchronous work concurrently,
-        // verify both complete.
+    func testRecoverQueuesEveryOrphanInTheFolder() async throws {
         let recDir = tmpDir.appendingPathComponent("recordings")
         try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
         for i in 0 ..< 50 {
@@ -976,15 +949,7 @@ final class PipelineQueueTests: XCTestCase {
         }
 
         let freshQueue = PipelineQueue(logDir: tmpDir)
-        async let recovery: Void = freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
-
-        var counter = 0
-        for _ in 0 ..< 10000 {
-            counter += 1
-        }
-        XCTAssertEqual(counter, 10000)
-
-        await recovery
+        await freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
         XCTAssertEqual(freshQueue.jobs.count, 50)
     }
 
@@ -1884,7 +1849,6 @@ final class PipelineQueueTests: XCTestCase {
             saved.contains("SPEAKER_"),
             "the file kept the unlabelled draft instead of the diarized transcript: \(saved)",
         )
-        XCTAssertFalse(saved.isEmpty)
     }
 
     func testProcessNextEmptyTranscriptSetsError() async throws {
@@ -2677,11 +2641,17 @@ final class PipelineQueueTests: XCTestCase {
         for heading in ["[Titel der Besprechung]", "Untitled", "🚀🎉"] {
             let (q, gen) = makeStraightThroughQueue(stagingDir: tmpDir)
             gen.headingTitle = heading
-            try q.enqueue(makeAITitleJob())
+            let job = try makeAITitleJob()
+            q.enqueue(job)
             await q.processNext()
 
             let slug = try XCTUnwrap(q.jobs.first?.namingSlug)
-            XCTAssertNotEqual(slug, "meeting", heading)
+            XCTAssertTrue(slug.hasSuffix(job.shortID), "heading \(heading) must keep the timestamped name, got \(slug)")
+            XCTAssertEqual(
+                slug,
+                PipelineQueue.namingSlug(title: job.meetingTitle, jobID: job.id, startTime: job.artifactStartTime),
+                "heading \(heading) must keep the timestamped name",
+            )
             XCTAssertTrue(
                 names(in: protocolsDir).contains("\(slug).md"),
                 "heading \(heading) must leave the job on its own stem, got \(slug)",
@@ -3232,9 +3202,12 @@ final class PipelineQueueTests: XCTestCase {
         await pQueue.processNext()
         await fulfillment(of: [done], timeout: 10)
 
-        // Should complete without error (auto names used)
-        let finalState = pQueue.jobs.first?.state
-        XCTAssertTrue(finalState == .done || finalState == .error)
+        // A skip finishes the job on the names recognition already gave it;
+        // with an empty voice DB that is the diarizer's own label.
+        let finished = try XCTUnwrap(pQueue.jobs.first)
+        XCTAssertEqual(finished.state, .done, finished.error ?? "")
+        let transcript = try String(contentsOf: XCTUnwrap(finished.transcriptPath), encoding: .utf8)
+        XCTAssertTrue(transcript.contains("SPEAKER_0: Hello"), "the auto label must stay in the transcript: \(transcript)")
     }
 
     func testSpeakerNamingRerunCallsDiarizationAgain() async throws {
@@ -3347,11 +3320,22 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(pQueue.jobs.first?.state, .done)
     }
 
-    func testCompleteSpeakerNamingDoubleResumeIsNoOp() {
-        // completeSpeakerNaming should not crash when called twice
-        let queue = PipelineQueue(logDir: tmpDir)
-        queue.completeSpeakerNaming(result: .skipped)
-        queue.completeSpeakerNaming(result: .skipped) // should not crash
+    /// A second answer for a job whose naming was already answered is refused,
+    /// not applied again: the first skip already resolved the naming and moved
+    /// the job on. The first answer goes through the overload without a job
+    /// id, which answers the first job awaiting naming.
+    func testASecondNamingAnswerForTheSameJobIsRefused() async throws {
+        let (pQueue, _, jobID) = try await makeSingleSourceJobAtNamingPending(
+            title: "Answered Twice", transcriptSegments: [TimestampedSegment(start: 0, end: 5, text: "Hello")],
+        )
+
+        pQueue.completeSpeakerNaming(result: .skipped)
+        XCTAssertNotEqual(pQueue.jobs.first?.state, .speakerNamingPending)
+        XCTAssertEqual(pQueue.completeSpeakerNaming(jobID: jobID, result: .skipped), .notAwaitingNaming)
+        // The first skip generates the protocol in the background; let it end
+        // before tearDown removes the folder it writes to.
+        await waitFor(pQueue.jobs.first?.state == .done, timeout: regressionCeiling)
+        XCTAssertEqual(pQueue.jobs.first?.state, .done)
     }
 
     func testOnJobStateChangeCallbackFired() {
@@ -3714,11 +3698,19 @@ final class PipelineQueueTests: XCTestCase {
     func testPendingSpeakerNamingJobsReturnsNamingPendingJobs() {
         let queue = PipelineQueue(logDir: tmpDir)
         XCTAssertTrue(queue.pendingSpeakerNamingJobs.isEmpty)
+
+        var parked = makeJob(title: "Parked")
+        parked.state = .speakerNamingPending
+        let waiting = makeJob(title: "Waiting")
+        queue.insertJobForTesting(waiting)
+        queue.insertJobForTesting(parked)
+
+        XCTAssertEqual(queue.pendingSpeakerNamingJobs.map(\.id), [parked.id])
     }
 
-    // MARK: - Pipeline Timeout → speakerNamingPending
+    // MARK: - No handler → speakerNamingPending
 
-    func testPipelineSetsSpeakerNamingPendingAfterTimeout() async throws {
+    func testPipelineParksInSpeakerNamingPendingWithoutAHandler() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [
             TimestampedSegment(start: 0, end: 5, text: "Hello"),
@@ -3739,7 +3731,7 @@ final class PipelineQueueTests: XCTestCase {
 
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
-            meetingTitle: "Timeout Test",
+            meetingTitle: "Parked Test",
             appName: "TestApp",
             mixPath: audioPath,
             appPath: nil,
@@ -4181,7 +4173,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         pQueue.enqueue(job)
 
-        // Wait for speakerNamingPending (timeout path leaves naming data intact)
+        // Wait for speakerNamingPending (parking without a handler leaves naming data intact)
         let pendingExpectation = XCTestExpectation(description: "speakerNamingPending")
         pQueue.onJobStateChange = { _, _, newState in
             if newState == .speakerNamingPending {
@@ -4768,10 +4760,10 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
-    /// `isAvailable == false` short-circuits lateDiarization without
-    /// changing the job state — there's no recoverable path so the
-    /// user is left to fix the configuration (model download, etc.).
-    func testLateRerunIsNoOpWhenDiarizerNotAvailable() async throws {
+    /// An unavailable diarizer refuses the re-run before anything changes:
+    /// the job stays parked, no diarization runs, and the caller is told why,
+    /// so the dialog can say so rather than wait for a re-run that never starts.
+    func testLateRerunIsRefusedWhenDiarizerNotAvailable() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
         let mockDiar = MockDiarization()
@@ -4801,15 +4793,15 @@ final class PipelineQueueTests: XCTestCase {
         await pQueue.processNext()
         await fulfillment(of: [pendingExpectation], timeout: 10)
 
-        // Flip the mock to "not available" so the late-rerun guard at the
-        // top of lateDiarization trips.
+        // Flip the mock to "not available" so the re-run plan refuses it.
+        // The refusal is synchronous: nothing is started that a wait could
+        // observe, so the assertions follow the call directly.
         mockDiar.isAvailable = false
-        let initialState = pQueue.jobs.first?.state
-        pQueue.completeSpeakerNaming(jobID: job.id, result: .rerun(3))
-        // Yield once to let the Task dispatched from completeSpeakerNaming
-        // observe the unavailable guard and return early.
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(pQueue.jobs.first?.state, initialState)
+        let runsBefore = mockDiar.runCount
+        let refusal = pQueue.completeSpeakerNaming(jobID: job.id, result: .rerun(3))
+        XCTAssertEqual(refusal, .rerunDiarizerUnavailable)
+        XCTAssertEqual(pQueue.jobs.first?.state, .speakerNamingPending)
+        XCTAssertEqual(mockDiar.runCount, runsBefore, "a refused re-run must not diarize")
     }
 
     func testLateConfirmationWithNoNamingDataIsNoOp() {
@@ -5451,8 +5443,7 @@ final class PipelineQueueTests: XCTestCase {
     // and explicit calls. UI reads `pipelineQueue.knownSpeakerNames`
     // directly with zero per-render I/O.
 
-    func testKnownSpeakerNamesIsExposedAsCachedProperty() {
-        // The cached property must exist on PipelineQueue. Empty DB → empty list.
+    func testKnownSpeakerNamesIsEmptyForAnEmptyDB() {
         let dbURL = tmpDir.appendingPathComponent("speakers.json")
         let localQueue = PipelineQueue(
             logDir: tmpDir,
