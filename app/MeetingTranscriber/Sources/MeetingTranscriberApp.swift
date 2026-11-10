@@ -26,10 +26,25 @@ private struct AnimatedMenuBarIcon: View {
 
     @State private var animationFrame = 0
     // `.default` (not `.common`) so the timer never fires inside the status-bar
-    // menu's tracking loop — see MenuBarIcon.animationRunLoopMode for why.
-    private let iconTimer = Timer.publish(
-        every: 0.4, on: .main, in: MenuBarIcon.animationRunLoopMode,
-    ).autoconnect()
+    // menu's tracking loop — see MenuBarIcon.animationRunLoopMode for why. Built
+    // once per view value, as the plain timer was, and empty for a static
+    // badge so an idle icon schedules no timer at all.
+    private let iconTimer: AnyPublisher<Date, Never>
+
+    init(
+        badge: BadgeKind,
+        permissionOverlay: Bool,
+        recordOnlyOverlay: Bool,
+        micSilentOverlay: Bool,
+        appSilentOverlay: Bool,
+    ) {
+        self.badge = badge
+        self.permissionOverlay = permissionOverlay
+        self.recordOnlyOverlay = recordOnlyOverlay
+        self.micSilentOverlay = micSilentOverlay
+        self.appSilentOverlay = appSilentOverlay
+        iconTimer = MenuBarIcon.animationTicks(for: badge)
+    }
 
     var body: some View {
         Image(nsImage: MenuBarIcon.image(

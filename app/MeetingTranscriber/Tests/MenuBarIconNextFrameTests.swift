@@ -1,3 +1,4 @@
+import Combine
 @testable import MeetingTranscriber
 import XCTest
 
@@ -25,6 +26,32 @@ final class MenuBarIconNextFrameTests: XCTestCase {
     func testAnimatedBadgeWrapsAtFrameCount() {
         let last = MenuBarIcon.frameCount - 1
         XCTAssertEqual(MenuBarIcon.nextFrame(last, badge: .recording), 0)
+    }
+
+    /// A static badge must not wake the main run loop: the menu-bar icon sits
+    /// on one for most of the app's life, and a tick that changes nothing
+    /// still costs a wake-up every 0.4 s.
+    @MainActor
+    func testStaticBadgesSubscribeToNoTimer() {
+        let ticked = expectation(description: "a static badge ticked")
+        ticked.isInverted = true
+        ticked.assertForOverFulfill = false
+        let subscriptions = BadgeKind.allCases.filter { !$0.isAnimated }.map { badge in
+            MenuBarIcon.animationTicks(for: badge).sink { _ in ticked.fulfill() }
+        }
+        wait(for: [ticked], timeout: 0.6)
+        subscriptions.forEach { $0.cancel() }
+    }
+
+    @MainActor
+    func testAnimatedBadgesTick() {
+        for badge in BadgeKind.allCases where badge.isAnimated {
+            let ticked = expectation(description: "\(badge) ticked")
+            ticked.assertForOverFulfill = false
+            let subscription = MenuBarIcon.animationTicks(for: badge).sink { _ in ticked.fulfill() }
+            wait(for: [ticked], timeout: 2)
+            subscription.cancel()
+        }
     }
 
     // Regression guard: the animation timer must stay `.default`. `.common`
