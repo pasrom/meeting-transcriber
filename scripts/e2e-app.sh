@@ -478,6 +478,46 @@ if [ "$REDEPLOY_ONLY" = true ] && [ "$MIC_DEVICE_CHANGE" = true ]; then
     echo "Error: --redeploy-only restores the canonical bundle; incompatible with --mic-device-change" >&2
     exit 2
 fi
+# One lane per run, for every pair the per-lane checks above do not name: the
+# dispatch chain runs only the lane it tests first, so a second one would pass
+# without running. Not lanes of their own: --two-meetings next to --record-only
+# (two record-only meetings), --record-only next to --reimport-recorded (which
+# implies it) and --keep-recordings (a modifier).
+_LANES=""
+_add_lane() { [ "$1" != true ] || _LANES="$_LANES $2"; }
+_add_lane "$REIMPORT_LATEST" --reimport-latest
+_add_lane "$REIMPORT_RECORDED" --reimport-recorded
+# --reimport-recorded implies --record-only.
+if [ "$REIMPORT_RECORDED" = false ]; then
+    _add_lane "$RECORD_ONLY" --record-only
+fi
+# --two-meetings on its own is a lane; next to --record-only it is a modifier.
+if [ "$RECORD_ONLY" = false ] || [ "$REIMPORT_RECORDED" = true ]; then
+    _add_lane "$TWO_MEETINGS" --two-meetings
+fi
+_add_lane "$MIC_ONLY" --mic-only
+_add_lane "$MIC_DEVICE_CHANGE" --mic-device-change
+_add_lane "$CRASH_RECOVERY" --crash-recovery
+_add_lane "$REDEPLOY_ONLY" --redeploy-only
+_add_lane "$NAMING_CONFIRM" --naming-confirm
+_add_lane "$NAMING_ESCAPE" --naming-escape
+_add_lane "$NAMING_SWITCH" --naming-switch
+_add_lane "$TITLE_SOURCE" --title-source
+_add_lane "$ECHO_BLEED" --echo-bleed
+_add_lane "$ECHO_CANCEL" --echo-cancel
+_add_lane "$QUIT_FLUSH" --quit-flush
+if [ -n "$MIC_STALL" ]; then
+    _add_lane true "--mic-stall/--mic-stall-late"
+fi
+_add_lane "$UPGRADE" --upgrade
+_add_lane "$PROTOCOL_LANE" --protocol
+_add_lane "$PROTOCOL_REPAIR" --protocol-repair
+case "$_LANES" in
+    *" "*" "*)
+        echo "Error: one lane per run; got$_LANES" >&2
+        exit 2
+        ;;
+esac
 # Export before the build step below so run_app.sh adds -DE2E_FAULT_INJECTION.
 # --mic-stall may run --no-build against a fault build already deployed; the
 # preflight checks that the deployed bundle really is one.
