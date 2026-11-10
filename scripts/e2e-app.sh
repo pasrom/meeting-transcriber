@@ -88,6 +88,10 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app           Leave the dev app running on exit. Default: quit it.
   --two-meetings       Run two meetings back-to-back (cooldown + state-reset coverage).
+                       Also the title-source check: meeting 1 must carry the
+                       simulator's window title and app name, meeting 2 plays
+                       with a window title equal to the app name and must carry
+                       the "MeetingSimulator Call" placeholder (see --title-source).
   --mic-only           Record the microphone with no app audio (issue #633) via
                        POST /v1/record, and assert the sidecar carries a mic track
                        and NO app track. Reroutes the default OUTPUT to BlackHole
@@ -180,7 +184,9 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        the detected meeting title is the clean "MeetingSimulator Call"
                        placeholder — not the raw IOKit assertion name. Fails against
                        the pre-fix detector, so it proves the deployed
-                       detection → title-selection chain end-to-end.
+                       detection → title-selection chain end-to-end. CI runs this
+                       check as meeting 2 of --two-meetings; the flag stays for
+                       running it on its own by hand.
   --echo-bleed         Assert the echo-bleed verdict end to end. Synthesises two
                        dual-source pairs from the shipped fixtures — one whose
                        microphone track carries the app track back from the
@@ -2451,13 +2457,19 @@ _await_recording_started() {
     log "$label: recording started"
 }
 
+# run_one_meeting <label> [<window title>] — the window title is handed to the
+# simulator's --title; without one it shows its default. The finished job goes
+# to LAST_MEETING_JOB for the title checks below.
+LAST_MEETING_JOB=""
 run_one_meeting() {
-    local label="$1"
+    local label="$1" window_title="${2:-}"
+    local -a sim_args=("$SIMULATOR_FIXTURE")
+    [ -z "$window_title" ] || sim_args+=(--title "$window_title")
     # Reset between meetings so --two-meetings captures each run's first
     # observed naming-dialog speaker count, not just meeting 1's stale value.
     OBSERVED_NAMING_SPEAKERS=""
-    log "$label: starting meeting-simulator → $SIMULATOR_FIXTURE"
-    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
+    log "$label: starting meeting-simulator → $SIMULATOR_FIXTURE${window_title:+ (window title '$window_title')}"
+    "$SIMULATOR_BIN" "${sim_args[@]}" >/tmp/e2e-app-sim.log 2>&1 &
     SIM_PID=$!
 
     _await_recording_started "$label"
@@ -2468,6 +2480,7 @@ run_one_meeting() {
     local final_snapshot
     final_snapshot="$STATE_BODY"
     echo "$final_snapshot" | jq '.lastJob'
+    LAST_MEETING_JOB="$(jq -c '.lastJob' <<<"$final_snapshot")"
 
     [ "$lj_state" = "done" ] || fail "$label: lastJob.state == \"$lj_state\", expected \"done\". Error: $(jq -r '.lastJob.error // "<none>"' <<<"$final_snapshot")"
 
@@ -3727,28 +3740,46 @@ run_naming_switch() {
     log "$label: PASS"
 }
 
-# Title-source lane (issue #501): drive the app's window-title lookup with a
-# title that is NOT usable — the window title equals the app name, which the
-# lookup skips — so PowerAssertionDetector finds no meeting-window title and
-# must fall back to the clean "<app> Call" placeholder. Pre-fix the detector
-# leaked the raw IOKit assertion name ("Simulator Meeting Call in progress")
-# instead, so this assertion fails against the old code (non-vacuous). Proves
-# the real deployed detection → title-selection → job-title chain, which the
-# unit tests can only exercise through injected seams.
+# Title source (issue #501). Meeting 2 of --two-meetings, and --title-source on
+# its own by hand, drive the app's window-title lookup with a title that is NOT
+# usable: the window title equals the app name, which the lookup skips, so
+# PowerAssertionDetector finds no meeting-window title and must fall back to
+# the clean "<app> Call" placeholder. Pre-fix the detector leaked the raw IOKit
+# assertion name ("Simulator Meeting Call in progress") instead, so that
+# assertion fails against the old code (non-vacuous). Meeting 1 asserts the
+# other half, which no lane checked before: a usable window title is the one
+# the job carries. Together they prove the real deployed detection →
+# title-selection → job-title chain, which the unit tests can only exercise
+# through injected seams.
+#
+# The simulator's default --title, its app name, and the title the app makes
+# from that name when no window title is usable.
+_SIM_WINDOW_TITLE="Simulator Meeting | MeetingSimulator"
+_SIM_APP_NAME="MeetingSimulator"
+_SIM_PLACEHOLDER_TITLE="$_SIM_APP_NAME Call"
+
+# _assert_meeting_identity <label> <expected title> <why, when the title differs>
+# — the job run_one_meeting just finished carries this title and the
+# simulator's app name.
+_assert_meeting_identity() {
+    local label="$1" want="$2" why="$3" title app
+    title="$(jq -r '.meetingTitle // empty' <<<"$LAST_MEETING_JOB")"
+    app="$(jq -r '.appName // empty' <<<"$LAST_MEETING_JOB")"
+    log "$label: lastJob.meetingTitle = \"$title\", appName = \"$app\""
+    [ "$title" = "$want" ] || fail "$label: meetingTitle == \"$title\", expected \"$want\". $why"
+    [ "$app" = "$_SIM_APP_NAME" ] \
+        || fail "$label: appName == \"$app\", expected \"$_SIM_APP_NAME\": the job was not attributed to the simulator's meeting pattern"
+    log "$label: meeting title and app name as expected ✅"
+}
+
+# Why a title differs, for each of the two cases.
+_TITLE_FROM_WINDOW_WHY="The simulator's window shows a meeting title, so that is what the job should carry. The placeholder '$_SIM_PLACEHOLDER_TITLE' here means the window-title lookup found nothing: most likely the dev app lacks the Screen & System Audio Recording grant, without which macOS hides other apps' window titles (see the e2e-architecture skill, runner setup step 4); otherwise the lookup or its matcher regressed."
+_TITLE_PLACEHOLDER_WHY="The window title equalled the app name, so the title lookup should return nil and the detector substitute the placeholder; a leaked assertion name or window title means the title-source fix regressed."
+
 run_title_source() {
     local label="[title-source]"
-    log "$label: starting meeting-simulator --title MeetingSimulator (no usable window title) → $SIMULATOR_FIXTURE"
-    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" --title "MeetingSimulator" >/tmp/e2e-app-sim.log 2>&1 &
-    SIM_PID=$!
-
-    _poll_for_new_lastjob_terminal "$label" ignore-recovered
-    [ "$POLL_LJ_STATE" = "done" ] || fail "$label: lastJob.state == \"$POLL_LJ_STATE\", expected \"done\""
-
-    local meeting_title
-    meeting_title="$(jq -r '.lastJob.meetingTitle // empty' <<<"$STATE_BODY")"
-    log "$label: lastJob.meetingTitle = \"$meeting_title\""
-    [ "$meeting_title" = "MeetingSimulator Call" ] \
-        || fail "$label: meetingTitle == \"$meeting_title\", expected \"MeetingSimulator Call\". The window title equalled the app name, so the title lookup should return nil and the detector substitute the placeholder; a leaked assertion name or window title means the title-source fix regressed."
+    run_one_meeting "$label" "$_SIM_APP_NAME"
+    _assert_meeting_identity "$label" "$_SIM_PLACEHOLDER_TITLE" "$_TITLE_PLACEHOLDER_WHY"
     log "$label: PASS — no usable window title fell back to the clean placeholder ✅"
 }
 
@@ -5365,10 +5396,14 @@ elif [ "$UPGRADE" = true ]; then
 elif [ "$PROTOCOL_LANE" = true ]; then
     run_protocol_lane
 elif [ "$TWO_MEETINGS" = true ]; then
+    # Meeting 1 with a usable window title, meeting 2 without one: the two
+    # halves of the title source (see run_title_source).
     run_one_meeting "[1/2]"
+    _assert_meeting_identity "[1/2]" "$_SIM_WINDOW_TITLE" "$_TITLE_FROM_WINDOW_WHY"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
     sleep "$INTER_MEETING_COOLDOWN_S"
-    run_one_meeting "[2/2]"
+    run_one_meeting "[2/2]" "$_SIM_APP_NAME"
+    _assert_meeting_identity "[2/2]" "$_SIM_PLACEHOLDER_TITLE" "$_TITLE_PLACEHOLDER_WHY"
 else
     run_one_meeting "meeting"
 fi

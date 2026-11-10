@@ -153,6 +153,13 @@ jobs:
         # vs ~1 min for single-meeting; signal latency is fine on nightly +
         # post-merge push triggers. Local dev runs (`bash scripts/e2e-app.sh`)
         # default to single for fast iteration.
+        # It also carries the title-source check (issue #501), which used to
+        # be a lane of its own: meeting 1 asserts the job carries the
+        # simulator's window title, meeting 2 plays with a window title equal
+        # to the app name and asserts the clean "MeetingSimulator Call"
+        # placeholder, not the raw IOKit assertion name. That saves one launch,
+        # one playback and one transcribe cycle per run; a title regression
+        # now turns this step red. `--title-source` still runs it on its own.
         run: bash scripts/e2e-app.sh --two-meetings
 
       # Record-only lane: same recorder path, but WatchLoop short-circuits
@@ -420,18 +427,6 @@ jobs:
         # leaves room for the two 240 s parking polls without hiding a hang.
         timeout-minutes: 12
         run: bash scripts/e2e-app.sh --no-build --naming-switch
-
-      # Title-source lane (issue #501): run the simulator with a window title
-      # equal to the app name (no usable meeting-window title), then assert the
-      # detected meeting title is the clean "MeetingSimulator Call" placeholder,
-      # not the raw IOKit assertion name. Fails against the pre-fix detector,
-      # so it guards the real deployed detection → title-selection chain.
-      # `--no-build` reuses the bundle the earlier lanes built + signed.
-      - name: Run title-source placeholder E2E (issue #501)
-        env:
-          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
-        timeout-minutes: 8
-        run: bash scripts/e2e-app.sh --no-build --title-source
 
       # Echo-bleed lane (issue #581): a dual-source recording made on
       # loudspeakers carries the remote voices on the microphone track too, so
