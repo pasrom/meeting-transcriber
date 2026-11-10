@@ -161,26 +161,19 @@ case "$SAMPLE_EVERY_MIN" in ''|*[!0-9]*) fail "--sample-every must be a positive
 [ $((SOAK_MINUTES / SAMPLE_EVERY_MIN)) -ge 2 ] \
     || fail "--minutes/--sample-every must yield at least 2 samples (got $((SOAK_MINUTES / SAMPLE_EVERY_MIN)))"
 
-# Address the standard-domain plist directly, and write through
-# `write_dev_default`. `defaults <bundle-id>` is redirected into the app's
-# container once containermanagerd has registered one, while the dev .app is not
-# sandboxed and
-# resolves the standard domain, so the two disagree and a lane can configure
-# nothing at all without any error. See write_dev_default in
-# scripts/lib/e2e-helpers.sh.
-_STANDARD_PLIST="$(dev_standard_plist "$BUNDLE_ID")"
-SAVED_DEBUG_RPC=$(snapshot_default "$_STANDARD_PLIST" debugRPCEnabled)
-SAVED_AUTO_WATCH=$(snapshot_default "$_STANDARD_PLIST" autoWatch)
-SAVED_RECORD_ONLY=$(snapshot_default "$_STANDARD_PLIST" recordOnly)
+# Snapshot the settings this lane changes, in both plists write_dev_default
+# writes, so on_exit puts each back to its own earlier value (see
+# dev_defaults_record in scripts/lib/e2e-helpers.sh).
+DEFAULTS_RECORD="$(mktemp "${TMPDIR:-/tmp}/e2e-soak-defaults.XXXXXX")"
+dev_defaults_record "$DEFAULTS_RECORD" "$BUNDLE_ID" debugRPCEnabled autoWatch recordOnly \
+    || fail "could not record the dev bundle's settings; nothing was changed"
 
 RUN_START_MARKER="$(mktemp "${TMPDIR:-/tmp}/e2e-soak-start.XXXXXX")"
 SIM_PID=""
 
 on_exit() {
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
-    restore_bool_default "$_STANDARD_PLIST" debugRPCEnabled "$SAVED_DEBUG_RPC"
-    restore_bool_default "$_STANDARD_PLIST" autoWatch       "$SAVED_AUTO_WATCH"
-    restore_bool_default "$_STANDARD_PLIST" recordOnly      "$SAVED_RECORD_ONLY"
+    defaults_restore_record "$DEFAULTS_RECORD" || true
     if [ "$APP_AFTER" = quit ]; then
         quit_running_app || true
         sweep_run_artifacts "$REC_DIR" "$RUN_START_MARKER"

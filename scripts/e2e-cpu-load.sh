@@ -150,19 +150,13 @@ if ! system_profiler SPAudioDataType 2>/dev/null | grep -A4 "Default Input" | gr
     fail "no default audio input device — install BlackHole 2ch and set it as the default Input"
 fi
 
-# Address the standard-domain plist directly, and write through
-# `write_dev_default`. `defaults <bundle-id>` is redirected into the app's
-# container once containermanagerd has registered one, while the dev .app is not
-# sandboxed and
-# resolves the standard domain, so the two disagree and a lane can configure
-# nothing at all without any error. See write_dev_default in
-# scripts/lib/e2e-helpers.sh.
-_STANDARD_PLIST="$(dev_standard_plist "$BUNDLE_ID")"
-SAVED_LIVE_TRANS=$(snapshot_default "$_STANDARD_PLIST" liveTranscriptionEnabled)
-SAVED_TRANS_ENGINE=$(snapshot_default "$_STANDARD_PLIST" transcriptionEngine)
-SAVED_DEBUG_RPC=$(snapshot_default "$_STANDARD_PLIST" debugRPCEnabled)
-SAVED_AUTO_WATCH=$(snapshot_default "$_STANDARD_PLIST" autoWatch)
-SAVED_RECORD_ONLY=$(snapshot_default "$_STANDARD_PLIST" recordOnly)
+# Snapshot the settings this lane changes, in both plists write_dev_default
+# writes, so on_exit puts each back to its own earlier value (see
+# dev_defaults_record in scripts/lib/e2e-helpers.sh).
+DEFAULTS_RECORD="$(mktemp "${TMPDIR:-/tmp}/e2e-cpu-load-defaults.XXXXXX")"
+dev_defaults_record "$DEFAULTS_RECORD" "$BUNDLE_ID" \
+    liveTranscriptionEnabled transcriptionEngine debugRPCEnabled autoWatch recordOnly \
+    || fail "could not record the dev bundle's settings; nothing was changed"
 
 quit_running_app
 
@@ -239,15 +233,7 @@ RUN_START_MARKER="$(mktemp "${TMPDIR:-/tmp}/e2e-cpu-load-start.XXXXXX")"
 SIM_PID=""
 on_exit() {
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
-    restore_bool_default "$_STANDARD_PLIST" liveTranscriptionEnabled "$SAVED_LIVE_TRANS"
-    if [ -n "$SAVED_TRANS_ENGINE" ]; then
-        write_dev_default "$BUNDLE_ID" transcriptionEngine "$SAVED_TRANS_ENGINE" string
-    else
-        delete_dev_default "$BUNDLE_ID" transcriptionEngine
-    fi
-    restore_bool_default "$_STANDARD_PLIST" debugRPCEnabled "$SAVED_DEBUG_RPC"
-    restore_bool_default "$_STANDARD_PLIST" autoWatch       "$SAVED_AUTO_WATCH"
-    restore_bool_default "$_STANDARD_PLIST" recordOnly      "$SAVED_RECORD_ONLY"
+    defaults_restore_record "$DEFAULTS_RECORD" || true
     if [ "$APP_AFTER" = quit ]; then
         # `|| true`: under set -e a wedged app (quit ladder exhausted) must not
         # abort the trap before the artifact sweep below runs.
