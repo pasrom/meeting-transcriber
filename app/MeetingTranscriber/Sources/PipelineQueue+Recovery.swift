@@ -523,7 +523,7 @@ extension PipelineQueue {
     /// slow filesystem (e.g. iCloud-backed recordings dir). Mutations to
     /// `jobs` and the snapshot still happen on the main actor.
     func recoverOrphanedRecordings(
-        recordingsDir: URL = AppPaths.recordingsDir,
+        recordingsDir: URL,
         maxAge: TimeInterval = 86400,
     ) async {
         // One-time migration: seed processed list with existing recordings
