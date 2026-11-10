@@ -4,8 +4,10 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "ParticipantReader")
 
-/// Reads participant names from Teams meeting roster via Accessibility API
-/// and writes them to a JSON file for use during diarization.
+/// Reads participant names from the Teams meeting roster via the
+/// Accessibility API, once at recording start. The names travel with the
+/// recording (pipeline job or record-only sidecar) and are offered as
+/// suggestions when naming speakers.
 enum ParticipantReader {
     /// Known non-name strings in the Teams UI that should be filtered out.
     private static let skipPatterns: Set<String> = [
@@ -19,15 +21,27 @@ enum ParticipantReader {
 
     /// Read participant names from Teams meeting roster via AX API.
     ///
+    /// Returns nil if roster not found, and without walking the tree at all
+    /// when the app is not trusted for Accessibility: every AX call would
+    /// fail and log a warning of its own. `isTrusted` and `makeRoot` are
+    /// seams for tests, so they do not depend on this machine's grant.
+    static func readParticipants(
+        pid: pid_t,
+        isTrusted: () -> Bool = { AXIsProcessTrusted() },
+        makeRoot: (pid_t) -> AXUIElement = AXUIElementCreateApplication,
+    ) -> [String]? { // swiftlint:disable:this discouraged_optional_collection
+        guard isTrusted() else {
+            logger.info("Accessibility not granted, skipping the Teams participant roster")
+            return nil
+        }
+        return readRoster(makeRoot(pid))
+    }
+
     /// Tries 3 strategies since Teams' AX structure varies between versions:
     /// 1. Look for known panel identifiers (roster-list, people-pane, etc.)
     /// 2. Find AXList/AXTable containers with multiple text rows
     /// 3. Parse window title for "Name1, Name2 | Microsoft Teams" pattern
-    ///
-    /// Returns nil if roster not found.
-    static func readParticipants(pid: pid_t) -> [String]? { // swiftlint:disable:this discouraged_optional_collection
-        let appElement = AXUIElementCreateApplication(pid)
-
+    private static func readRoster(_ appElement: AXUIElement) -> [String]? { // swiftlint:disable:this discouraged_optional_collection
         // Strategy 1: Known panel identifiers
         for panelID in ["roster-list", "people-pane", "participant-list", "roster-container"] {
             if let panel = findElementByIdentifier(appElement, identifier: panelID) {
