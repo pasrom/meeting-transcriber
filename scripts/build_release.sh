@@ -242,57 +242,52 @@ else
 fi
 DMG_PATH="$BUILD_DIR/$DMG_NAME"
 
-if [ -z "${HOMEBREW_TEMP:-}" ]; then
+echo ""
+echo "Step 4: Creating DMG..."
+
+rm -f "$DMG_PATH"
+
+DMG_STAGING="$BUILD_DIR/dmg-staging"
+rm -rf "$DMG_STAGING"
+mkdir -p "$DMG_STAGING"
+mv "$APP_BUNDLE" "$DMG_STAGING/MeetingTranscriber.app"
+ln -s /Applications "$DMG_STAGING/Applications"
+
+hdiutil create -volname "MeetingTranscriber" \
+    -srcfolder "$DMG_STAGING" \
+    -ov -format UDZO \
+    "$DMG_PATH"
+
+mv "$DMG_STAGING/MeetingTranscriber.app" "$APP_BUNDLE"
+rm -rf "$DMG_STAGING"
+
+# ── Step 5: Notarize (optional) ──────────────────────────────────────────
+
+if [ "$NOTARIZE" = true ]; then
     echo ""
-    echo "Step 4: Creating DMG..."
+    echo "Step 5: Notarizing DMG..."
 
-    rm -f "$DMG_PATH"
-
-    DMG_STAGING="$BUILD_DIR/dmg-staging"
-    rm -rf "$DMG_STAGING"
-    mkdir -p "$DMG_STAGING"
-    mv "$APP_BUNDLE" "$DMG_STAGING/MeetingTranscriber.app"
-    ln -s /Applications "$DMG_STAGING/Applications"
-
-    hdiutil create -volname "MeetingTranscriber" \
-        -srcfolder "$DMG_STAGING" \
-        -ov -format UDZO \
-        "$DMG_PATH"
-
-    mv "$DMG_STAGING/MeetingTranscriber.app" "$APP_BUNDLE"
-    rm -rf "$DMG_STAGING"
-
-    # ── Step 5: Notarize (optional) ──────────────────────────────────────────
-
-    if [ "$NOTARIZE" = true ]; then
-        echo ""
-        echo "Step 5: Notarizing DMG..."
-
-        if [ -z "${APPLE_ID:-}" ] || [ -z "${TEAM_ID:-}" ] || [ -z "${APP_PASSWORD:-}" ]; then
-            echo "  ERROR: APPLE_ID, TEAM_ID, and APP_PASSWORD must be set for notarization."
-            exit 1
-        fi
-
-        WAIT_FLAG=""
-        [ "$STAPLE" = true ] && WAIT_FLAG="--wait"
-
-        xcrun notarytool submit "$DMG_PATH" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$TEAM_ID" \
-            --password "$APP_PASSWORD" \
-            $WAIT_FLAG
-
-        if [ "$STAPLE" = true ]; then
-            echo "  Stapling notarization ticket to DMG..."
-            xcrun stapler staple "$DMG_PATH"
-            xcrun stapler validate "$DMG_PATH"
-        else
-            echo "  DMG submitted for notarization (Gatekeeper will verify online)"
-        fi
+    if [ -z "${APPLE_ID:-}" ] || [ -z "${TEAM_ID:-}" ] || [ -z "${APP_PASSWORD:-}" ]; then
+        echo "  ERROR: APPLE_ID, TEAM_ID, and APP_PASSWORD must be set for notarization."
+        exit 1
     fi
-else
-    echo ""
-    echo "Step 4: Skipping DMG (Homebrew mode)"
+
+    WAIT_FLAG=""
+    [ "$STAPLE" = true ] && WAIT_FLAG="--wait"
+
+    xcrun notarytool submit "$DMG_PATH" \
+        --apple-id "$APPLE_ID" \
+        --team-id "$TEAM_ID" \
+        --password "$APP_PASSWORD" \
+        $WAIT_FLAG
+
+    if [ "$STAPLE" = true ]; then
+        echo "  Stapling notarization ticket to DMG..."
+        xcrun stapler staple "$DMG_PATH"
+        xcrun stapler validate "$DMG_PATH"
+    else
+        echo "  DMG submitted for notarization (Gatekeeper will verify online)"
+    fi
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
