@@ -53,8 +53,10 @@ final class KeychainHelperTests: XCTestCase {
     // MARK: - Delete idempotency
 
     func testDeleteNonExistentKeyDoesNotCrash() {
-        // Should be a no-op, not crash
+        // Should be a no-op, not crash, and must leave every other item alone.
+        KeychainHelper.save(key: testKey, value: "kept")
         KeychainHelper.delete(key: "KEYCHAIN_NONEXISTENT_\(UUID().uuidString)")
+        XCTAssertEqual(KeychainHelper.read(key: testKey), "kept")
     }
 
     func testDoubleDeleteDoesNotCrash() {
