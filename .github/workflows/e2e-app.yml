@@ -568,15 +568,24 @@ jobs:
         timeout-minutes: 3
         run: source scripts/lib/e2e-helpers.sh && e2e_reap_registered_drivers
 
-      # Best-effort: capture the simulator's stdout for post-mortem if
-      # the driver failed before tearing it down. Above the host-skip gate, so
-      # a run that failed only there does not upload a log nobody needs.
-      - name: Upload simulator log
-        if: failure()
+      # Each failed e2e-app.sh lane leaves a folder under e2e-diag: the app's
+      # /state, queue snapshot and pipeline-log tail, the lane's simulator log
+      # and the app's crash reports from that run (see e2e_write_diagnostics
+      # in scripts/lib/e2e-helpers.sh). This repository is public and so is
+      # the artifact, so those files are rebuilt from an allowlist that leaves
+      # out names, titles, spoken text and paths; extend it there, not here.
+      # always(), not failure(): a job that runs into its own timeout is
+      # cancelled, failure() is then false, and the lanes most likely to need
+      # their bundle are the ones that ran out of time. Only a failed lane
+      # writes a folder, so a green run uploads nothing. Above the host-skip
+      # gate, so a run that failed only there does not upload a bundle nobody
+      # needs.
+      - name: Upload diagnostics of failed lanes
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: meeting-simulator.log
-          path: /tmp/e2e-app-sim.log
+          name: e2e-diagnostics
+          path: ${{ runner.temp }}/e2e-diag
           if-no-files-found: ignore
 
       # Host-skip gate: lanes that could not run for a host condition pass on

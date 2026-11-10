@@ -528,7 +528,8 @@ esac
 # default single meeting, the mic-stall variant spelled out, and the diarizer
 # mode appended when MTT_DIARIZER_MODE picks one (the Sortformer lane is the
 # default meeting under another mode). Names the files this lane leaves (its
-# simulator log) so a later lane in the same job overwrites none of them.
+# simulator log; in CI, its diagnostics folder) so a later lane in the same job
+# overwrites none of them.
 _LANE_SLUG="${_LANES# }"
 _LANE_SLUG="${_LANE_SLUG#--}"
 [ -z "$MIC_STALL" ] || _LANE_SLUG="mic-$MIC_STALL"
@@ -887,6 +888,16 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/e2e-helpers.sh"
 # Ends what a timed-out earlier step left running, then records this
 # driver for the next (see e2e_register_driver).
 e2e_register_driver
+# CI only: where a failed lane leaves its diagnostics for the workflow to
+# upload (one folder per lane, see _write_lane_diagnostics), and the marker
+# that tells this run's crash reports from older ones. Under $RUNNER_TEMP,
+# which the runner empties per job, so a run that dies before on_exit leaves
+# nothing behind for long.
+_E2E_DIAG_MARKER=""
+if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -n "${RUNNER_TEMP:-}" ]; then
+    _E2E_DIAG_MARKER="$RUNNER_TEMP/e2e-diag-marker.$$"
+    touch "$_E2E_DIAG_MARKER" 2>/dev/null || _E2E_DIAG_MARKER=""
+fi
 # For LOCALVQE_RESOURCE_GLOB, so the echo-cancellation lane's bundle check and
 # the install it checks for agree on what a model file looks like.
 # shellcheck source=lib/localvqe-resources.sh
@@ -2082,9 +2093,25 @@ else
     open "$DEV_BUNDLE_DEPLOY"
 fi
 
+# A failed lane's diagnostics, written before on_exit changes anything (the
+# protocol and upgrade cleanups quit the app, the upgrade one removes its
+# home): the app's /state, queue snapshot and pipeline log, this lane's
+# simulator log and the app's crash reports since the run started, all
+# redacted for a public artifact (see e2e_write_diagnostics). CI only. Also
+# called when the app never brings its RPC server up, which fails before on_exit
+# is armed and is the case where its crash report matters most. In a subshell
+# with errexit off, so a step that fails there cannot cut on_exit short or
+# change the run's status.
+_write_lane_diagnostics() {
+    [ -n "$_E2E_DIAG_MARKER" ] || return 0
+    local dir="$RUNNER_TEMP/e2e-diag/$_LANE_SLUG"
+    ( set +e; e2e_write_diagnostics "$dir" "$_APP_SUPPORT_DIR" "$_E2E_DIAG_MARKER" "$SIM_LOG" ) || true
+    log "diagnostics of this lane written to $dir (uploaded as the e2e-diagnostics artifact)"
+}
+
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
 poll_until "$RPC_READY_TIMEOUT_S" 1 rpc_ready \
-    || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
+    || { _write_lane_diagnostics; fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"; }
 log "RPC up"
 # Record which app this driver started, for the provenance guard above.
 _record_launched_app() {
@@ -2102,12 +2129,16 @@ _record_launched_app
 # a kill between fork and the trap line doesn't orphan the subprocess.
 SIM_PID=""
 _ON_EXIT_RAN=""
+
+# on_exit [<status>] — the run's exit status; non-zero writes the diagnostics.
 on_exit() {
+    local status="${1:-0}"
     # Run exactly once. The INT/TERM traps below run on_exit then `exit`, and
     # that exit re-fires the EXIT trap, and without this guard on_exit would run
     # twice on a signal (harmless because every step is idempotent, but noisy).
     [ -n "$_ON_EXIT_RAN" ] && return 0
     _ON_EXIT_RAN=1
+    [ "$status" -eq 0 ] || _write_lane_diagnostics
     # Quit-flush: stop the app, remove what this run's unreleased jobs wrote,
     # and put the shared pipeline state back. First, because the restore needs
     # the app stopped, and the provenance marker below then sees it gone.
@@ -2138,6 +2169,7 @@ on_exit() {
     fi
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
     [ -z "$_SIM_LOG_STARTED" ] || cp -f "$SIM_LOG" "$_SIM_LOG_LEGACY" 2>/dev/null || true
+    [ -z "$_E2E_DIAG_MARKER" ] || rm -f "$_E2E_DIAG_MARKER"
     if [ "$MIC_ONLY" = true ]; then
         # The lane turns auto-watch off; nothing else here would turn it back
         # on, and a human using the dev app on this host would find detection
@@ -2233,10 +2265,10 @@ on_exit() {
 # continues (e.g. the confirm would re-pollute a just-restored DB). Only the
 # EXIT trap runs cleanup-without-exit (the shell is already leaving). 130 = 128+SIGINT,
 # 143 = 128+SIGTERM, the conventional shell exit codes for those signals.
-trap on_exit EXIT
+trap 'on_exit "$?"' EXIT
 
-trap 'on_exit; exit 130' INT
-trap 'on_exit; exit 143' TERM
+trap 'on_exit 130; exit 130' INT
+trap 'on_exit 143; exit 143' TERM
 
 # The lane configures the app by writing preferences from the shell, and a write
 # that misses the domain the app resolves is completely silent: the app runs on

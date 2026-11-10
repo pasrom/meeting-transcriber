@@ -2064,3 +2064,166 @@ openai_stub_request_violations() {
              end)
         end'
 }
+
+# --- diagnostics bundle of a failed lane ---------------------------------------
+#
+# What a failed e2e-app.sh lane leaves for the workflow to upload: the app's
+# /state, its queue snapshot, the tail of its pipeline log, the lane's simulator
+# log and the app's crash reports from this run. The artifact is public, since
+# the repository is, so every structured file is rebuilt from an ALLOWLIST of
+# fields (a field the app adds later stays out until someone adds it here), and
+# what is kept was checked field by field for what it can carry:
+#   - left out: speaker names (speakerDB.recentNames, knownSpeakerNames),
+#     meeting titles and naming slugs, participants, spoken text (live-caption
+#     hypotheses and finals), notification bodies, every path (transcript,
+#     protocol, output folder, vocabulary file, Claude CLI), the microphone's
+#     name and device UID, the OpenAI endpoint and model, export page ids and
+#     URLs, the update check's error text;
+#   - also left out: the text of job errors and warnings. It is the most
+#     useful line of a failure, and it is in the lane's own log already, but
+#     it is free text: an NSError names the file it failed on (a recording's
+#     name carries the meeting title), a protocol error can echo a server's
+#     body, and no pattern can tell which words are a title. The bundle says
+#     whether there was an error and how many warnings;
+#   - kept: counts, states, booleans, enum values, durations, levels, the
+#     engine and model names, permission verdicts, notification titles (fixed
+#     strings in the app), window pin flags.
+# The simulator log has the account name taken out of /Users paths. A crash
+# report is taken only when it is the dev app's (the installed app has the
+# same process name) and is rebuilt from an allowlist of its keys too: the
+# exception, the termination, the threads and the binary images, without the
+# application-specific messages (where a fatalError's text lands), the
+# mapped-region summaries (which name mapped files) and the per-machine
+# crash-reporter key; then the account name goes from its paths. Tested by
+# scripts/tests/test_e2e_diagnostics.sh, which feeds each one a sample full of
+# names and asserts they are gone.
+
+# The pipeline-log lines the bundle keeps: the latest transitions, which is
+# what a failure is read from, without the whole history of a long-lived host.
+E2E_DIAG_LOG_TAIL_LINES=200
+
+# e2e_redact_state — a /state answer on stdin, its allowlisted copy on stdout.
+e2e_redact_state() {
+    jq '
+        def pick($o; $keys): if $o == null then null else reduce $keys[] as $k ({}; . + {($k): $o[$k]}) end;
+        {
+            pipeline: pick(.pipeline; ["isProcessing", "activeJobCount", "waitingJobCount", "pendingNamingJobCount"]),
+            speakerDB: (if .speakerDB == null then null else {count: .speakerDB.count} end),
+            pendingNamingJobs: [(.pendingNamingJobs // [])[] | {jobID, speakerCount}],
+            engines: (if .engines == null then null else {
+                active: .engines.active,
+                whisperKit: pick(.engines.whisperKit; ["modelVariant", "language", "modelState"]),
+                parakeet: pick(.engines.parakeet; ["modelState"])
+            } end),
+            lastJob: (if .lastJob == null then null else {
+                jobID: .lastJob.jobID, state: .lastJob.state, appName: .lastJob.appName,
+                durationSec: .lastJob.durationSec,
+                hasTranscript: (.lastJob.transcriptPath != null), hasProtocol: (.lastJob.protocolPath != null),
+                exportStatus: .lastJob.export.status,
+                hasError: (.lastJob.error != null), warningCount: ((.lastJob.warnings // []) | length),
+                participantCount: ((.lastJob.participants // []) | length)
+            } end),
+            channelHealth: pick(.channelHealth; ["micSilent", "appSilent", "recordingSilent", "appNoiseFloorOnly",
+                "micFault", "appFault", "micLevelDBFS", "appLevelDBFS", "micSecondsSinceLastBuffer",
+                "micSecondsSinceLastEnergy", "appSecondsSinceLastBuffer", "appSecondsSinceLastEnergy", "micStallCount"]),
+            permissionHealth: pick(.permissionHealth; ["screenRecording", "microphone", "accessibility", "isHealthy",
+                "notifications", "notificationsAlertStyle", "notificationsTimeSensitive", "notificationsScheduledDelivery"]),
+            liveCaptions: (if .liveCaptions == null then null else {recentFinalsCount: ((.liveCaptions.recentFinals // []) | length)} end),
+            watchState, pendingConsentApp, isManualRecording,
+            notifications: [(.notifications // [])[] | {title, postedAt, posted}],
+            settings: (.settings as $s | if $s == null then null else {
+                detection: pick($s.detection; ["watchTeams", "watchZoom", "watchWebex", "autoWatch", "pollIntervalSeconds"]),
+                recording: pick($s.recording; ["endGraceSeconds", "noMic", "recordOnly", "perChannelIndicatorEnabled",
+                    "liveTranscriptionEnabled", "liveCaptionsOverlayEnabled", "liveCaptionsSize", "asymmetricSilenceWarningSeconds"]),
+                transcription: pick($s.transcription; ["engine", "whisperKitModel", "whisperLanguage", "parakeetLanguage",
+                    "customVocabularyEnabled"]),
+                diarization: pick($s.diarization; ["diarize", "mode", "numSpeakers", "vadEnabled", "vadThreshold",
+                    "clusterThreshold", "warmStartFa", "warmStartFb", "minSegmentDurationSeconds", "excludeOverlap"]),
+                protocolGeneration: pick($s.protocolGeneration; ["provider", "language", "openAITemperature", "openAITopP"]),
+                output: pick($s.output; ["hasCustomDirectory", "hasCustomPrompt", "includeFullTranscriptInProtocol",
+                    "saveRawTranscriptSeparately", "useAITitleForFilenames"]),
+                diagnostics: pick($s.diagnostics; ["verboseDiagnostics", "debugRPCEnabled"]),
+                updates: pick($s.updates; ["checkForUpdates", "includePreReleases"])
+            } end),
+            badge,
+            updateStatus: pick(.updateStatus; ["available", "availableVersion", "isPrerelease", "isChecking"]),
+            windows: [(.windows // [])[] | {id, isVisible, floating, canJoinAllSpaces, fullScreenAuxiliary}]
+        }'
+}
+
+# e2e_redact_queue — a pipeline_queue.json on stdin, its allowlisted copy on
+# stdout: per job its id, state, app, timing and diarizer mode, which audio it
+# has, and whether it has an error and how many warnings.
+e2e_redact_queue() {
+    jq '
+        if type != "array" then {unreadable: true} else [.[] | {
+            id, state, appName, enqueuedAt, usedDiarizerMode, autoSkipNaming,
+            hasMix: (.mixPath != null), hasApp: (.appPath != null), hasMic: (.micPath != null),
+            hasTranscript: (.transcriptPath != null),
+            hasError: (.error != null), warningCount: ((.warnings // []) | length)
+        }] end'
+}
+
+# e2e_redact_pipeline_log — pipeline_log.jsonl lines on stdin, each reduced to
+# the five keys the app writes (PipelineEventLog); a line that is not a JSON
+# object is dropped.
+e2e_redact_pipeline_log() {
+    jq -cR 'fromjson? | objects | {timestamp, job_id, event, from, to}'
+}
+
+# e2e_scrub_text — free text on stdin, with the account name taken out of every
+# /Users path.
+e2e_scrub_text() {
+    sed -E -e 's#/Users/[^/[:space:]"'"'"']+#/Users/<user>#g'
+}
+
+# e2e_redact_crash_report <ips> — the report's allowlisted copy on stdout when
+# it is a crash of the dev app (`MeetingTranscriber-Dev.app` in its procPath);
+# status 1 and nothing written for any other report, or one that does not
+# parse. An .ips file is a one-line JSON header followed by the JSON body.
+e2e_redact_crash_report() {
+    local header body
+    header="$(head -n 1 "$1" | jq -c '{app_name, app_version, build_version, bundleID, bug_type, os_version, timestamp, incident_id, name}' 2>/dev/null)" || return 1
+    body="$(tail -n +2 "$1" | jq -c '
+        select((.procPath // "") | contains("MeetingTranscriber-Dev.app"))
+        | {procName, procPath, bundleInfo, osVersion, captureTime, exception, termination,
+           faultingThread, threads, usedImages, lastExceptionBacktrace}' 2>/dev/null)" || return 1
+    [ -n "$header" ] && [ -n "$body" ] || return 1
+    printf '%s\n%s\n' "$header" "$body" | e2e_scrub_text
+}
+
+# e2e_write_diagnostics <out-dir> <app-data-dir> <marker> <simulator-log> [<crash-dir>]
+# Write the bundle into <out-dir> (created, never emptied: only files of the
+# names below are written, so pointing it at a shared folder deletes nothing).
+# Each part is best effort and the call always returns 0 once <out-dir>
+# exists: a diagnostics step must not change a lane's verdict. /state is read
+# once, bounded to 5 s, through state_read, so the caller's RPC_TOKEN (or
+# MTCLI) decides how. Crash reports are the dev app's (see
+# e2e_redact_crash_report) newer than <marker>; none are taken without a marker.
+e2e_write_diagnostics() {
+    local out="$1" data="$2" marker="$3" sim_log="$4" crash_dir="${5:-$HOME/Library/Logs/DiagnosticReports}"
+    local redacted f report
+    mkdir -p "$out" || return 1
+    if RPC_READ_BOUND_S=5 state_read 2>/dev/null && redacted="$(e2e_redact_state <<<"$STATE_BODY" 2>/dev/null)"; then
+        printf '%s\n' "$redacted" >"$out/state.json"
+    else
+        echo "No usable /state answer when this bundle was written: the app had exited, hung, or answered something that is not a state snapshot." >"$out/state.unavailable.txt"
+    fi
+    if [ -f "$data/ipc/pipeline_queue.json" ] && redacted="$(e2e_redact_queue <"$data/ipc/pipeline_queue.json" 2>/dev/null)"; then
+        printf '%s\n' "$redacted" >"$out/pipeline_queue.json"
+    fi
+    if [ -f "$data/ipc/pipeline_log.jsonl" ]; then
+        tail -n "$E2E_DIAG_LOG_TAIL_LINES" "$data/ipc/pipeline_log.jsonl" 2>/dev/null \
+            | e2e_redact_pipeline_log >"$out/pipeline_log.tail.jsonl" 2>/dev/null || true
+    fi
+    if [ -n "$sim_log" ] && [ -f "$sim_log" ]; then
+        e2e_scrub_text <"$sim_log" >"$out/simulator.log" 2>/dev/null || true
+    fi
+    if [ -n "$marker" ] && [ -f "$marker" ] && [ -d "$crash_dir" ]; then
+        while IFS= read -r f; do
+            report="$(e2e_redact_crash_report "$f")" || continue
+            mkdir -p "$out/crash-reports" && printf '%s\n' "$report" >"$out/crash-reports/$(basename "$f")" || true
+        done < <(find "$crash_dir" -maxdepth 1 -type f -name 'MeetingTranscriber*.ips' -newer "$marker" 2>/dev/null)
+    fi
+    return 0
+}
