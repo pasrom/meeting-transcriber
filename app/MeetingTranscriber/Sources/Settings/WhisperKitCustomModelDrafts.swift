@@ -30,15 +30,12 @@ final class WhisperKitCustomModelDrafts {
         if folder != settings.whisperKitCustomModelFolderPath { settings.setWhisperKitCustomModelFolderPath(folder) }
     }
 
-    /// The scene id the app opens the Settings window under.
-    static let settingsWindowID = "settings"
-
     /// Closing the Settings window only hides it, so neither a focus change nor
     /// `onDisappear` reaches the fields, and a value typed but never confirmed
     /// would stay in the field while the settings kept the old one. Every window
     /// of the app posts this notification, hence the check for the Settings window.
     func settingsWindowWillClose(_ notification: Notification, settings: AppSettings) {
-        guard (notification.object as? NSWindow)?.identifier?.rawValue == Self.settingsWindowID else { return }
+        guard notification.closesSettingsWindow else { return }
         commitPending(to: settings)
     }
 
