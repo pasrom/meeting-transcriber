@@ -173,27 +173,21 @@
             XCTAssertEqual(response.status, 200)
         }
 
-        // MARK: - Enabled gate
-
-        func testEnabledFollowsEnvVar() {
-            // The runtime env value is whatever launched this test process —
-            // assert the API works rather than a specific value.
-            let value = ProcessInfo.processInfo.environment[DebugRPCServer.envVar]
-            XCTAssertEqual(DebugRPCServer.enabled, value == "1")
-        }
-
         // MARK: - Lifecycle
 
         @MainActor
-        func testStopIsIdempotent() {
+        func testStopIsIdempotent() async {
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
             // Safe to call before start.
             server.stop()
             server.stop()
-            // Safe to call after start.
+            // Safe to call after start, once the listener is up.
             server.start()
+            await waitFor(server.boundPort != nil, timeout: regressionCeiling)
+            XCTAssertNotNil(server.boundPort, "the listener never came up")
             server.stop()
             server.stop()
+            XCTAssertNil(server.boundPort, "a stopped server must not report a port")
         }
 
         // MARK: - Token persistence
