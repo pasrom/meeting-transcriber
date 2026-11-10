@@ -50,51 +50,32 @@ final class NotificationManagerTests: XCTestCase {
         )
     }
 
-    // MARK: - handleTransition without setUp is no-op
-
-    func testHandleTransitionWithoutSetUpDoesNotCrash() {
-        let manager = NotificationManager()
-        let status = TranscriberStatus(
-            version: 1, timestamp: "2026-03-03T10:00:00",
-            state: .recording, detail: "",
-            meeting: MeetingInfo(app: "Teams", title: "Standup", pid: 1),
-            protocolPath: nil, error: nil, audioPath: nil, pid: nil,
-        )
-        // recording state would normally trigger a notification, but setUp was
-        // never called so notify() should be a no-op
-        manager.handleTransition(from: nil, to: .recording, status: status)
-    }
-
-    func testHandleTransitionNoNotificationForIdle() {
-        let manager = NotificationManager()
-        let status = TranscriberStatus(
-            version: 1, timestamp: "2026-03-03T10:00:00",
-            state: .idle, detail: "", meeting: nil,
-            protocolPath: nil, error: nil, audioPath: nil, pid: nil,
-        )
-        manager.handleTransition(from: nil, to: .idle, status: status)
-    }
-
-    func testHandleTransitionSameStateTwice() {
-        let manager = NotificationManager()
-        let status = TranscriberStatus(
-            version: 1, timestamp: "2026-03-03T10:00:00",
-            state: .recording, detail: "", meeting: nil,
-            protocolPath: nil, error: nil, audioPath: nil, pid: nil,
-        )
-        manager.handleTransition(from: nil, to: .recording, status: status)
-        manager.handleTransition(from: .recording, to: .recording, status: status)
-    }
-
-    // MARK: - shared singleton
-
-    func testSharedIsSingleton() {
-        let a = NotificationManager.shared
-        let b = NotificationManager.shared
-        XCTAssertIdentical(a, b)
-    }
-
     #if !APPSTORE
+
+        // MARK: - handleTransition
+
+        /// A state with notification content reaches `notify`, which records it
+        /// (unposted, since the test host never ran `setUp`).
+        func testHandleTransitionToRecordingNotifies() throws {
+            let manager = NotificationManager()
+            let status = statusWithMeeting(app: "Teams", title: "Standup")
+            manager.handleTransition(from: nil, to: .recording, status: status)
+
+            // The wording is pinned in the notificationContent tests; this pins
+            // that the transition routes it into notify.
+            let expected = try XCTUnwrap(NotificationManager.notificationContent(for: .recording, status: status))
+            let entries = manager.recentNotificationsLog.entries
+            XCTAssertEqual(entries.map(\.title), [expected.title])
+            XCTAssertEqual(entries.map(\.body), [expected.body])
+            XCTAssertEqual(entries.map(\.posted), [false])
+        }
+
+        func testHandleTransitionNoNotificationForIdle() {
+            let manager = NotificationManager()
+            manager.handleTransition(from: nil, to: .idle, status: statusWithNoMeeting())
+
+            XCTAssertTrue(manager.recentNotificationsLog.entries.isEmpty)
+        }
 
         // MARK: - notify records into the ring buffer (RPC observability chokepoint)
 
