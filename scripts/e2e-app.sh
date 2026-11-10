@@ -2412,6 +2412,7 @@ _poll_for_new_lastjob_terminal() {
 # One tick of _poll_for_new_lastjob_terminal, on an answered STATE_BODY. Reads
 # and writes that function's locals (bash dynamic scoping).
 _lastjob_tick() {
+    badge_note
     lj_id=""; lj_state=""; lj_recovered=""; pipe_active=""; pipe_processing=""; pending_naming=""
     IFS='|' read -r lj_id lj_state lj_recovered pipe_active pipe_processing pending_naming < <(
         jq -r '[.lastJob.jobID // "", .lastJob.state // "", ((.lastJob.meetingTitle // "") | startswith("Recovered Recording")), .pipeline.activeJobCount, .pipeline.isProcessing, .pipeline.pendingNamingJobCount] | join("|")' <<<"$STATE_BODY"
@@ -2518,9 +2519,22 @@ assert_transcript_covers_recording() {
 _await_recording_started() {
     local label="$1"
     log "$label: waiting up to ${RECORDING_START_TIMEOUT_S}s for /state.watchState == \"recording\""
-    poll_state --each assert_app_alive "$RECORDING_START_TIMEOUT_S" 1 state_is '.watchState == "recording"' \
+    _recording_tick() { badge_note; state_is '.watchState == "recording"'; }
+    poll_state --each assert_app_alive "$RECORDING_START_TIMEOUT_S" 1 _recording_tick \
         || fail "$(state_why $? "$label: no recording started within ${RECORDING_START_TIMEOUT_S}s of the simulator starting (last watchState: $(jq -r '.watchState // "none"' <<<"${STATE_BODY:-null}" 2>/dev/null)). Likely causes: the detector did not see the simulator's power assertion (auto-watch not on, the watch loop not running, a detector regression), or a TCC grant the recording needs is missing (Microphone, Screen & System Audio Recording) and the app is waiting on a consent prompt. See the e2e-architecture skill, runner setup steps 4 and 5.")"
     log "$label: recording started"
+}
+
+# The menu-bar badge must have read `recording` while the meeting was recorded.
+# Seen on the same snapshots the lane polls anyway (badge_note); the recording
+# lasts the whole fixture, against a poll interval of 1 to 5 s, so a healthy
+# run cannot miss it. The shorter transcribing and diarizing states are not
+# asserted: they can pass between two polls.
+_assert_recording_badge_seen() {
+    local label="$1"
+    badge_seen recording \
+        || fail "$label: /state.badge never read 'recording' while the app was recording (badges seen: ${E2E_BADGES_SEEN:-none}); the menu bar would not show the recording"
+    log "$label: menu-bar badges seen: $E2E_BADGES_SEEN"
 }
 
 # run_one_meeting <label> [<window title>] — the window title is handed to the
@@ -2534,6 +2548,7 @@ run_one_meeting() {
     # Reset between meetings so --two-meetings captures each run's first
     # observed naming-dialog speaker count, not just meeting 1's stale value.
     OBSERVED_NAMING_SPEAKERS=""
+    E2E_BADGES_SEEN=""
     log "$label: starting meeting-simulator → $SIMULATOR_FIXTURE${window_title:+ (window title '$window_title')}"
     _start_simulator "$label" "${sim_args[@]}"
 
@@ -2548,6 +2563,7 @@ run_one_meeting() {
     LAST_MEETING_JOB="$(jq -c '.lastJob' <<<"$final_snapshot")"
 
     [ "$lj_state" = "done" ] || fail "$label: lastJob.state == \"$lj_state\", expected \"done\". Error: $(jq -r '.lastJob.error // "<none>"' <<<"$final_snapshot")"
+    _assert_recording_badge_seen "$label"
 
     local transcript_path
     transcript_path="$(jq -r '.lastJob.transcriptPath // empty' <<<"$final_snapshot")"
@@ -2618,6 +2634,9 @@ await_new_sidecar() {
     while true; do
         SIDECAR_PATH="$(find "$RECORDINGS_DIR" -type f -name '*_meta.json' -newer "$marker" -print 2>/dev/null | head -1)"
         [ -n "$SIDECAR_PATH" ] && break
+        # The menu-bar badge while the recording ends, for the record-only
+        # lane's no-processing check; a read the app does not answer is skipped.
+        if RPC_READ_BOUND_S=5 state_read 2>/dev/null; then badge_note; fi
         [ "$(date +%s)" -lt "$deadline" ] || fail "$label: no *_meta.json appeared in $RECORDINGS_DIR within ${RECORD_ONLY_DEADLINE_S}s"
         sleep 2
     done
@@ -2682,6 +2701,7 @@ assert_pipeline_did_not_run() {
     # An unanswered read used to reach record_only_violation as an empty
     # snapshot, which with no baseline job reads as "nothing ran".
     snap="$(state_query .)" || fail "$(state_why $? "$label: whether record-only left the pipeline idle")"
+    badge_note "$snap"
     violation="$(record_only_violation "$snap" "$PRE_LAST_JOB_ID")"
     [ -z "$violation" ] \
         || fail "$label: $violation. Record-only must not enqueue at all, and a job still in flight is invisible to both lastJob and the transcript check, so without this the lane would report success while the pipeline was doing what it must not do."
@@ -2810,8 +2830,10 @@ run_one_record_only_meeting() {
     rm -f "$meeting_marker"
     touch "$meeting_marker"
 
+    E2E_BADGES_SEEN=""
     log "$label: starting meeting-simulator (record-only) → $SIMULATOR_FIXTURE"
     _start_simulator "$label" "$SIMULATOR_FIXTURE"
+    _await_recording_started "$label"
 
     # Block until the simulator finishes playing the fixture. Exit code is
     # irrelevant; we assert on filesystem state below.
@@ -2873,6 +2895,17 @@ run_one_record_only_meeting() {
     # and nothing waiting or running either. Shared with the mic-only lane so
     # the two cannot drift apart.
     assert_pipeline_did_not_run "$label"
+
+    # The menu bar agrees, a second witness read from a different field: it
+    # showed the recording, and never a processing badge, on any snapshot from
+    # the start of the recording through the sidecar and the check above. An
+    # absence, so no timing assumption: a healthy record-only run has nothing
+    # to process at all.
+    _assert_recording_badge_seen "$label"
+    local processing
+    processing="$(badges_seen_among transcribing diarizing processing)"
+    [ -z "$processing" ] \
+        || fail "$label: the menu bar showed '$processing' during a record-only meeting (badges seen: $E2E_BADGES_SEEN); record-only must not process the recording"
 
     # Surface the produced mix path so the optional reimport chain picks
     # it up without re-globbing. Reset by each caller's `local` line.
