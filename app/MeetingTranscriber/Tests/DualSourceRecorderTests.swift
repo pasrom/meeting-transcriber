@@ -1,4 +1,5 @@
 import AudioTapLib
+import AVFoundation
 @testable import MeetingTranscriber
 import XCTest
 
@@ -54,7 +55,8 @@ final class DualSourceRecorderTests: XCTestCase {
     func testCleanupNonexistentDirIsNoOp() {
         let nowhere = URL(fileURLWithPath: "/tmp/nonexistent_\(UUID().uuidString)")
         DualSourceRecorder.cleanupTempFiles(recordingsDir: nowhere)
-        // Should not crash
+        // Should not crash, and must not create the folder it was asked to clean.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: nowhere.path))
     }
 
     // MARK: - Recordings Directory
@@ -207,59 +209,7 @@ final class DualSourceRecorderTests: XCTestCase {
     func testCleanupEmptyDirectory() throws {
         let tmpDir = try makeTempDirectory(prefix: "cleanup_empty")
         DualSourceRecorder.cleanupTempFiles(recordingsDir: tmpDir)
-    }
-
-    // MARK: - Mix Fallback Without Mic (noMic / no mic hardware)
-
-    /// Verifies that when no mic is present, the mix.wav uses resampled 16kHz samples
-    /// instead of raw device-rate samples. Regression test for the bug where 48kHz samples
-    /// were saved with a 16kHz header, producing a file 3× too long.
-    func testMixFallbackWithoutMicUsesResampledSamples() throws {
-        let tmpDir = try makeTempDirectory(prefix: "mix_fallback")
-
-        // Simulate 1 second of 48kHz mono app audio (captured by CATapDescription)
-        let deviceRate = 48000
-        let targetRate = 16000
-        let appSamples = [Float](repeating: 0.5, count: deviceRate) // 1s at 48kHz
-
-        // Resample to 16kHz (what the fix does)
-        let appSamples16k = AudioMixer.resample(appSamples, from: deviceRate, to: targetRate)
-        XCTAssertEqual(
-            appSamples16k.count,
-            targetRate,
-            accuracy: 2200,
-            "Resampled should have ~16000 samples for 1s",
-        )
-
-        // Save mix using resampled samples (the FIXED path)
-        let mixPath = tmpDir.appendingPathComponent("mix.wav")
-        try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: targetRate, url: mixPath)
-
-        // Also save what the BUGGY path would have produced
-        let buggyMixPath = tmpDir.appendingPathComponent("buggy_mix.wav")
-        try AudioMixer.saveWAV(samples: appSamples, sampleRate: targetRate, url: buggyMixPath)
-
-        let mixSize = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: mixPath.path)[.size] as? Int)
-        let buggySize = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: buggyMixPath.path)[.size] as? Int)
-
-        // Fixed mix: ~1s of 16kHz Int16 = ~32044 bytes
-        // Buggy mix: ~3s of "16kHz" Int16 = ~96044 bytes (3× too long)
-        XCTAssertEqual(
-            Double(mixSize) / Double(buggySize),
-            1.0 / 3.0,
-            accuracy: 0.05,
-            "Buggy mix should be 3× larger than fixed mix",
-        )
-
-        // Verify fixed mix has correct duration
-        let expectedSamples = targetRate // 1s at 16kHz
-        let actualSamples = (mixSize - 44) / 2 // Int16 = 2 bytes per sample
-        XCTAssertEqual(
-            actualSamples,
-            expectedSamples,
-            accuracy: 2200,
-            "Fixed mix should have ~16000 samples (1s at 16kHz)",
-        )
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: tmpDir.path), [])
     }
 
     // MARK: - crossCheckAppRate
@@ -374,8 +324,12 @@ final class DualSourceRecorderTests: XCTestCase {
 
         XCTAssertNotNil(result.appPath, "app track should be saved")
         XCTAssertNil(result.micPath, "no mic track")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: result.mixPath.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: appTmp.path), "raw .tmp should be consumed")
+        // The mix holds the resampled samples: one second at 16 kHz. Saving the
+        // 48 kHz samples under the 16 kHz header made it three times too long.
+        let mix = try AVAudioFile(forReading: result.mixPath)
+        XCTAssertEqual(mix.fileFormat.sampleRate, 16000)
+        XCTAssertEqual(Double(mix.length), 16000, accuracy: 160, "mix should last one second")
     }
 
     /// Mic audio only (0-byte app temp) → mic track surfaces, mix falls back to
