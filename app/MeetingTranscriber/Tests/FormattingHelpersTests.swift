@@ -23,4 +23,8 @@ final class FormattingHelpersTests: XCTestCase {
     func testFractionalSeconds() {
         XCTAssertEqual(formattedTime(90.7), "1:30")
     }
+
+    func testLastSecondBeforeAMinute() {
+        XCTAssertEqual(formattedTime(59), "59s")
+    }
 }
