@@ -81,14 +81,10 @@ REC_DIR="$HOME/Library/Application Support/MeetingTranscriber/recordings"
 # every file this run produces is newer than it (see sweep_run_artifacts).
 RUN_START_MARKER="$(mktemp "${TMPDIR:-/tmp}/e2e-silent-rec-start.XXXXXX")"
 
-# Defaults to restore after the test — empty string means "key wasn't set".
-# Empty until the snapshot below runs. `cleanup` is trapped before that point
-# and keys on this being set: an empty snapshot means "delete the key", which
-# is right after this lane wrote it and destructive before it ever read it.
-_STANDARD_PLIST=""
-SAVED_AUTOWATCH=""
-SAVED_THRESHOLD=""
-SAVED_INDICATOR=""
+# The record of the settings this lane overrides, taken below. Empty until
+# then: `cleanup` is trapped before that point and restores only a record that
+# exists, so it can never delete settings this lane never read.
+DEFAULTS_RECORD=""
 
 cleanup() {
     if [ -n "${SIM_PID:-}" ] && kill -0 "$SIM_PID" 2>/dev/null; then
@@ -103,14 +99,7 @@ cleanup() {
     rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
     # Restore defaults to whatever they were before we ran (or delete the
     # keys if they didn't exist).
-    # Only restore what was actually snapshotted. An empty snapshot means
-    # "delete the key", which is right after this lane set it and catastrophic
-    # if the lane exited before the snapshot ran.
-    if [ -n "$_STANDARD_PLIST" ]; then
-        restore_bool_default  "$_STANDARD_PLIST" autoWatch                       "$SAVED_AUTOWATCH"
-        restore_float_default "$_STANDARD_PLIST" asymmetricSilenceWarningSeconds "$SAVED_THRESHOLD"
-        restore_bool_default  "$_STANDARD_PLIST" perChannelIndicatorEnabled      "$SAVED_INDICATOR"
-    fi
+    [ -z "$DEFAULTS_RECORD" ] || defaults_restore_record "$DEFAULTS_RECORD" || true
     bootout_stale_launchctl
 }
 trap cleanup EXIT
@@ -192,28 +181,22 @@ done
 
 # --- 2. Snapshot the defaults this lane overrides ---------------------------
 
-# Address the standard-domain plist directly. `defaults <bundle-id>` is
+# Recorded from both plists write_dev_default writes (see dev_defaults_record
+# in scripts/lib/e2e-helpers.sh), not through `defaults <bundle-id>`: that is
 # redirected into the app's container once containermanagerd has registered
 # one for the identifier, and the dev .app is not sandboxed, so it resolves
 # the standard domain. Reading and restoring the wrong one silently leaks this
 # lane's 30 s threshold into whatever runs next, or leaves the app on its
 # built-in 90 s while the lane waits 50 s for a flag that cannot flip in time.
 #
-# The snapshot runs BEFORE the quit below for a reason that has nothing to do
-# with preferences and everything to do with the exit trap. `quit_running_app`
-# is bare under `set -e`, so an exhausted quit ladder exits the script straight
-# into `cleanup` with every SAVED_* still empty, and an empty snapshot restores
-# by DELETING the key. Snapshotting first means the trap can never delete a
-# developer's real settings that this lane never read.
-#
 # The writes still run after the quit, which is defensive rather than measured:
 # a live instance owning the same domain did NOT clobber an external write in
 # testing on macOS 26, but nothing is gained by writing underneath a process
 # that is about to be killed anyway.
-_STANDARD_PLIST="$(dev_standard_plist "$BUNDLE_ID")"
-SAVED_AUTOWATCH="$(snapshot_default "$_STANDARD_PLIST" autoWatch)"
-SAVED_THRESHOLD="$(snapshot_default "$_STANDARD_PLIST" asymmetricSilenceWarningSeconds)"
-SAVED_INDICATOR="$(snapshot_default "$_STANDARD_PLIST" perChannelIndicatorEnabled)"
+DEFAULTS_RECORD="$(mktemp "${TMPDIR:-/tmp}/e2e-silent-rec-defaults.XXXXXX")"
+dev_defaults_record "$DEFAULTS_RECORD" "$BUNDLE_ID" \
+    autoWatch asymmetricSilenceWarningSeconds perChannelIndicatorEnabled \
+    || die "could not record the dev bundle's settings; nothing was changed"
 
 # --- 3. Kill any running instance, then override ----------------------------
 
