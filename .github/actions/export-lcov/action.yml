@@ -29,7 +29,7 @@ runs:
         OUTPUT_PATH: ${{ github.workspace }}/coverage-${{ inputs.flag }}.lcov
       run: ./scripts/export-lcov.sh "$PACKAGE_DIR" "$OUTPUT_PATH"
     - name: Upload to Codecov
-      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
       with:
         token: ${{ inputs.codecov-token }}
         files: coverage-${{ inputs.flag }}.lcov

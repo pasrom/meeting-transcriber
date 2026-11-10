@@ -63,9 +63,9 @@ jobs:
       # Needed so dorny/paths-filter can read .github/filters.yml from the
       # workspace; see ci.yml for the same dance.
       - if: github.event_name == 'pull_request'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
         id: filter
         with:
           # `every` is required for the exclusion-style filter — without it,
@@ -99,7 +99,7 @@ jobs:
       contents: write  # For creating GitHub releases
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-tags: true
 
@@ -280,7 +280,7 @@ jobs:
           echo "DMG SHA256: $SHA"
 
       - name: Upload DMG as artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: ${{ matrix.dmg-prefix }}-${{ steps.version.outputs.version }}.dmg
           path: .build/release/${{ matrix.dmg-prefix }}-${{ steps.version.outputs.version }}.dmg
@@ -311,11 +311,12 @@ jobs:
 
       - name: Create GitHub Release
         if: matrix.variant == 'homebrew' && startsWith(github.ref, 'refs/tags/v')
-        # SHA-pinned: this is the highest-privilege third-party action in
-        # release.yml — runs with DEVELOPER_ID_CERT, APP_PASSWORD,
-        # TAP_REPO_TOKEN, APPLE_ID. SHA pin (vs tag pin) means a hijacked
-        # v1 tag cannot retarget us to a malicious commit. Dependabot
-        # bumps the SHA + comment in lockstep.
+        # Every remote action is SHA-pinned (scripts/tests/
+        # test_actions_sha_pinned.sh), and this one matters most: it is the
+        # highest-privilege third-party action in release.yml, running with
+        # DEVELOPER_ID_CERT, APP_PASSWORD, TAP_REPO_TOKEN and APPLE_ID in the
+        # job. A hijacked v1 tag cannot retarget us to a malicious commit.
+        # Dependabot bumps the SHA and the version comment in lockstep.
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd  # v1.21.0
         with:
           # Idempotent re-runs: a partially-succeeded release job (e.g. the
