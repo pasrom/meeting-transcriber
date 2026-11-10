@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# Installs the third-party licence texts every shipped bundle has to carry.
+# Installs the licence texts every shipped bundle has to carry: the app's own
+# LICENSE plus the third-party texts.
+#
+# The app's own MIT notice goes to <resources-dir>/LICENSE, apart from the
+# third-party directory because it is not a third-party component. The copyright
+# holder needs no licence to ship their own build, but anyone who forks the repo
+# and builds with these scripts redistributes this project's code, and MIT wants
+# the notice in every copy. Without this the fork's bundle would carry every
+# dependency's notice except the one for the code it is actually built from.
 #
 # The app statically links third-party source (WhisperKit, FluidAudio) and
 # bundles third-party weights (LocalVQE), so the .app redistributes all of them.
@@ -21,15 +29,16 @@
 #
 # Source this, don't execute it.
 
-# Copies every licence text in the repo's licenses/ directory into
-# <resources-dir>/licenses/. Fatal on failure under `set -e`: a bundle that
-# redistributes the code without the notices is not one to ship.
-install_third_party_licenses() {
+# Copies the repo's LICENSE to <resources-dir>/LICENSE and every licence text in
+# the repo's licenses/ directory into <resources-dir>/licenses/. Fatal on
+# failure under `set -e`: a bundle that redistributes the code without the
+# notices is not one to ship.
+install_bundled_licenses() {
     local resources_dir="$1"
-    local lib_dir licenses_src dest
+    local repo_root licenses_src dest
     local -a licence_files
-    lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    licenses_src="$lib_dir/../../licenses"
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    licenses_src="$repo_root/licenses"
     dest="$resources_dir/licenses"
 
     # Collected rather than globbed straight into cp so an empty directory is a
@@ -59,6 +68,8 @@ install_third_party_licenses() {
 
     mkdir -p "$dest"
     cp "${licence_files[@]}" "$dest/"
+    cp "$repo_root/LICENSE" "$resources_dir/LICENSE"
 
+    echo "  App license: $resources_dir/LICENSE"
     echo "  Third-party licenses: $dest (${#licence_files[@]} files)"
 }
