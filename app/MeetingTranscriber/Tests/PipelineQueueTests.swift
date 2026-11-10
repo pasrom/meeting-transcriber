@@ -3844,6 +3844,30 @@ final class PipelineQueueTests: XCTestCase {
             pQueue.speakerNamingDataByJob[job.id],
             "Auto-skipped job should not stash naming data awaiting resolution",
         )
+
+        // Nobody will name this job, so nothing is written for naming either.
+        // The payload would hold the voice embeddings, and finding it makes a
+        // quit during the protocol call re-run the whole job.
+        let finished = try XCTUnwrap(pQueue.jobs.first)
+        XCTAssertEqual(finished.usedDiarizerMode, mockDiar.mode, "later stages still learn which diarizer ran")
+        let slug = try XCTUnwrap(finished.namingSlug)
+        XCTAssertFalse(SpeakerNamingStore(outputDir: tmpDir).hasNamingData(slug: slug))
+
+        // The quit during the protocol call: the restore resumes with the
+        // protocol alone instead of transcribing and diarizing again.
+        // The finished queue's own last write lands first, or it is the newer
+        // state the restore reads.
+        await pQueue.awaitSnapshotFlush()
+        var interrupted = finished
+        interrupted.state = .generatingProtocol
+        interrupted.protocolPath = nil
+        try JSONEncoder().encode([interrupted])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+        let restored = makeRestoreQueue(outputDir: tmpDir, inFlightRuns: InFlightRunRegistry())
+        restored.loadSnapshot()
+        XCTAssertEqual(restored.protocolResumeDispositions[job.id], .resumeProtocolOnly)
+        await restored.awaitProcessing()
+        await restored.awaitSnapshotFlush()
     }
 
     func testCompleteSpeakerNamingLateConfirmedTransitionsToDone() async {
