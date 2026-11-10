@@ -308,6 +308,14 @@ PRs are excluded from the self-hosted runner.
   sibling's leftover into every later step. Hand-run rule on the mini, all three
   before touching it: no `Runner.Worker`, no `e2e-app.sh`, no
   `MeetingTranscriber-Dev` process.
+- **A red lane does not stop the job.** `e2e-app.yml` builds, deploys and
+  signs the bundle in a step of its own (`e2e-app.sh --redeploy-only`), and
+  every lane after it runs `--no-build` when the run is not cancelled and that
+  step succeeded, so one broken feature no longer hides the verdicts of the
+  lanes behind it, while a failed build still skips them all (`--no-build`
+  would otherwise test whatever bundle an earlier run left). The job still
+  ends red. The re-import lane also needs the record-only step it reuses the
+  WAV of, and the upgrade lane the step that prepares its model.
 - **A failed `e2e-app.sh` lane leaves a diagnostics bundle** in CI, written by
   its exit handler before any cleanup: `$RUNNER_TEMP/e2e-diag/<lane>/` with the
   app's `/state`, queue snapshot and pipeline-log tail, the lane's own
