@@ -174,12 +174,13 @@ SIM_PID=""
 
 on_exit() {
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
-    defaults_restore_record "$DEFAULTS_RECORD" || true
     if [ "$APP_AFTER" = quit ]; then
         quit_running_app || true
         sweep_run_artifacts "$REC_DIR" "$RUN_START_MARKER"
     fi
     rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
+    # After the quit, which may write the app's in-memory settings back.
+    defaults_restore_record "$DEFAULTS_RECORD" || true
 }
 # INT/TERM exit (and so run on_exit once, from EXIT): a trap that only ran
 # on_exit would return into the interrupted command and let the lane carry on
