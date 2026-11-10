@@ -58,6 +58,10 @@ resign_deployed_bundle "$APP_BUNDLE" "$CHOSEN_IDENTITY" \
     || fail "codesign failed for $APP_BUNDLE (identity $CHOSEN_IDENTITY)"
 ok "signed"
 
+# Cleanup on exit. Armed before the launch, so an app that never binds the
+# port is stopped too.
+trap 'pkill -f MeetingTranscriber-Dev 2>/dev/null || true' EXIT
+
 # --- Launch with env var. ---
 step "Launching with MEETINGTRANSCRIBER_DEBUG_RPC=1"
 MEETINGTRANSCRIBER_DEBUG_RPC=1 open -gj "$APP_BUNDLE"
@@ -68,9 +72,6 @@ for _ in $(seq 1 30); do
 done
 lsof -i :9876 >/dev/null 2>&1 || fail "server did not bind to :9876 within 6s"
 ok "listening on :9876"
-
-# Cleanup on exit.
-trap 'pkill -f MeetingTranscriber-Dev 2>/dev/null || true' EXIT
 
 [ -s "$TOKEN_FILE" ] || fail "token file not created"
 TOKEN=$(cat "$TOKEN_FILE")
