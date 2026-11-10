@@ -111,4 +111,33 @@ final class OutputSettingsViewTests: XCTestCase {
         }
         return defaults
     }
+
+    // MARK: - importPrompt
+
+    func testImportPromptInstallsTheFirstPrompt() throws {
+        let dir = try makeTempDirectory(prefix: "prompt-import")
+        let source = dir.appendingPathComponent("mine.md")
+        let dest = dir.appendingPathComponent("protocol_prompt.md")
+        try "new".write(to: source, atomically: true, encoding: .utf8)
+
+        try OutputSettingsLogic.importPrompt(from: source, to: dest)
+
+        XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "new")
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "new")
+    }
+
+    /// Replacing an existing prompt used to move the picked file into place,
+    /// so the import deleted the user's own file from their folder.
+    func testImportPromptOverAnExistingPromptKeepsThePickedFile() throws {
+        let dir = try makeTempDirectory(prefix: "prompt-import")
+        let source = dir.appendingPathComponent("mine.md")
+        let dest = dir.appendingPathComponent("protocol_prompt.md")
+        try "new".write(to: source, atomically: true, encoding: .utf8)
+        try "old".write(to: dest, atomically: true, encoding: .utf8)
+
+        try OutputSettingsLogic.importPrompt(from: source, to: dest)
+
+        XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "new")
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "new")
+    }
 }
