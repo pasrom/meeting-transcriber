@@ -5,7 +5,8 @@
 #   ./scripts/build_release.sh [--no-notarize] [--staple] [--appstore]
 #
 # Output:
-#   .build/release/MeetingTranscriber.dmg
+#   .build/release/MeetingTranscriber-<version>.dmg
+#   (MeetingTranscriber-AppStore-<version>.dmg with --appstore)
 #
 # Requirements:
 #   - macOS 14+ (Sonoma) on Apple Silicon
@@ -233,7 +234,7 @@ else
     fi
 fi
 
-# ── Step 5: Create DMG ───────────────────────────────────────────────────────
+# ── Step 4: Create DMG ───────────────────────────────────────────────────────
 
 if [ "$APPSTORE" = true ]; then
     DMG_NAME="MeetingTranscriber-AppStore-${VERSION}.dmg"
@@ -261,7 +262,7 @@ hdiutil create -volname "MeetingTranscriber" \
 mv "$DMG_STAGING/MeetingTranscriber.app" "$APP_BUNDLE"
 rm -rf "$DMG_STAGING"
 
-# ── Step 5: Notarize (optional) ──────────────────────────────────────────
+# ── Step 5: Notarize (optional) ──────────────────────────────────────────────
 
 if [ "$NOTARIZE" = true ]; then
     echo ""
