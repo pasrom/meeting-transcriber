@@ -105,7 +105,8 @@ fi
 RUN_MARKER="/tmp/e2e-browser-marker.$$"
 # Isolated Chrome profile so the fixture instance is distinct from any user
 # Chrome and can be quit by argv match without touching the user's windows.
-CHROME_PROFILE="$(mktemp -d /tmp/e2e-browser-chrome.XXXXXX)"
+# Created once the cleanup trap that removes it is armed; empty until then.
+CHROME_PROFILE=""
 
 # shellcheck source=lib/bundle-ids.sh
 source "$ROOT/scripts/lib/bundle-ids.sh"
@@ -145,7 +146,8 @@ RPC_TOKEN=""
 
 # Quit only the fixture Chrome instance (its argv carries our profile dir) —
 # never the user's own Chrome windows.
-quit_chrome() { pkill -f "$CHROME_PROFILE" 2>/dev/null || true; }
+# Never with an empty profile path, which would match every process.
+quit_chrome() { [ -z "$CHROME_PROFILE" ] || pkill -f "$CHROME_PROFILE" 2>/dev/null || true; }
 
 # Bind the bundle id for the shared both-domain writer. Which domains a dev
 # default has to be written to, and why a bare `defaults write <bundle-id>`
@@ -259,11 +261,12 @@ on_exit() {
     # delete a real recording (see sweep_run_artifacts).
     sweep_run_artifacts "$RECORDINGS_DIR" "$RUN_MARKER"
     rm -f "$RUN_MARKER"
-    rm -rf "$CHROME_PROFILE"
+    [ -z "$CHROME_PROFILE" ] || rm -rf "$CHROME_PROFILE"
 }
 trap on_exit EXIT
 trap 'on_exit; exit 130' INT
 trap 'on_exit; exit 143' TERM
+CHROME_PROFILE="$(mktemp -d /tmp/e2e-browser-chrome.XXXXXX)"
 
 # debugRPCEnabled + autoWatch are set-and-leave (like e2e-app.sh — harmless on).
 _set_dev_bool debugRPCEnabled true
