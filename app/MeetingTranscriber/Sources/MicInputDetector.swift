@@ -304,8 +304,9 @@ class MicInputDetector: MeetingDetecting {
     }
 }
 
-/// Runs several detection strategies as one detector: first confirmed hit
-/// wins; a meeting stays alive while ANY strategy still sees it (each
+/// Runs several detection strategies as one detector: all are polled each
+/// round (see `checkOnce` for which hit wins); a meeting stays alive while
+/// ANY strategy still sees it (each
 /// strategy returns false for apps outside its own pattern set, so the OR is
 /// exact). Lets the assertion-based and mic-input-based channels coexist
 /// without WatchLoop knowing there are two.
@@ -316,13 +317,14 @@ final class CompositeMeetingDetector: MeetingDetecting {
         self.detectors = detectors
     }
 
+    /// The first hit in strategy order, except that one recording without
+    /// consent beats one that waits for it, as in `PowerAssertionDetector`:
+    /// a parked browser call is skipped by the loop on every poll, and
+    /// stopping at it left the mic-input channel unpolled while the prompt
+    /// was open. Polling all also keeps each confirmation count consecutive.
     func checkOnce() -> DetectedMeeting? {
-        for detector in detectors {
-            if let meeting = detector.checkOnce() {
-                return meeting
-            }
-        }
-        return nil
+        let hits = detectors.compactMap { $0.checkOnce() }
+        return hits.first { !$0.pattern.requiresRecordingConsent } ?? hits.first
     }
 
     func isMeetingActive(_ meeting: DetectedMeeting) -> Bool {

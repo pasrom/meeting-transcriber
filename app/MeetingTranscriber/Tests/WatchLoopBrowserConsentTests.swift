@@ -326,6 +326,29 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
         loop.stop()
     }
 
+    /// The same rule across detectors: the parked browser call from the first
+    /// must not keep a mic-input call from the second from recording.
+    func testParkedConsentPromptDoesNotBlindALaterDetector() async throws {
+        let spy = ParkingConsentSpy()
+        let assertions = try SwappableDetector(browserMeeting())
+        let micInput = SwappableDetector(nil)
+        let (loop, recorder) = makeLoop(
+            detector: CompositeMeetingDetector([assertions, micInput]), spy: spy,
+        )
+        loop.start()
+
+        await waitFor(spy.isParked)
+        XCTAssertFalse(recorder.startCalled, "nothing may record while the question is open")
+
+        micInput.meeting = nativeMeeting()
+        await waitFor(recorder.startCalled, timeout: .seconds(3))
+        XCTAssertTrue(recorder.startCalled, "a later detector's call must record while consent is parked")
+        XCTAssertTrue(spy.isParked, "and the browser prompt must still be waiting for its answer")
+
+        _ = spy.resolveBrowserConsent(granted: false)
+        loop.stop()
+    }
+
     /// Only one prompt per parked question. The WebRTC assertion re-detects the
     /// same call every poll, so a loop that no longer waits for the answer would
     /// otherwise post a fresh prompt every couple of seconds.

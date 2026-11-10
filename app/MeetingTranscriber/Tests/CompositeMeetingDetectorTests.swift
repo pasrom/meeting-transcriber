@@ -65,6 +65,65 @@ final class CompositeMeetingDetectorTests: XCTestCase {
         XCTAssertFalse(composite.isMeetingActive(meeting))
     }
 
+    // MARK: - A meeting waiting for consent must not shadow one that can start
+
+    /// Reports a fixed meeting (or none) and counts its polls.
+    private final class StubDetector: MeetingDetecting {
+        let meeting: DetectedMeeting?
+        private(set) var polls = 0
+        init(_ meeting: DetectedMeeting?) {
+            self.meeting = meeting
+        }
+
+        func checkOnce() -> DetectedMeeting? {
+            polls += 1
+            return meeting
+        }
+
+        func isMeetingActive(_: DetectedMeeting) -> Bool {
+            meeting != nil
+        }
+
+        func reset(appName _: String?) {}
+    }
+
+    private func meeting(appName: String, requiresConsent: Bool) -> DetectedMeeting {
+        DetectedMeeting(
+            pattern: AppMeetingPattern(
+                appName: appName, ownerNames: [appName], meetingPatterns: [],
+                requiresRecordingConsent: requiresConsent,
+            ),
+            windowTitle: "\(appName) Call",
+            ownerName: appName,
+            windowPID: 77,
+        )
+    }
+
+    func testMeetingThatNeedsNoConsentWinsOverOneWaitingForConsent() {
+        // A parked browser call is skipped by the loop on every poll.
+        let browser = StubDetector(meeting(appName: "Fjordfox", requiresConsent: true))
+        let mic = StubDetector(meeting(appName: "WeChat", requiresConsent: false))
+        let composite = CompositeMeetingDetector([browser, mic])
+        XCTAssertEqual(composite.checkOnce()?.pattern.appName, "WeChat")
+    }
+
+    func testMeetingWaitingForConsentIsStillReportedWhenItIsTheOnlyOne() {
+        let browser = StubDetector(meeting(appName: "Fjordfox", requiresConsent: true))
+        let composite = CompositeMeetingDetector([browser, StubDetector(nil)])
+        XCTAssertEqual(composite.checkOnce()?.pattern.appName, "Fjordfox")
+    }
+
+    func testEveryStrategyIsPolledEachRound() {
+        // Confirmation counters count consecutive polls, so a strategy that is
+        // skipped on rounds an earlier one reports something would confirm late.
+        let first = StubDetector(meeting(appName: "Microsoft Teams", requiresConsent: false))
+        let second = StubDetector(nil)
+        let composite = CompositeMeetingDetector([first, second])
+        _ = composite.checkOnce()
+        _ = composite.checkOnce()
+        XCTAssertEqual(second.polls, 2)
+    }
+
     // MARK: - Call IDs (issue #765)
 
     private let teamsMeeting = DetectedMeeting(
