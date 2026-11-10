@@ -805,7 +805,6 @@ RECORD_ONLY_DEADLINE_S=60
 # is 49.8 s long and carries 37.5 s above the threshold) rather than at a token
 # value that any partial capture would clear.
 WAV_VERDICT_THRESHOLD_DBFS=-50
-WAV_VERDICT_MIN_ACTIVE_S=3
 WAV_VERDICT_FIXTURE_MIN_ACTIVE_S=25
 
 # Sidecar write completes before the recorder's async tail bytes do — give
@@ -1359,8 +1358,7 @@ if [ "$QUIT_FLUSH" = true ]; then
     # itself: once the backup exists, the lane has started to change shared
     # state (the app launch writes it), so a failure here restores too.
     trap 'if declare -F on_exit >/dev/null; then on_exit; else _qf_restore_shared_state; _qf_release_lock; [ -z "${_QF_RESTORE_FAILED:-}" ] || exit 1; fi' EXIT
-    _qf_installed="$( { pgrep -x MeetingTranscriber || true; } | while read -r p; do
-        ps -o command= -p "$p" 2>/dev/null | grep -q "MeetingTranscriber-Dev.app/" || printf '%s ' "$p"; done)"
+    _qf_installed="$(non_dev_meetingtranscriber_pids)"
     [ -z "$_qf_installed" ] \
         || fail "--quit-flush: a MeetingTranscriber that is not the dev app is running (pid(s): ${_qf_installed% }). It shares the pipeline state this lane writes and restores. Quit it first."
     log "[quit-flush] lock $MT_LIVE_LOCK held, installed app not running; the queue check and the backup follow the dev app's quit"
@@ -2692,18 +2690,10 @@ run_one_record_only_meeting() {
     wait "$SIM_PID" || true
     SIM_PID=""
 
-    log "$label: simulator done; polling $RECORDINGS_DIR for sidecar (timeout ${RECORD_ONLY_DEADLINE_S}s)"
-    local deadline=$(( $(date +%s) + RECORD_ONLY_DEADLINE_S ))
-    local sidecar=""
-    while true; do
-        sidecar="$(find "$RECORDINGS_DIR" -type f -name '*_meta.json' -newer "$meeting_marker" -print 2>/dev/null | head -1)"
-        [ -n "$sidecar" ] && break
-        [ "$(date +%s)" -lt "$deadline" ] || fail "$label: no *_meta.json appeared in $RECORDINGS_DIR within ${RECORD_ONLY_DEADLINE_S}s"
-        sleep 2
-    done
-
-    log "$label: found sidecar $sidecar"
-    jq -C . "$sidecar" | sed 's/^/    /'
+    log "$label: simulator done"
+    local sidecar
+    await_new_sidecar "$label" "$meeting_marker"
+    sidecar="$SIDECAR_PATH"
 
     # Schema check in one jq invocation — emits "ok" or a human-readable reason.
     local schema_check
