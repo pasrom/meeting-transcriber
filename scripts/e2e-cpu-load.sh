@@ -78,6 +78,10 @@ DEFAULT_FIXTURE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav
 # shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 REC_DIR="$HOME/Library/Application Support/MeetingTranscriber/recordings"
+# Session A runs record-only, which writes its WAVs and sidecar to
+# `<effectiveOutputDir>/recordings`, by default under Downloads, not to the
+# staging dir above (same distinction as in e2e-soak.sh).
+RECORD_ONLY_DIR="$HOME/Downloads/MeetingTranscriber/recordings"
 # shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_BASE="http://127.0.0.1:9876"
 # shellcheck source=lib/bundle-ids.sh
@@ -243,6 +247,7 @@ on_exit() {
         # run's app doesn't crash-recover a stale temp into a garbage job (the
         # rationale + the CI guard live in sweep_run_artifacts).
         sweep_run_artifacts "$REC_DIR" "$RUN_START_MARKER"
+        sweep_run_artifacts "$RECORD_ONLY_DIR" "$RUN_START_MARKER"
     fi
     rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
 }
