@@ -23,15 +23,19 @@ enum DiagnosticExporter {
     /// despite not being formally `Sendable`.
     nonisolated(unsafe) private static let formatter = ISO8601DateFormatter()
 
-    /// Cached `DateFormatter` for syslog-style line prefixes (`MMM d HH:mm:ss`).
-    /// Reused for every line in `exportFromFile`'s filter loop — at thousands
-    /// of lines the per-call allocation cost matters. Locale-pinned to
-    /// `en_US_POSIX` so output of `log stream` is parsed consistently.
-    private static let syslogFormatter: DateFormatter = {
+    /// Length of the timestamp `log stream --style syslog` puts at the start of
+    /// every entry: `2026-11-09 08:00:00.530686+0100`.
+    private static let lineStampLength = 31
+
+    /// Cached `DateFormatter` for that prefix. Reused for every line in
+    /// `exportFromFile`'s filter loop: at thousands of lines the per-call
+    /// allocation cost matters. Locale-pinned to `en_US_POSIX` so the fixed
+    /// format parses the same under any user locale; the offset is in the
+    /// line, so no time zone is assumed.
+    private static let lineStampFormatter: DateFormatter = {
         let fmt = DateFormatter()
-        fmt.dateFormat = "MMM d HH:mm:ss"
+        fmt.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZ"
         fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = TimeZone.current
         return fmt
     }()
 
@@ -69,9 +73,10 @@ enum DiagnosticExporter {
     }
 
     /// Reads the last `windowSeconds` of unified-log entries for our subsystems
-    /// and writes them to `outputURL`. Returns the number of log entries
-    /// written (excluding the header). Prefers the persistent file source
-    /// when available, falls back to `OSLogStore`.
+    /// and writes them to `outputURL`. Returns the number of body lines
+    /// written (excluding the header): for the file source that counts the
+    /// continuation lines of a multi-line entry too. Prefers the persistent
+    /// file source when available, falls back to `OSLogStore`.
     @available(macOS 12, *)
     static func export(
         to outputURL: URL,
@@ -113,14 +118,19 @@ enum DiagnosticExporter {
         // streamed log output and dropping them changes the file shape.
         // Empty source short-circuits to no body lines (split would otherwise
         // return [""] for the empty string).
+        //
+        // Only a line that starts an entry carries a timestamp. Lines without
+        // one (continuation lines of a multi-line message, blanks) belong to
+        // the entry before them and share its fate; anything before the first
+        // entry is prelude and is kept.
+        var keepingEntry = true
         let kept: [Substring] = raw.isEmpty
             ? []
             : raw.split(separator: "\n", omittingEmptySubsequences: false).filter { line in
-                // Lines without a parseable syslog timestamp (continuation lines,
-                // prelude noise, blanks) are kept — only filter when we can
-                // identify them as definitely older than the cutoff.
-                guard let lineDate = parseSyslogDate(String(line)) else { return true }
-                return lineDate >= cutoff
+                if let lineDate = parseLineDate(line) {
+                    keepingEntry = lineDate >= cutoff
+                }
+                return keepingEntry
             }
         let body = kept.joined(separator: "\n")
         try (header + "\n" + body).write(to: outputURL, atomically: true, encoding: .utf8)
@@ -156,31 +166,16 @@ enum DiagnosticExporter {
         return count
     }
 
-    /// Parses `syslog` style line prefix `Mmm d HH:mm:ss` (15 chars) to a
-    /// `Date`. Returns nil for lines without that prefix (e.g. multi-line
-    /// continuations). Uses the cached `syslogFormatter` — avoids per-call
-    /// DateFormatter allocation when filtering thousands of lines.
-    ///
-    /// Year inference: syslog format omits the year. Default to the current
-    /// year, but if the resulting date is more than ~30 days in the future
-    /// relative to `now`, we're likely parsing a December log on a January
-    /// day — in that case roll back one year.
-    static func parseSyslogDate(_ line: String, now: Date = Date()) -> Date? {
-        guard line.count >= 15 else { return nil }
-        let prefix = String(line.prefix(15))
-        guard let parsed = syslogFormatter.date(from: prefix) else { return nil }
-        var components = Calendar.current.dateComponents(
-            [.month, .day, .hour, .minute, .second], from: parsed,
-        )
-        let nowYear = Calendar.current.component(.year, from: now)
-        components.year = nowYear
-        guard let candidate = Calendar.current.date(from: components) else { return nil }
-        // If the candidate is far in the future, the log line is from the
-        // previous year (year-boundary export, e.g. Jan 1 reading Dec 31).
-        if candidate.timeIntervalSince(now) > 30 * 86400 {
-            components.year = nowYear - 1
-            return Calendar.current.date(from: components)
-        }
-        return candidate
+    /// Parses the timestamp that starts an entry in the persistent diagnostic
+    /// log (`yyyy-MM-dd HH:mm:ss.SSSSSS+ZZZZ`, the `log stream --style syslog`
+    /// shape). Returns nil for lines without it, such as the continuation
+    /// lines of a multi-line message.
+    static func parseLineDate(_ line: some StringProtocol) -> Date? {
+        // An entry starts with a digit; this skips the formatter for the
+        // common non-entry lines without building a prefix string.
+        guard let first = line.first, first.isASCII, first.isNumber else { return nil }
+        let prefix = line.prefix(lineStampLength)
+        guard prefix.count == lineStampLength else { return nil }
+        return lineStampFormatter.date(from: String(prefix))
     }
 }
