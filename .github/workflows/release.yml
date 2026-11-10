@@ -92,7 +92,7 @@ jobs:
             build-flags: ""
             dmg-prefix: "MeetingTranscriber"
           - variant: appstore
-            build-flags: "--appstore --no-notarize"
+            build-flags: "--appstore"
             dmg-prefix: "MeetingTranscriber-AppStore"
     name: build (${{ matrix.variant }})
     permissions:

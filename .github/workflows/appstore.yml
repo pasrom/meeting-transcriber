@@ -86,9 +86,10 @@ jobs:
           cache-restore-fallback: "false"
           cache-models: "false"
 
-      # `--no-notarize` keeps the signing path on the ad-hoc fallback so we
-      # don't need a Developer ID secret for a smoke run. `build_release.sh`
-      # detects an empty DEVELOPER_ID and falls back automatically.
+      # `--no-notarize` keeps the signing path off Developer ID so we don't
+      # need that secret for a smoke run: `build_release.sh` then signs with
+      # the first codesigning identity the keychain offers, or ad hoc when
+      # there is none.
       - name: Build App Store variant
         run: ./scripts/build_release.sh --appstore --no-notarize
 

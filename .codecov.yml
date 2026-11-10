@@ -57,8 +57,9 @@ flags:
   # AudioTapLib SPM library uploaded by the audiotap CI step. Lives in
   # its own flag because the test suite is in `tools/audiotap/Tests/`,
   # not the app's xctest bundle. Same library binary regardless of the
-  # homebrew/appstore variant, so we upload it once (homebrew leg only)
-  # and rely on `carryforward` for non-CI events.
+  # homebrew/appstore variant, so we upload it once (from the separate
+  # `audiotap-coverage` job in ci.yml) and rely on `carryforward` for non-CI
+  # events.
   audiotap:
     paths:
       - tools/audiotap/Sources/
