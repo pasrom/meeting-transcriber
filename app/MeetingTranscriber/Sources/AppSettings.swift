@@ -314,11 +314,10 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(silentTrackWatchdogEnabled, forKey: "silentTrackWatchdogEnabled") }
     }
 
-    /// PoC: when on, mic-channel audio is also fed to a live `StreamingTranscriber`
-    /// during recording. Partial / finalised captions are logged via os_log on
-    /// subsystem `com.meetingtranscriber`, category `LiveTranscription` — no
-    /// caption-bar UI yet. Only effective when the active engine is Parakeet;
-    /// other engines silently no-op. Default: off.
+    /// PoC: when on, recording audio is also fed to a live caption pipeline,
+    /// shown in the caption overlay. Which backend runs is `LiveCaptionsGate`'s
+    /// decision from the engine's configured language; both engines support it.
+    /// Default: off.
     var liveTranscriptionEnabled: Bool {
         didSet { defaults.set(liveTranscriptionEnabled, forKey: "liveTranscriptionEnabled") }
     }

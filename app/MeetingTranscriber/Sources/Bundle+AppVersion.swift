@@ -2,7 +2,7 @@ import Foundation
 
 extension Bundle {
     /// `CFBundleShortVersionString` from `Info.plist`, or `"?"` if missing.
-    /// Surfaced in Settings → Advanced → About and stamped into diagnostic
+    /// Surfaced in Settings → About and stamped into diagnostic
     /// log exports for support context.
     var appVersion: String {
         infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -16,7 +16,7 @@ extension Bundle {
 
     /// The bundle identifier, or `"?"` outside an app bundle (`swift test`).
     ///
-    /// Surfaced in Settings → Advanced → About because the identifier decides
+    /// Surfaced in Settings → About because the identifier decides
     /// which settings domain, TCC grants and notification registration the
     /// running app actually uses — so "which build am I looking at" is not
     /// answerable from the version alone, and a release/dev mix-up otherwise

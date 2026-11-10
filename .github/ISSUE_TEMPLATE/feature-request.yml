@@ -20,7 +20,7 @@ body:
     id: app-version
     attributes:
       label: App version
-      description: From Settings → Advanced → About. If you have not installed it yet, write "not installed".
+      description: From Settings → About. If you have not installed it yet, write "not installed".
       placeholder: "1.2.3 (abcdef) · Homebrew"
     validations:
       required: true

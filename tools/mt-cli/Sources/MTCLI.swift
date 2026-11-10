@@ -383,7 +383,7 @@ struct UIPress: AsyncParsableCommand {
 
 struct Screenshot: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Save a PNG of the app's frontmost window.",
+        abstract: "Save a PNG of the app's largest visible window (Settings only).",
     )
 
     @Argument(help: "Output PNG path. Defaults to ./screenshot.png.")

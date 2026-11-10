@@ -46,9 +46,15 @@ The app writes a 64-hex bearer token to
 | ------------------- | ------------------- | ---------------------------------- |
 | `GET /healthz`      | `mt-cli healthz`    | "ok"                               |
 | `GET /state`        | `mt-cli state`      | Pipeline + speaker DB JSON         |
-| `GET /screenshot`   | `mt-cli screenshot` | PNG of frontmost window            |
+| `GET /screenshot`   | `mt-cli screenshot` | PNG of the largest visible app window (Settings only) |
 | `GET /ui/tree`      | `mt-cli ui-tree`    | Accessibility tree JSON (allowlisted windows) |
 | `POST /ui/press`    | `mt-cli ui-press`   | Press a control by identifier (allowlisted windows); assert via `state` |
+| `POST /ui/type`     | (curl)              | Type text into an allowlisted plain text field; assert via `state` |
+| `POST /action/openSettings` / `closeSettings` | `mt-cli open-settings` / `close-settings` | Show or hide the Settings window |
+| `POST /action/confirmBrowserConsent` | `mt-cli confirm-browser-consent` | Answer a parked browser-meeting consent prompt |
+| `POST /action/skipNaming` | (curl)         | Skip every pending speaker-naming job |
+| `POST /action/enqueueFile` / `enqueueFiles` | (curl) | Enqueue recorded file(s) into the pipeline |
+| `POST /action/seedSpeaker` / `renameSpeaker` / `deleteSpeaker` / `mergeSpeakers` | `mt-cli seed-speaker` / `rename-speaker` / `delete-speaker` / `merge-speakers` | Edit the speaker database |
 | `GET /v1/watch`     | `mt-cli watch`      | Whether the app is watching for meetings (`WatchStatusDTO`) |
 | `POST /v1/watch`    | `mt-cli watch start\|stop\|toggle` | Control watching; returns the resulting `WatchStatusDTO` |
 | `GET /v1/record`    | `mt-cli record`     | Whether a microphone-only recording is running (`RecordStatusDTO`) |

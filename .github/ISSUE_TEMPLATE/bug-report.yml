@@ -24,7 +24,7 @@ body:
     id: app-version
     attributes:
       label: App version
-      description: From Settings → Advanced → About
+      description: From Settings → About
       placeholder: "1.2.3 (abcdef) · Homebrew"
     validations:
       required: true

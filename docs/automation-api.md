@@ -43,8 +43,10 @@ Two layers of defense, both enforced on every request:
    header (other than the literal `null`) is rejected with `403`, which blocks
    CSRF and DNS-rebinding from a page running locally. The `Host` header, when
    present, must be `127.0.0.1` or `localhost` (with or without the port), else
-   `403`. `curl` and native CLIs send neither header, so they pass; browsers do,
-   so they are kept out.
+   `403`. The match is exact and case-sensitive (`Host: LOCALHOST:9876` is
+   refused). `curl` and native CLIs send no `Origin` and a `Host` naming the
+   loopback address they connect to, so they pass; a browser page sends an
+   `Origin`, so it is kept out.
 
 Read the token into a shell variable for the examples below:
 
@@ -401,7 +403,6 @@ Scope and limits:
     "id": "7f4d3a2b1c0e4f5a8b9c6d7e8f0a1b2c",
     "url": "https://app.notion.com/p/7f4d3a2b1c0e4f5a8b9c6d7e8f0a1b2c"
   },
-  "error": null,
   "warnings": [],
   "echo": {
     "detected": true,
@@ -420,7 +421,7 @@ Scope and limits:
   `error`; a user retry can move an `error` job back to `waiting` under the same
   id (see `GET /v1/jobs/<id>` above).
 - `transcriptPath` / `protocolPath`: absolute paths, present once produced
-  (`protocolPath` stays `null` when protocol generation is disabled or skipped).
+  (`protocolPath` stays absent when protocol generation is disabled or skipped).
 - `export`: absent when no export was attempted, including export switched on but
   not configured, which `warnings` explains. `destination` is `notion`. `status` is
   `in_progress`, `failed` or `completed`. `id` appears as soon as the page exists, so
@@ -440,8 +441,9 @@ Scope and limits:
   completed job restored with `in_progress` status is changed to `failed`, with a
   warning saying the app quit during the export. The status and warning in this
   response are updated when retry succeeds. With **Skip local markdown** on, a
-  successful retry removes the backup and `protocolPath` becomes `null`.
-- `error`: a message string when `state == "error"`, else `null`.
+  successful retry removes the backup and `protocolPath` is then absent.
+- `error`: a message string when `state == "error"`, else absent. Like every
+  optional job field, a field without a value is omitted rather than sent as `null`.
 - `warnings`: zero or more non-fatal warning strings (for example a partial
   diarization failure on one track).
 - `echo`: the echo-bleed verdict, see below. Absent for a single-source job and
@@ -742,9 +744,11 @@ side.
   next launch keys on artefacts an app-audio tap leaves behind, and a
   microphone-only recording leaves none. Known limitation, not a regression.
 - **`mt-cli` covers inspection plus watch and record control.** The bundled
-  `tools/mt-cli` client wraps the debug endpoints (`state`, `healthz`,
-  `screenshot`, `open-settings`, `close-settings`) plus `mt-cli watch` and
-  `mt-cli record`; an `mt-cli transcribe` front for the job endpoints is a
+  `tools/mt-cli` client wraps debug endpoints (`state`, `healthz`,
+  `screenshot`, `ui-tree`, `ui-press`, `open-settings`, `close-settings`,
+  `confirm-browser-consent`, and the speaker actions `seed-speaker`,
+  `rename-speaker`, `delete-speaker`, `merge-speakers`), an offline
+  `wav-verdict` check, plus `mt-cli watch` and `mt-cli record`; an `mt-cli transcribe` front for the job endpoints is a
   planned follow-up. For now drive the rest of `/v1` with `curl` or any HTTP
   client.
 

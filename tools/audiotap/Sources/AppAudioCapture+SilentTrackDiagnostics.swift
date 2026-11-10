@@ -12,7 +12,7 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// convention is that per-buffer forensics are gated and that one triage line
 /// per recording is not: the existing `App audio tap: N PID(s)` line is
 /// unconditional precisely so a silent-track report can be triaged without the
-/// user having turned Verbose Audio Logging on beforehand, which they cannot do
+/// user having turned Verbose Diagnostic Logging on beforehand, which they cannot do
 /// retroactively. A run of exact zeros is that same kind of event, and it is
 /// bounded: two lines per process at start and stop, plus at most
 /// `SilentTrackObserver.maxEdgesPerRecording` edges, plus one reading for a
