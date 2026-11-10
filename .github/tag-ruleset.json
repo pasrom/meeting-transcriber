@@ -20,6 +20,7 @@
           { "context": "test (appstore)" },
           { "context": "test (tsan)" },
           { "context": "test (asan)" },
+          { "context": "sanitizer-gate" },
           { "context": "quality-baseline" },
           { "context": "e2e" },
           { "context": "e2e-app" }
