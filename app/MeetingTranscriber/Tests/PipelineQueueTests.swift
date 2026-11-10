@@ -3804,6 +3804,31 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(finalState, .done, "Confirmed naming should end as .done")
     }
 
+    /// A job that runs a second time keeps its stem, so the 16 kHz copy of the
+    /// first run is already where this run's copy goes. A plain move fails on
+    /// an existing destination and the failure was discarded, so the first
+    /// run's audio stayed beside this run's transcript segments.
+    func testASecondRunReplacesThe16kAudioOfTheFirst() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let (pQueue, _) = makeMockProcessingQueue(engine: engine)
+        let job = try PipelineJob(
+            meetingTitle: "Second Run", appName: "Teams",
+            mixPath: createTestAudioFile(in: tmpDir), appPath: nil, micPath: nil, micDelay: 0,
+        )
+        let recordings = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+        let slug = PipelineQueue.namingSlug(title: job.meetingTitle, jobID: job.id, startTime: job.artifactStartTime)
+        let stale = recordings.appendingPathComponent("\(slug)_16k.wav")
+        try Data("first run".utf8).write(to: stale)
+
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+
+        XCTAssertEqual(pQueue.jobs.first?.namingSlug, slug, "test premise: the run used the stem")
+        XCTAssertNotEqual(try Data(contentsOf: stale), Data("first run".utf8), "the first run's audio was kept")
+    }
+
     func testPipelineAutoSkipsNamingForHeadlessJob() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [
