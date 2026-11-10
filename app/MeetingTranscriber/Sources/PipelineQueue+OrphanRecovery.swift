@@ -22,22 +22,30 @@ extension PipelineQueue {
         recordingsDir: URL,
         maxAge: TimeInterval = 86400,
     ) async {
+        await adoptOrphanedRecordings(scanForOrphanedRecordings(recordingsDir: recordingsDir, maxAge: maxAge))
+    }
+
+    /// The recordings in `recordingsDir` that no job of this queue, no run in
+    /// this process and no ledger entry accounts for, as of the call.
+    func scanForOrphanedRecordings(
+        recordingsDir: URL,
+        maxAge: TimeInterval = 86400,
+    ) async -> [PairedRecordingResolver.Group] {
         // One-time migration: seed processed list with existing recordings
         // Only for the default recordings directory (not test overrides)
         if recordingsDir == AppPaths.recordingsDir {
             await processedLedger.migrate(recordingsDir: recordingsDir)
         }
 
-        // Both reads happen here, on the main actor, before the detached hop:
-        // the registry is main-actor isolated, and reading it from inside the
-        // detached task would be a different question anyway, asked later.
-        let trackedPaths = Set(jobs.compactMap { $0.mixPath?.standardizedFileURL.path })
-        let runningPaths = inFlightRuns.claimedAudioPaths
+        // Read here, on the main actor, before the detached hop: the registry
+        // is main-actor isolated, and reading it from inside the detached task
+        // would be a different question anyway, asked later.
+        let accountedFor = accountedForMixPaths()
         let ledger = processedLedger
 
         // Off-main: directory scan + processed-list read + per-file
         // attributesOfItem probes + filtering all happen here.
-        let candidates: [PairedRecordingResolver.Group] = await Task.detached(priority: .utility) {
+        return await Task.detached(priority: .utility) {
             let fm = FileManager.default
             guard let entries = try? fm.contentsOfDirectory(
                 at: recordingsDir,
@@ -50,8 +58,7 @@ extension PipelineQueue {
                 // aren't recoverable from the dir scan alone.
                 guard let mixURL = group.mix else { return false }
                 let stdPath = mixURL.standardizedFileURL.path
-                guard !trackedPaths.contains(stdPath) else { return false }
-                guard !runningPaths.contains(stdPath) else { return false }
+                guard !accountedFor.contains(stdPath) else { return false }
                 guard !processedPaths.contains(stdPath) else { return false }
                 let attrs = try? fm.attributesOfItem(atPath: mixURL.path)
                 if let created = attrs?[.creationDate] as? Date,
@@ -65,6 +72,26 @@ extension PipelineQueue {
                 return true
             }
         }.value
+    }
+
+    /// The mix paths a job of this queue or a run in this process already has,
+    /// which the scan skips and the adoption checks again.
+    private func accountedForMixPaths() -> Set<String> {
+        Set(jobs.compactMap { $0.mixPath?.standardizedFileURL.path }).union(inFlightRuns.claimedAudioPaths)
+    }
+
+    /// Give each scanned orphan a job of its own.
+    func adoptOrphanedRecordings(_ scanned: [PairedRecordingResolver.Group]) {
+        // Asked again, because the scan was out on another task: a recording
+        // the watch loop enqueued, or another queue started, meanwhile was in
+        // neither set the scan checked, and a second job for it would end in
+        // an error. One cancelled meanwhile has left the list, but its cancel
+        // is in the ledger. The ledger read is on the main actor, so it is
+        // skipped when the scan found nothing, the usual answer.
+        let accountedFor = scanned.isEmpty ? [] : accountedForMixPaths().union(processedLedger.load())
+        let candidates = scanned.filter { group in
+            group.mix.map { !accountedFor.contains($0.standardizedFileURL.path) } ?? false
+        }
 
         // Left in staging for the active queue's next recovery: the one its
         // build ran, or after a folder-change rebuild (which runs none), the
