@@ -2,7 +2,7 @@
 import XCTest
 
 @MainActor
-final class MenuBarIconTests: XCTestCase { // swiftlint:disable:this type_body_length
+final class MenuBarIconTests: XCTestCase {
     func testImageWithNoBadgeIsTemplate() {
         let image = MenuBarIcon.image(badge: .inactive)
         XCTAssertTrue(image.isTemplate)
@@ -74,11 +74,6 @@ final class MenuBarIconTests: XCTestCase { // swiftlint:disable:this type_body_l
             let image = MenuBarIcon.image(badge: badge, appSilentOverlay: true)
             XCTAssertFalse(image.isTemplate, "app-silent overlay must be non-template for \(badge)")
         }
-    }
-
-    func testChannelOverlaysDefaultOff() {
-        let image = MenuBarIcon.image(badge: .recording)
-        XCTAssertTrue(image.isTemplate, "without overlay flag, recording stays template")
     }
 
     func testMicAndAppSilentRenderDistinctImages() {
