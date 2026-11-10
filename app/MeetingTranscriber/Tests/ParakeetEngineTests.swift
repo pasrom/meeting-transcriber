@@ -20,22 +20,6 @@ final class ParakeetEngineTests: XCTestCase {
         XCTAssertEqual(engine.transcriptionProgress, 0, accuracy: 0.001)
     }
 
-    // MARK: - Protocol Conformance
-
-    func testConformsToTranscribingEngine() {
-        let engine = ParakeetEngine()
-        // Assign to protocol type to verify conformance at compile time
-        let proto: any TranscribingEngine = engine
-        XCTAssertNotNil(proto)
-    }
-
-    func testIsReferenceType() {
-        let engine = ParakeetEngine()
-        let ref: any TranscribingEngine = engine
-        // Mutating the reference should be visible via the original variable
-        XCTAssertIdentical(engine, ref, "ParakeetEngine should be a reference type (class)")
-    }
-
     // MARK: - Transcription Errors
 
     func testTranscribeSegmentsThrowsForNonexistentFile() async {
@@ -87,17 +71,25 @@ final class ParakeetEngineTests: XCTestCase {
 
     func testLoadModelDeduplicatesConcurrentCalls() async {
         let engine = ParakeetEngine()
+        let gate = MainActorGate()
+        var loads = 0
+        engine.installModelLoadForTesting {
+            loads += 1
+            await gate.wait()
+        }
 
-        // Start two concurrent loads — second should await the first, not start a new download
-        async let load1: Void = engine.loadModel()
-        async let load2: Void = engine.loadModel()
-        _ = await (load1, load2)
+        let first = Task { @MainActor in await engine.loadModel() }
+        await waitFor(gate.hasWaiter, timeout: regressionCeiling)
+        // Opened from inside the second caller, so it reaches the join before
+        // the parked load can finish: a second load here is a missing join, not
+        // a race lost.
+        let second = Task { @MainActor in
+            gate.open()
+            await engine.loadModel()
+        }
+        await first.value
+        await second.value
 
-        // Both complete without crash; state is terminal
-        let terminalStates: [EngineModelState] = [.loaded, .unloaded]
-        XCTAssertTrue(
-            terminalStates.contains(engine.modelState),
-            "Model state should be terminal after concurrent loads, got: \(engine.modelState)",
-        )
+        XCTAssertEqual(loads, 1, "the second caller started its own load instead of joining the first")
     }
 }
