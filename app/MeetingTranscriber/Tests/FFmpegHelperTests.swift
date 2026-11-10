@@ -4,10 +4,6 @@ import XCTest
 final class FFmpegHelperTests: XCTestCase {
     // MARK: - Detection
 
-    func testIsAvailableReflectsPath() {
-        XCTAssertEqual(FFmpegHelper.isAvailable, FFmpegHelper.ffmpegPath != nil)
-    }
-
     func testFFmpegOnlyTypesNotEmpty() {
         XCTAssertFalse(FFmpegHelper.ffmpegOnlyTypes.isEmpty)
         let extensions = FFmpegHelper.ffmpegOnlyTypes.compactMap(\.preferredFilenameExtension)

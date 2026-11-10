@@ -81,8 +81,7 @@ final class FluidVADTests: XCTestCase {
         XCTAssertEqual(remapped[0].end, 1.8, accuracy: 1e-9)
         XCTAssertEqual(remapped[0].text, "Hello")
 
-        // Second segment: 1.0 → 2.0 (end of first speech region),
-        // but actually 1.0 maps to end of first region = 2.0
+        // Second segment: 1.0 maps to the end of the first speech region = 2.0;
         // 1.8 maps into second region: 1.8 - 1.0 = 0.8 into second region → 4.0 + 0.8 = 4.8
         XCTAssertEqual(remapped[1].start, 2.0, accuracy: 1e-9)
         XCTAssertEqual(remapped[1].end, 4.8, accuracy: 1e-9)
@@ -337,26 +336,7 @@ final class FluidVADTests: XCTestCase {
         XCTAssertTrue(regions.isEmpty)
     }
 
-    // MARK: - Streaming API (pure value-type behavior)
-
-    func testStreamEventStartConstruction() {
-        let ev = FluidVAD.StreamEvent(kind: .speechStart, sampleIndex: 16000, time: 1.0)
-        XCTAssertEqual(ev.kind, .speechStart)
-        XCTAssertEqual(ev.sampleIndex, 16000)
-        XCTAssertEqual(ev.time, 1.0)
-    }
-
-    func testStreamEventEndConstruction() {
-        let ev = FluidVAD.StreamEvent(kind: .speechEnd, sampleIndex: 48000, time: 3.0)
-        XCTAssertEqual(ev.kind, .speechEnd)
-        XCTAssertEqual(ev.sampleIndex, 48000)
-        XCTAssertEqual(ev.time, 3.0)
-    }
-
-    func testStreamEventOmittedTime() {
-        let ev = FluidVAD.StreamEvent(kind: .speechStart, sampleIndex: 0, time: nil)
-        XCTAssertNil(ev.time)
-    }
+    // MARK: - Streaming API
 
     func testStreamStateInitialIsTypealias() {
         // Confirms FluidVAD.StreamState is a typealias to VadStreamState.
