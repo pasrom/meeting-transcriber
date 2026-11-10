@@ -123,7 +123,8 @@ final class LiveCaptionFeedTests: XCTestCase {
     func testFeedKeepsFixtureBurstForSmallAndLargeBuffers() async {
         // 176 × 4530 and 1360 × 587 cover the 49.8 s fixture at 16 kHz with two buffer shapes.
         for (sampleCount, bufferCount) in [(176, 4530), (1360, 587)] {
-            let feed = CaptionChannelFeed()
+            // The fixture arrives much faster than real time; keep its lossless contract.
+            let feed = CaptionChannelFeed(maxQueuedSeconds: 60)
             let pipeline = RecordingCaptionPipeline()
             await feed.bind(to: pipeline)
             feed.sink(buffer(value: 0, sampleCount: sampleCount))
@@ -144,7 +145,7 @@ final class LiveCaptionFeedTests: XCTestCase {
 
     func testDurationOverflowResetsBeforeNewestAudioAndReportsBacklog() async {
         for sampleCount in [176, 1360] {
-            let feed = CaptionChannelFeed()
+            let feed = CaptionChannelFeed(maxQueuedSeconds: 60)
             let pipeline = RecordingCaptionPipeline()
             await feed.bind(to: pipeline)
             feed.sink(buffer(value: 0, sampleCount: sampleCount))
@@ -171,6 +172,29 @@ final class LiveCaptionFeedTests: XCTestCase {
             let backlog = await pipeline.peakBacklogSeconds
             XCTAssertGreaterThanOrEqual(backlog, 59)
         }
+    }
+
+    func testFeedDropsOldestOnOverflowWithOneResetAndCountsDrops() async {
+        let feed = CaptionChannelFeed(maxQueuedSeconds: 5)
+        let pipeline = RecordingCaptionPipeline()
+        await feed.bind(to: pipeline)
+        feed.sink(buffer(value: 0, sampleCount: 16000))
+        await pipeline.waitUntilBlocked()
+
+        // A 0.5 s first buffer makes the count seconds, not buffers.
+        feed.sink(buffer(value: 1, sampleCount: 8000))
+        for i in 2 ... 7 {
+            feed.sink(buffer(value: Float(i), sampleCount: 16000))
+        }
+        await pipeline.release()
+        let drops = await feed.retire()
+
+        let events = await pipeline.events
+        XCTAssertEqual(events, [
+            .buffer(0), .reset,
+            .buffer(3), .buffer(4), .buffer(5), .buffer(6), .buffer(7),
+        ])
+        XCTAssertEqual(drops, CaptionQueueDrops(seconds: 1.5, gaps: 1))
     }
 
     // MARK: - 4. Feed rebinds for the next recording
@@ -231,6 +255,28 @@ final class LiveCaptionFeedTests: XCTestCase {
             after, before,
             "a dropped controller must stop its feed — no further buffers may reach the pipeline",
         )
+    }
+
+    /// The controller's default feed bound is what the app runs with: a
+    /// stall of more than 10 s drops the oldest audio instead of letting captions lag.
+    func testControllerDefaultBoundKeepsNewestTenSeconds() async {
+        let factory = ChannelMockFactory()
+        let controller = makeController(factory: factory)
+        await controller.prepare()
+
+        await factory.mic.setBlockNextProcess(true)
+        controller.micSink(buffer(value: 0))
+        await factory.mic.waitUntilBlocked()
+
+        for i in 1 ... 16 {
+            controller.micSink(buffer(value: Float(i), sampleCount: 16000))
+        }
+        await factory.mic.releaseProcess()
+        await controller.flush()
+
+        // Only the newest 10 s (7-16) survive the stall.
+        let appended = await factory.mic.appendedFirstSamples
+        XCTAssertEqual(appended, [0] + (7 ... 16).map(Float.init))
     }
 
     // MARK: - Helpers

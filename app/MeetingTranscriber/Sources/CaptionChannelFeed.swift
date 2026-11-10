@@ -8,6 +8,12 @@ final class CaptionChannelFeed {
     /// Normalization stays on the consumer; nil drops the buffer.
     typealias Transform = (LiveAudioBuffer) -> LiveAudioBuffer?
 
+    private let maxQueuedSeconds: TimeInterval
+
+    init(maxQueuedSeconds: TimeInterval) {
+        self.maxQueuedSeconds = maxQueuedSeconds
+    }
+
     private let slot = OSAllocatedUnfairLock<CaptionAudioQueue?>(initialState: nil)
     /// Lock-boxed for nonisolated deinit and retire-before-rebind ownership.
     private let consumerBox = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
@@ -38,7 +44,7 @@ final class CaptionChannelFeed {
         makeTransform: @escaping @Sendable () -> Transform = { \.self },
     ) async {
         await retire()
-        let queue = CaptionAudioQueue()
+        let queue = CaptionAudioQueue(capacitySeconds: maxQueuedSeconds)
         slot.withLock { $0 = queue }
         let consumer = Task.detached(priority: .userInitiated) {
             var transform = makeTransform()
@@ -57,23 +63,35 @@ final class CaptionChannelFeed {
     }
 
     /// Stop deliveries and take the old consumer before awaiting its drain.
-    func retire() async {
-        slot.withLock { queue in
-            queue?.finish()
-            queue = nil
+    /// Returns the audio the retired queue dropped on overflow, nil if none was bound.
+    @discardableResult
+    func retire() async -> CaptionQueueDrops? {
+        let drops = slot.withLock { queue -> CaptionQueueDrops? in
+            defer {
+                queue?.finish()
+                queue = nil
+            }
+            return queue?.drops
         }
         let retiring = consumerBox.withLock { task -> Task<Void, Never>? in
             defer { task = nil }
             return task
         }
         if let retiring { await retiring.value }
+        return drops
     }
+}
+
+/// Audio a caption queue discarded on overflow, which never reaches the pipeline.
+struct CaptionQueueDrops: Equatable {
+    var seconds: TimeInterval = 0
+    /// Discontinuities opened, each one pipeline reset.
+    var gaps = 0
 }
 
 /// Stores buffer references without copying samples on the capture callback.
 private final class CaptionAudioQueue: Sendable {
-    // Must hold the whole 49.8 s E2E fixture burst losslessly; see testFeedKeepsFixtureBurstForSmallAndLargeBuffers.
-    private static let capacitySeconds: TimeInterval = 60
+    private let capacitySeconds: TimeInterval
 
     private final class Node {
         let buffer: LiveAudioBuffer
@@ -98,6 +116,7 @@ private final class CaptionAudioQueue: Sendable {
         var queuedSeconds: TimeInterval = 0
         var discontinuity = false
         var finished = false
+        var drops = CaptionQueueDrops()
 
         mutating func removeFirst() -> Node? {
             guard let first = head else { return nil }
@@ -115,7 +134,8 @@ private final class CaptionAudioQueue: Sendable {
     let wakeups: AsyncStream<Void>
     private let storage: OSAllocatedUnfairLock<State>
 
-    init() {
+    init(capacitySeconds: TimeInterval) {
+        self.capacitySeconds = capacitySeconds
         let (stream, continuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         wakeups = stream
         // Nodes stay confined to this lock.
@@ -133,6 +153,10 @@ private final class CaptionAudioQueue: Sendable {
         storage.withLock { $0.queuedSeconds }
     }
 
+    var drops: CaptionQueueDrops {
+        storage.withLock { $0.drops }
+    }
+
     func push(_ buffer: LiveAudioBuffer) {
         guard !buffer.samples.isEmpty, buffer.sampleRate > 0, buffer.channelCount > 0 else { return }
         let duration = Double(buffer.samples.count) / Double(buffer.channelCount) / Double(buffer.sampleRate)
@@ -142,8 +166,11 @@ private final class CaptionAudioQueue: Sendable {
             if let tail = state.tail { tail.next = node } else { state.head = node }
             state.tail = node
             state.queuedSeconds += duration
-            while state.queuedSeconds > Self.capacitySeconds {
-                _ = state.removeFirst()
+            if state.queuedSeconds > capacitySeconds {
+                if !state.discontinuity { state.drops.gaps += 1 }
+                while state.queuedSeconds > capacitySeconds, let dropped = state.removeFirst() {
+                    state.drops.seconds += dropped.duration
+                }
                 state.discontinuity = true
             }
             state.continuation.yield(())
