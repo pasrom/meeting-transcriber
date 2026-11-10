@@ -61,7 +61,7 @@ let picker = try view.inspect()
 try picker.select(value: LiveCaptionsSize.small)
 ```
 
-Measured under the pinned ViewInspector 0.10.3, and pinned by
+Measured under the pinned ViewInspector 0.10.5, and pinned by
 `ViewInspectorIdentifierTests`: a `Picker` and a `Stepper` each carrying an
 identifier are found and driven, and an unknown identifier throws, so the lookup
 is not matching whatever it is handed. The label and document-order locators still in `SettingsInteractionTests` work, and they are not the shape to copy. `find(text:)` for a bare

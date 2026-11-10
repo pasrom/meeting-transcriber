@@ -2,7 +2,7 @@
 
 What the audio-capture path logs, verbose and unconditional, and how to read it.
 
-`AppSettings.verboseDiagnostics` (Settings → Diagnostics → "Verbose Audio Logging"; renamed from the legacy `audioDebugLogging` key, which is migrated on read) enables forensic logging in the audio-capture path:
+`AppSettings.verboseDiagnostics` (Settings → Advanced → Diagnostics → "Verbose Diagnostic Logging"; renamed from the legacy `audioDebugLogging` key, which is migrated on read) enables forensic logging in the audio-capture path:
 
 - `[debug] Tap target: pid=… exe=… bundle=… audioObjectID=…` at start
 - `[debug] Default output device: name=… uid=… transport=… rate=…` at start and on device change

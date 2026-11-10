@@ -3,7 +3,6 @@ import os.log
 import Security
 
 /// macOS Keychain-based secret storage using Security.framework.
-/// Same API surface as the previous file-based implementation.
 enum KeychainHelper {
     private static let service = AppPaths.logSubsystem
     private static let logger = Logger(subsystem: AppPaths.logSubsystem, category: "KeychainHelper")
