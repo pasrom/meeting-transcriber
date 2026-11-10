@@ -128,4 +128,23 @@ final class TerminologyNormalizerTests: XCTestCase {
         XCTAssertTrue(normalizer.isEmpty)
         XCTAssertEqual(normalizer.diagnostics.ignoredLineCount, 1)
     }
+
+    /// Normalising a segment list rewrites the text and nothing else. A
+    /// memberwise rebuild would reset `suppressed`, and the loudspeaker copies
+    /// that echo de-duplication had marked would be back in the transcript.
+    func testNormalizingSegmentsKeepsEveryOtherField() {
+        let normalizer = TerminologyNormalizer(rulesText: "Aster => Astor")
+        let segments = [
+            TimestampedSegment(start: 1, end: 2, text: "Astor speaks", speaker: "M_1", suppressed: true),
+            TimestampedSegment(start: 3, end: 4, text: "Astor again", speaker: "R_1"),
+        ]
+
+        let normalized = normalizer.normalize(segments)
+
+        XCTAssertEqual(normalized.map(\.text), ["Aster speaks", "Aster again"])
+        XCTAssertEqual(normalized.map(\.suppressed), [true, false])
+        XCTAssertEqual(normalized.map(\.speaker), ["M_1", "R_1"])
+        XCTAssertEqual(normalized.map(\.start), [1, 3])
+        XCTAssertEqual(normalized.map(\.end), [2, 4])
+    }
 }
