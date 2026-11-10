@@ -65,9 +65,9 @@ jobs:
       # workspace; the action otherwise hits the GitHub API for the file
       # list but still needs the filter definition locally.
       - if: github.event_name == 'pull_request'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
         id: filter
         with:
           # `every` is required for the exclusion-style filter in
@@ -98,7 +98,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # Three non-default inputs, each load-bearing. `ref`: the default
           # checkout for a pull_request event is refs/pull/N/merge, a merge commit
@@ -143,7 +143,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # Both linters are pinned to an exact release *and* an exact checksum,
       # rather than installed with `brew install`. Why: scripts/tool-versions.sh.
       # How: scripts/ci/install-lint-tool.sh. Verification is a separate step
@@ -192,7 +192,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install pinned SwiftLint
         run: bash scripts/ci/install-lint-tool.sh swiftlint
       - name: Verify pinned SwiftLint
@@ -282,7 +282,7 @@ jobs:
             swift-flags: "-Xswiftc -DAPPSTORE"
     name: test (${{ matrix.variant }})
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # 20 min covers SPM + ML cache restore plus the cold-cache pre-warm
       # download; well below the 25 min job timeout so a hung download
       # surfaces as a step failure, not a job-timeout.
@@ -332,7 +332,7 @@ jobs:
       # hold more of a dead shard than the 300 lines the step prints.
       - name: Keep the shard logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: test-shard-logs-${{ matrix.variant }}
           path: |
@@ -372,7 +372,7 @@ jobs:
       - name: Restore mt-cli build
         id: mt-cli-cache
         if: matrix.variant == 'homebrew'
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: tools/mt-cli/.build
           key: mt-cli-spm-${{ runner.os }}-${{ steps.setup.outputs.toolchain }}-${{ hashFiles('tools/mt-cli/Package.swift', 'tools/mt-cli/Package.resolved') }}-${{ hashFiles('tools/mt-cli/Sources/**', 'tools/mt-cli/Tests/**') }}
@@ -401,7 +401,7 @@ jobs:
           success() && matrix.variant == 'homebrew' &&
           github.ref == 'refs/heads/main' &&
           steps.mt-cli-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: tools/mt-cli/.build
           key: ${{ steps.mt-cli-cache.outputs.cache-primary-key }}
@@ -447,14 +447,14 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # No ML model dependencies — a plain SPM cache keyed off the
       # manifest is enough to drop cold-compile cost on repeat runs. Only
       # restored here; `Save audiotap build` at the end of the job saves it, on
       # `main` only.
       - name: Restore audiotap build
         id: audiotap-cache
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: tools/audiotap/.build
           key: audiotap-spm-${{ runner.os }}-${{ hashFiles('tools/audiotap/Package.swift') }}
@@ -478,7 +478,7 @@ jobs:
         if: >-
           success() && github.ref == 'refs/heads/main' &&
           steps.audiotap-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: tools/audiotap/.build
           key: ${{ steps.audiotap-cache.outputs.cache-primary-key }}

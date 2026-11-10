@@ -41,14 +41,14 @@ runs:
     # saved it.
     - name: Restore ffmpeg
       if: runner.environment == 'github-hosted' && github.ref != 'refs/heads/main'
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ steps.pin.outputs.dir }}
         key: ${{ steps.pin.outputs.key }}
 
     - name: Cache ffmpeg
       if: runner.environment == 'github-hosted' && github.ref == 'refs/heads/main'
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ steps.pin.outputs.dir }}
         key: ${{ steps.pin.outputs.key }}

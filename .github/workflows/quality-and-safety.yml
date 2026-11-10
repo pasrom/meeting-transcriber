@@ -283,7 +283,7 @@ jobs:
             echo "gate-name=sanitizer-gate" >> "$GITHUB_OUTPUT"
           fi
       - if: github.event_name == 'pull_request' && steps.kind.outputs.verdict == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # The merge commit and its two parents; see the job comment.
           fetch-depth: 2
@@ -405,7 +405,7 @@ jobs:
     outputs:
       tests-outcome: ${{ steps.tests.outcome }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/verify-xcode
       # Own step so its cold run (an unsanitized build plus about 1 GB of
       # model downloads, once per runner and dependency set) is bounded and
@@ -481,7 +481,7 @@ jobs:
     outputs:
       tests-outcome: ${{ steps.tests.outcome }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./.github/actions/verify-xcode
       # Own bounded step: see the same step in test-asan.
       - id: home
@@ -730,7 +730,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # 20 min covers SPM + ML cache restore plus the cold-cache pre-warm
       # download; well below the 45 min job timeout so a hung download
       # surfaces as a step failure, not a job-timeout.
@@ -779,7 +779,7 @@ jobs:
         id: upload-quality
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: quality-results
           path: ${{ github.workspace }}/quality-results.json

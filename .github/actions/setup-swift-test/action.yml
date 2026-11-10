@@ -165,7 +165,7 @@ runs:
 
     - name: Restore SPM dependencies
       if: inputs.cache-spm == 'true' && github.ref != 'refs/heads/main'
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ inputs.cache-path }}
         key: ${{ steps.keys.outputs.spm }}
@@ -173,7 +173,7 @@ runs:
 
     - name: Cache SPM dependencies
       if: inputs.cache-spm == 'true' && github.ref == 'refs/heads/main'
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ inputs.cache-path }}
         key: ${{ steps.keys.outputs.spm }}
@@ -188,7 +188,7 @@ runs:
     - name: Restore ML models
       id: model-restore
       if: inputs.cache-models == 'true' && github.ref != 'refs/heads/main'
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: |
           ~/Library/Application Support/MeetingTranscriber/huggingface
@@ -199,7 +199,7 @@ runs:
     - name: Cache ML models
       id: model-cache
       if: inputs.cache-models == 'true' && github.ref == 'refs/heads/main'
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: |
           ~/Library/Application Support/MeetingTranscriber/huggingface
