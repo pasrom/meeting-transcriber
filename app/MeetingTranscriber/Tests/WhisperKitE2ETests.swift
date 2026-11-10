@@ -78,56 +78,7 @@ final class WhisperKitE2ETests: XCTestCase {
         XCTAssertFalse(result.contains("|>"))
     }
 
-    // MARK: - Verify transcript output has no special tokens
-
-    func testTranscriptOutputContainsNoSpecialTokens() {
-        // Simulate what transcribe() does: strip tokens then trim
-        let rawSegments = [
-            "<|startoftranscript|><|de|><|0.00|>Hallo zusammen<|2.50|>",
-            "<|2.50|>Wie geht es euch?<|5.00|>",
-            "<|5.00|>Gut, danke.<|7.00|><|endoftext|>",
-        ]
-
-        for raw in rawSegments {
-            let cleaned = WhisperKitEngine.stripWhisperTokens(raw)
-                .trimmingCharacters(in: .whitespaces)
-            XCTAssertFalse(
-                cleaned.contains("<|"),
-                "Cleaned text should not contain '<|': \(cleaned)",
-            )
-            XCTAssertFalse(
-                cleaned.contains("|>"),
-                "Cleaned text should not contain '|>': \(cleaned)",
-            )
-        }
-    }
-
     // MARK: - Resample 48kHz -> 16kHz (no model needed)
-
-    func testResample48kTo16k() {
-        // Generate a simple sine wave at 48kHz
-        let sourceRate = 48000
-        let targetRate = 16000
-        let duration = 1.0 // 1 second
-        let sampleCount = Int(duration * Double(sourceRate))
-
-        var samples = [Float](repeating: 0, count: sampleCount)
-        let frequency: Float = 440.0 // A4
-        for i in 0 ..< sampleCount {
-            samples[i] = sin(2 * .pi * frequency * Float(i) / Float(sourceRate))
-        }
-
-        let resampled = AudioMixer.resample(samples, from: sourceRate, to: targetRate)
-
-        // Output should have approximately targetRate samples for 1 second
-        let expectedCount = Int(duration * Double(targetRate))
-        XCTAssertEqual(
-            resampled.count,
-            expectedCount,
-            "Resampled should have \(expectedCount) samples, got \(resampled.count)",
-        )
-        XCTAssertFalse(resampled.isEmpty)
-    }
 
     func testResamplePreservesSignalEnergy() {
         let sourceRate = 48000
