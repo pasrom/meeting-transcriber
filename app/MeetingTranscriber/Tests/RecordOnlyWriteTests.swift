@@ -79,6 +79,33 @@ final class RecordOnlyWriteTests: XCTestCase {
         }
     }
 
+    /// The mix is already under its final name when the app track's rename
+    /// fails: here because another writer took that name between the stem
+    /// choice and the rename. With no sidecar coming and the sources kept for
+    /// the next launch, a mix left in place would be audio nothing describes,
+    /// and the next launch would write the recording a second time beside it.
+    /// The name the other writer took is not this write's to remove.
+    func testARenameThatFailsPartWayRemovesTheFilesThisWriteHadPlaced() throws {
+        let fixture = try makeFixture()
+        let appTrack = try XCTUnwrap(fixture.recording.appPath)
+        let squatter = fixture.output.appendingPathComponent(appTrack.lastPathComponent)
+        let squatterContent = Data("written by someone else".utf8)
+        let write = makeWrite(fixture) { source, target in
+            try FileManager.default.copyItem(at: source, to: target)
+            if source == appTrack { try squatterContent.write(to: squatter) }
+        }
+
+        XCTAssertThrowsError(try write.perform())
+
+        XCTAssertEqual(
+            try finalNames(in: fixture.output), [squatter.lastPathComponent],
+            "a file this write had renamed into place stayed behind without a sidecar",
+        )
+        XCTAssertEqual(try Data(contentsOf: squatter), squatterContent, "a file this write did not place was touched")
+        XCTAssertEqual(try partials(in: fixture.output), [], "the write left its temporary copies behind")
+        XCTAssertEqual(sourcesLeft(fixture).count, 3, "a source left staging before the write had committed")
+    }
+
     func testACompleteWritePutsEveryFileAndTheSidecarInPlaceAndEmptiesStaging() throws {
         let fixture = try makeFixture()
         let write = makeWrite(fixture) { try FileManager.default.copyItem(at: $0, to: $1) }
@@ -137,7 +164,10 @@ final class RecordOnlyWriteTests: XCTestCase {
         XCTAssertThrowsError(try write.perform())
 
         XCTAssertEqual(sourcesLeft(fixture).count, 3, "a source left staging before the write had committed")
-        XCTAssertFalse(try finalNames(in: fixture.output).contains("20260311_140000_meta.json"))
+        XCTAssertEqual(
+            try finalNames(in: fixture.output), [],
+            "audio this write had placed stayed behind with no sidecar to describe it",
+        )
     }
 
     /// An earlier recording with the same stem (two recordings in one second,
