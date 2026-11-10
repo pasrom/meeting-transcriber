@@ -143,16 +143,11 @@ extension SpeakerNamingSession {
 
         if let transcriptPath = job.transcriptPath {
             do {
-                var transcript = try String(contentsOf: transcriptPath, encoding: .utf8)
-                // Format from `TimestampedSegment.formattedLine`: `[MM:SS] Speaker: text`.
-                // Anchor the replace on `] ` + label + `:` so we hit the speaker
-                // slot and not a substring inside the spoken text.
-                for (label, name) in mapping where !name.isEmpty {
-                    transcript = transcript.replacingOccurrences(of: "] \(label):", with: "] \(name):")
-                    if let autoName = namingData.mapping[label], autoName != label, autoName != name {
-                        transcript = transcript.replacingOccurrences(of: "] \(autoName):", with: "] \(name):")
-                    }
-                }
+                let transcript = try SpeakerSlotRename.apply(
+                    to: String(contentsOf: transcriptPath, encoding: .utf8),
+                    mapping: mapping,
+                    autoNames: namingData.mapping,
+                )
                 try transcript.write(to: transcriptPath, atomically: true, encoding: .utf8)
                 // Re-applying speaker names rewrites the transcript — keep it
                 // owner-only (the original save in saveTranscript already is).
