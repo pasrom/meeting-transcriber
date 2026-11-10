@@ -58,6 +58,19 @@ final class ParticipantReaderTests: XCTestCase {
         XCTAssertEqual(result, ["Alice"])
     }
 
+    /// A skip word only matches as a whole word: a name that merely begins
+    /// with one ("Share", "More", "Guest", "Chat") is a name.
+    func testFilterKeepsNamesThatOnlyBeginWithASkipWord() {
+        let input = ["Sharelle", "Moreno", "Guestavo", "Chatura"]
+        XCTAssertEqual(ParticipantReader.filterParticipantNames(input), input)
+    }
+
+    /// A skip word followed by more text, or in its plural, is still a label.
+    func testFilterRemovesLabelsThatBeginWithASkipWord() {
+        let input = ["Share screen", "More options", "Presenters", "Attendees (5)", "Guest user", "Alice"]
+        XCTAssertEqual(ParticipantReader.filterParticipantNames(input), ["Alice"])
+    }
+
     func testFilterRemovesTimestamps() {
         let input = ["10:30", "Alice", "2:45"]
         let result = ParticipantReader.filterParticipantNames(input)
