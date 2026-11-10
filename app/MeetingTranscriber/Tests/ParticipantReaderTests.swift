@@ -1,7 +1,29 @@
+import ApplicationServices
 @testable import MeetingTranscriber
 import XCTest
 
 final class ParticipantReaderTests: XCTestCase {
+    // MARK: - Accessibility trust
+
+    /// How many times `readParticipants` built the AX root to walk from.
+    private func rootsMade(trusted: Bool) -> Int {
+        var made = 0
+        _ = ParticipantReader.readParticipants(pid: getpid(), isTrusted: { trusted }, makeRoot: { pid in
+            made += 1
+            return AXUIElementCreateApplication(pid)
+        })
+        return made
+    }
+
+    /// Without the Accessibility grant every AX call fails and logs a
+    /// warning, so the roster walk must not start at all. The trusted case is
+    /// the control: the test process has no roster, so nothing is found
+    /// either way, but the walk does start.
+    func testUntrustedProcessWalksNoTree() {
+        XCTAssertEqual(rootsMade(trusted: false), 0, "the AX tree was walked without the grant")
+        XCTAssertEqual(rootsMade(trusted: true), 1)
+    }
+
     // MARK: - Basic Filtering
 
     func testFilterValidNames() {
