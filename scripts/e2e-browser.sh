@@ -158,11 +158,10 @@ _set_dev_bool() {
     write_dev_default "$BUNDLE_ID" "$key" "$value" bool
 }
 
-# Per-domain snapshots of the behaviour toggles this lane flips, so cleanup
-# restores EACH domain to exactly its own prior value (empty → delete).
-_PRE_BROWSER_STD=""; _PRE_BROWSER_CTR=""
-_PRE_RECORDONLY_STD=""; _PRE_RECORDONLY_CTR=""
-_PRE_NOMIC_STD=""; _PRE_NOMIC_CTR=""
+# The record of the behaviour toggles this lane flips, taken under "settings"
+# below, so cleanup restores each plist to exactly its own prior value. Empty
+# until then, and cleanup restores only a record that exists.
+DEFAULTS_RECORD=""
 
 # --- preflight ------------------------------------------------------------
 
@@ -225,21 +224,16 @@ fi
 
 # --- settings -------------------------------------------------------------
 
-# Snapshot the behaviour toggles per domain before flipping them.
-_PRE_BROWSER_STD="$(snapshot_default "$_STANDARD_PLIST" watchBrowserMeetings)"
-_PRE_RECORDONLY_STD="$(snapshot_default "$_STANDARD_PLIST" recordOnly)"
-_PRE_NOMIC_STD="$(snapshot_default "$_STANDARD_PLIST" noMic)"
-if [ -f "$_CONTAINER_PLIST" ]; then
-    _PRE_BROWSER_CTR="$(snapshot_default "$_CONTAINER_PLIST" watchBrowserMeetings)"
-    _PRE_RECORDONLY_CTR="$(snapshot_default "$_CONTAINER_PLIST" recordOnly)"
-    _PRE_NOMIC_CTR="$(snapshot_default "$_CONTAINER_PLIST" noMic)"
-fi
+# Record the behaviour toggles from both plists before flipping them (see
+# dev_defaults_record in scripts/lib/e2e-helpers.sh).
+DEFAULTS_RECORD="$(mktemp "${TMPDIR:-/tmp}/e2e-browser-defaults.XXXXXX")"
+dev_defaults_record "$DEFAULTS_RECORD" "$BUNDLE_ID" watchBrowserMeetings recordOnly noMic \
+    || fail "could not record the dev bundle's settings; nothing was changed"
 
 # --- cleanup trap ---------------------------------------------------------
 
-# Armed after the snapshot and before the first write below, so a failure from
-# here on (the launch included) restores the toggles, and none earlier can
-# restore a snapshot that was never taken.
+# Armed before the first write below, so a failure from here on (the launch
+# included) restores the toggles.
 _ON_EXIT_RAN=""
 on_exit() {
     [ -n "$_ON_EXIT_RAN" ] && return 0
@@ -247,15 +241,8 @@ on_exit() {
     [ -n "$KEEPER_PID" ] && kill "$KEEPER_PID" 2>/dev/null || true
     [ "$KEEP_CHROME" = false ] && quit_chrome
     [ "$KEEP_APP" = false ] && quit_running_app || true
-    # Restore the behaviour toggles per domain (empty snapshot → delete).
-    restore_bool_default "$_STANDARD_PLIST" watchBrowserMeetings "$_PRE_BROWSER_STD"
-    restore_bool_default "$_STANDARD_PLIST" recordOnly "$_PRE_RECORDONLY_STD"
-    restore_bool_default "$_STANDARD_PLIST" noMic "$_PRE_NOMIC_STD"
-    if [ -f "$_CONTAINER_PLIST" ]; then
-        restore_bool_default "$_CONTAINER_PLIST" watchBrowserMeetings "$_PRE_BROWSER_CTR"
-        restore_bool_default "$_CONTAINER_PLIST" recordOnly "$_PRE_RECORDONLY_CTR"
-        restore_bool_default "$_CONTAINER_PLIST" noMic "$_PRE_NOMIC_CTR"
-    fi
+    # Restore the behaviour toggles, each plist to its own prior value.
+    [ -z "$DEFAULTS_RECORD" ] || defaults_restore_record "$DEFAULTS_RECORD" || true
     # Marker-bounded artifact cleanup, CI only: on a developer machine the dev
     # and installed apps share the recordings dir, so a local sweep could
     # delete a real recording (see sweep_run_artifacts).
