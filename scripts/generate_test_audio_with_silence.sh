@@ -27,7 +27,7 @@ trap 'rm -rf "$TMPDIR_AUDIO"' EXIT
 
 [ -f "$SOURCE" ] || {
     echo "ERROR: source fixture missing: $SOURCE"
-    echo "Generate it first with: ./scripts/generate_test_audio.sh"
+    echo "Generate it first with: ./scripts/generate_quality_fixtures.sh"
     exit 1
 }
 
