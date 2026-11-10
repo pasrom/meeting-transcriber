@@ -24,15 +24,20 @@ keychain=${1:?keychain path required}
 lockfile="${TMPDIR:-/tmp}/keychain-search-list.lock"
 # Spin-wait up to ~5 s. `security` mutations themselves are sub-100 ms,
 # so a contended Mini run resolves in a handful of retries.
+acquired=0
 for _ in $(seq 1 100); do
     if shlock -f "$lockfile" -p $$ >/dev/null 2>&1; then
+        acquired=1
         # shellcheck disable=SC2064  # expand $lockfile at trap-set time
         trap "rm -f '$lockfile'" EXIT
         break
     fi
     sleep 0.05
 done
-if [[ ! -f "$lockfile" ]]; then
+# Test the acquisition, not the file: when another process holds the lock the
+# file exists, so a file check passed here and the search list was rewritten
+# without the lock.
+if [[ "$acquired" != 1 ]]; then
     echo "keychain-prepend: failed to acquire $lockfile within 5 s" >&2
     exit 1
 fi
