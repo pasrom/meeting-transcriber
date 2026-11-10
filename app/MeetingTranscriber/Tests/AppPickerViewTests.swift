@@ -110,9 +110,8 @@ final class AppPickerViewTests: XCTestCase {
             onStartRecording: { _, _, _ in },
             onCancel: {},
         )
-        let body = try sut.inspect()
-        // TextField has placeholder "Meeting title (optional)"
-        XCTAssertNoThrow(try body.find(ViewType.TextField.self))
+        let field = try sut.inspect().find(ViewType.TextField.self)
+        XCTAssertEqual(try field.labelView().text().string(), "Meeting title (optional)")
     }
 
     // MARK: - Refresh button
