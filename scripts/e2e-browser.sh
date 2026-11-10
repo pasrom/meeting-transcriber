@@ -233,26 +233,11 @@ if [ -f "$_CONTAINER_PLIST" ]; then
     _PRE_NOMIC_CTR="$(snapshot_default "$_CONTAINER_PLIST" noMic)"
 fi
 
-# debugRPCEnabled + autoWatch are set-and-leave (like e2e-app.sh — harmless on).
-_set_dev_bool debugRPCEnabled true
-_set_dev_bool autoWatch true
-_set_dev_bool watchBrowserMeetings true   # append the browser category to watchApps
-_set_dev_bool recordOnly true             # sidecar + WAVs, skip transcription/protocol
-_set_dev_bool noMic true                  # app-track only; no mic needed for the proof
+# --- cleanup trap ---------------------------------------------------------
 
-mkdir -p "$RECORDINGS_DIR"
-touch "$RUN_MARKER"
-# Clear this browser's captured-track artifacts from any earlier run up front.
-# The copy at the end runs only on success, and the self-hosted runner persists
-# /tmp between runs, so a fork that fails before then would otherwise upload a
-# previous run's WAV as this run's evidence.
-rm -f "/tmp/e2e-browser-$BROWSER-app.wav" "/tmp/e2e-browser-$BROWSER-meta.json"
-
-# --- launch + cleanup trap ------------------------------------------------
-
-log "Launching $DEV_BUNDLE_DEPLOY"
-open "$DEV_BUNDLE_DEPLOY"
-
+# Armed after the snapshot and before the first write below, so a failure from
+# here on (the launch included) restores the toggles, and none earlier can
+# restore a snapshot that was never taken.
 _ON_EXIT_RAN=""
 on_exit() {
     [ -n "$_ON_EXIT_RAN" ] && return 0
@@ -269,8 +254,9 @@ on_exit() {
         restore_bool_default "$_CONTAINER_PLIST" recordOnly "$_PRE_RECORDONLY_CTR"
         restore_bool_default "$_CONTAINER_PLIST" noMic "$_PRE_NOMIC_CTR"
     fi
-    # Marker-bounded artifact cleanup — CI only (dev + prod share the recordings
-    # dir locally; see feedback memory no_destructive_fs_on_real_dirs).
+    # Marker-bounded artifact cleanup, CI only: on a developer machine the dev
+    # and installed apps share the recordings dir, so a local sweep could
+    # delete a real recording (see sweep_run_artifacts).
     sweep_run_artifacts "$RECORDINGS_DIR" "$RUN_MARKER"
     rm -f "$RUN_MARKER"
     rm -rf "$CHROME_PROFILE"
@@ -278,6 +264,26 @@ on_exit() {
 trap on_exit EXIT
 trap 'on_exit; exit 130' INT
 trap 'on_exit; exit 143' TERM
+
+# debugRPCEnabled + autoWatch are set-and-leave (like e2e-app.sh — harmless on).
+_set_dev_bool debugRPCEnabled true
+_set_dev_bool autoWatch true
+_set_dev_bool watchBrowserMeetings true   # append the browser category to watchApps
+_set_dev_bool recordOnly true             # sidecar + WAVs, skip transcription/protocol
+_set_dev_bool noMic true                  # app-track only; no mic needed for the proof
+
+mkdir -p "$RECORDINGS_DIR"
+touch "$RUN_MARKER"
+# Clear this browser's captured-track artifacts from any earlier run up front.
+# The copy at the end runs only on success, and the self-hosted runner persists
+# /tmp between runs, so a fork that fails before then would otherwise upload a
+# previous run's WAV as this run's evidence.
+rm -f "/tmp/e2e-browser-$BROWSER-app.wav" "/tmp/e2e-browser-$BROWSER-meta.json"
+
+# --- launch ---------------------------------------------------------------
+
+log "Launching $DEV_BUNDLE_DEPLOY"
+open "$DEV_BUNDLE_DEPLOY"
 
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
 poll_until "$RPC_READY_TIMEOUT_S" 1 rpc_ready || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
