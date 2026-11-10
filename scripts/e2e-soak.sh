@@ -202,6 +202,11 @@ if [ ! -x "$SIMULATOR_BIN" ]; then
         || fail "meeting-simulator build failed"
 fi
 
+# Quit first, then write: a running app holds its settings in memory and may
+# write them back as it quits, which would undo the writes below (see
+# e2e-channel-fault.sh, where that was measured).
+quit_running_app || true
+
 # Record-only: the soak is about the resident process over an hour, and running
 # transcription on every loop of the fixture would measure the ASR engine
 # instead. The pipeline assertion at the end re-enables the full path.
@@ -210,7 +215,6 @@ write_dev_default "$BUNDLE_ID" autoWatch true bool
 write_dev_default "$BUNDLE_ID" recordOnly true bool
 
 mkdir -p "$REC_DIR"
-quit_running_app || true
 log "Launching $DEV_BUNDLE_DEPLOY"
 open "$DEV_BUNDLE_DEPLOY"
 
