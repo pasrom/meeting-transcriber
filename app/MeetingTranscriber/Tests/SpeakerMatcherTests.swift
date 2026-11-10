@@ -392,12 +392,13 @@ final class SpeakerMatcherTests: XCTestCase {
     // MARK: - match with centroid
 
     func testMatchPrefersCentroidOverNoisySample() {
-        // A speaker whose centroid says "[1, 0]" but whose embeddings list has
-        // a noisy outlier "[0.7, 0.7]". A query "[0.99, 0.01]" should match.
+        // A speaker whose centroid says "[1, 0]" but whose only recent sample
+        // is a noisy outlier "[0, 1]". The query "[0.99, 0.01]" is far from the
+        // sample, so only the centroid can bring it inside the threshold.
         let matcher = SpeakerMatcher(dbPath: dbPath, threshold: 0.5)
         matcher.saveDB([StoredSpeaker(
             name: "Speaker B",
-            embeddings: [[1, 0], [0.7, 0.7]],
+            embeddings: [[0, 1]],
             centroid: [1, 0],
             centroidSampleCount: 5,
         )])
@@ -406,7 +407,7 @@ final class SpeakerMatcherTests: XCTestCase {
     }
 
     func testMatchUsesSamplesAsFallbackForLegacyEntries() {
-        // Legacy entry: no centroid; matcher should compute meanEmbedding lazily.
+        // Legacy entry: no centroid; the recent samples are the only anchors.
         let matcher = SpeakerMatcher(dbPath: dbPath, threshold: 0.5)
         matcher.saveDB([StoredSpeaker(name: "Speaker B", embeddings: [[1, 0]])])
         let result = matcher.match(embeddings: ["S0": [0.99, 0.01]])
@@ -616,17 +617,19 @@ final class SpeakerMatcherTests: XCTestCase {
     }
 
     func testMultiEmbeddingMatchesBest() {
-        // Speaker has 3 stored embeddings, match against the closest one
+        // Speaker has 3 stored embeddings, match against the closest one.
+        // Only meeting 2's sample is within the threshold, so a matcher that
+        // read just one of them (the first, or the last) would miss.
         let matcher = SpeakerMatcher(dbPath: dbPath)
         let stored = [StoredSpeaker(name: "Speaker A", embeddings: [
             [1, 0, 0], // embedding from meeting 1
-            [0.9, 0.3, 0], // embedding from meeting 2
-            [0.8, 0.5, 0], // embedding from meeting 3
+            [0, 1, 0], // embedding from meeting 2
+            [0, 0, 1], // embedding from meeting 3
         ])]
         matcher.saveDB(stored)
 
         // New embedding close to meeting 2's embedding
-        let embeddings: [String: [Float]] = ["SPEAKER_0": [0.88, 0.35, 0]]
+        let embeddings: [String: [Float]] = ["SPEAKER_0": [0.05, 1, 0]]
         let result = matcher.match(embeddings: embeddings)
         XCTAssertEqual(result["SPEAKER_0"], "Speaker A")
     }
