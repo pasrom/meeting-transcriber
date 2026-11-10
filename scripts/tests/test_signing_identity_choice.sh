@@ -230,6 +230,7 @@ _stage_dev_bundle_scripts() {
         "$spm/Sources" "$spm/Entitlements" "$spm/.build/release" "$bundle/Contents/MacOS" || return 1
     cp "$REPO_ROOT/scripts/run_app.sh" "$REPO_ROOT/scripts/test_rpc.sh" "$root/scripts/" || return 1
     cp "$REPO_ROOT"/scripts/lib/*.sh "$root/scripts/lib/" || return 1
+    cp "$REPO_ROOT/LICENSE" "$root/" || return 1
     cp "$REPO_ROOT/app/MeetingTranscriber/Sources/Info.plist" "$spm/Sources/" || return 1
     cp "$REPO_ROOT/app/MeetingTranscriber/Entitlements/Homebrew.entitlements" "$spm/Entitlements/" || return 1
     ln -s "$STUB_HARNESS/fetch-localvqe-model.sh" "$root/scripts/fetch-localvqe-model.sh" || return 1
