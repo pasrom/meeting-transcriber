@@ -506,9 +506,11 @@ jobs:
           job-name: sanitizers (tsan)
 
   # The check to require. A skipped job reports success and satisfies a
-  # required check, so neither leg can be required directly: TSan is skipped
-  # by design on most PRs, and a skipped job also reports under its
-  # unexpanded name. This job always runs, needs both legs and `changes`,
+  # required check, so neither leg is enough as a requirement on its own: TSan
+  # is skipped by design on most PRs, and a skipped job also reports under its
+  # unexpanded name. The stable-tag ruleset (.github/tag-ruleset.json)
+  # requires this job under the name a push run gives it, `sanitizer-gate`,
+  # next to the two legs. This job always runs, needs both legs and `changes`,
   # and fails when the sanitizer work did not actually pass: a leg that
   # reports `failure` or `cancelled`, `changes` not succeeding (the legs are
   # then skipped through `needs` and nothing was checked), or a leg that

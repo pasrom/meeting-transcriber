@@ -103,9 +103,10 @@ check_workflow release.yml "$RELEASE_GUARDED"
 # and rewriting them risks drifting from the mirror in `sanitizer-gate`. What
 # closes the hole there is `sanitizer-gate` itself: it runs on `always()` and
 # fails when the `changes` it needed did not succeed, so a skipped leg cannot
-# pass unnoticed. That protection is load-bearing and untested, which is what
-# this section fixes. It is not a substitute for making `sanitizer-gate` a
-# required check, which it is not today.
+# pass unnoticed. That only protects a stable tag because the gate is a
+# required check of the tag ruleset next to the legs, and under the one name
+# a push run on `main` reports it as, so this section pins both: the gate's
+# behaviour, and that the ruleset requires the name the gate actually carries.
 qs="$ROOT/.github/workflows/quality-and-safety.yml"
 if [ ! -f "$qs" ]; then
     bad "quality-and-safety.yml" "workflow not found"
@@ -148,6 +149,26 @@ else
         ok "quality-and-safety.yml:sanitizer-gate acts on the flag"
     else
         bad "quality-and-safety.yml:sanitizer-gate" "sets a failure flag that nothing exits on, so the step always succeeds and the gate reports green whatever the legs did."
+    fi
+
+    # The gate's name is computed: `name:` reads `gate-name` from `changes`,
+    # whose verdict arm (every push run on `main`, where stable tags come
+    # from) writes the bare name. Both halves are pinned, since a change to
+    # either leaves the ruleset requiring a context no run reports.
+    gate_ctx="sanitizer-gate"
+    if printf '%s\n' "$gate_body" | sed 's/^[[:space:]]*//' | grep -qxF "name: \${{ needs.changes.outputs.gate-name || '$gate_ctx' }}" \
+        && ci_job_body "$qs" changes | grep -qF "echo \"gate-name=$gate_ctx\" >> \"\$GITHUB_OUTPUT\""; then
+        ok "quality-and-safety.yml:sanitizer-gate reports as \`$gate_ctx\` on a verdict run"
+    else
+        bad "quality-and-safety.yml:sanitizer-gate" "no longer reports under the name \`$gate_ctx\` on a verdict run, or computes it some other way than this check reads. The tag ruleset requires that exact context; change both together."
+    fi
+
+    if jq -e --arg c "$gate_ctx" \
+        '[.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | index($c) != null' \
+        "$ROOT/.github/tag-ruleset.json" >/dev/null; then
+        ok "tag-ruleset.json requires \`$gate_ctx\`"
+    else
+        bad "tag-ruleset.json" "does not list \`$gate_ctx\` as a required status check, so a stable tag can be pushed on a commit whose sanitizer legs were skipped because \`changes\` failed: a skipped leg reports success."
     fi
 fi
 

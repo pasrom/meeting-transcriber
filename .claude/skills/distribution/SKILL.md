@@ -40,7 +40,12 @@ step the rule is for.
 has green status checks for every context listed in
 `.github/tag-ruleset.json` (`required_status_checks`). Apply or update the
 ruleset via `./scripts/configure-tag-ruleset.sh` (idempotent, needs repo-admin
-`gh` auth). RC tags (`v*-rc*`) stay unrestricted. `e2e.yml` and `e2e-app.yml`
+`gh` auth). Editing the file changes nothing on GitHub until that script runs.
+The sanitizer contexts are `test (tsan)`, `test (asan)` and `sanitizer-gate`:
+a skipped job reports success, so the two legs alone would pass a commit whose
+`changes` job failed and skipped them, and the gate is what fails in that case
+(see the `sanitizer-gate` job in `quality-and-safety.yml`). RC tags (`v*-rc*`)
+stay unrestricted. `e2e.yml` and `e2e-app.yml`
 both fire on every main push (no paths-filter) so every SHA a stable tag might
 point at already has the required check-runs — no manual `gh workflow run`
 ceremony before tagging.
