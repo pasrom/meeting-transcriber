@@ -1,6 +1,6 @@
 name: "Setup Swift test environment"
 description: >
-  Checks out the repo, restores SPM and ML-model caches keyed off
+  Restores SPM and ML-model caches keyed off
   `Package.resolved`, and pre-warms the ML model cache on a cache miss.
   Used by every job that runs `swift test` against engines that load
   WhisperKit / FluidAudio weights, so the boilerplate lives in
