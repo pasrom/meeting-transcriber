@@ -626,6 +626,47 @@ state_why() {
     esac
 }
 
+# --- menu-bar badge seen during a lane ----------------------------------------
+#
+# /state.badge is the BadgeKind the menu bar shows (MenuBarIcon.swift:
+# inactive, recording, transcribing, diarizing, processing, userAction, done,
+# error, updateAvailable). A lane notes it on each snapshot its polls already
+# read and asserts on the set at the end, which needs no extra reads: only a
+# badge that lasts longer than the poll interval can be asserted as seen
+# (recording, for the length of the meeting), while an absence holds whatever
+# the timing.
+E2E_BADGES_SEEN=""
+
+# badge_note [<state json>] — add the snapshot's badge (the argument, or
+# STATE_BODY) to E2E_BADGES_SEEN, space-separated, each value once. Always
+# returns 0, since it runs inside poll predicates.
+badge_note() {
+    local badge
+    badge="$(jq -r '.badge // empty | strings' <<<"${1:-${STATE_BODY:-null}}" 2>/dev/null)" || return 0
+    [ -n "$badge" ] || return 0
+    case " $E2E_BADGES_SEEN " in
+        *" $badge "*) ;;
+        *) E2E_BADGES_SEEN="${E2E_BADGES_SEEN:+$E2E_BADGES_SEEN }$badge" ;;
+    esac
+    return 0
+}
+
+# badge_seen <badge> — whether badge_note has seen that value.
+badge_seen() {
+    case " $E2E_BADGES_SEEN " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+
+# badges_seen_among <badge>... — those of the given values badge_note has seen,
+# space-separated, in the order given; empty when none.
+badges_seen_among() {
+    local badge out=""
+    for badge in "$@"; do
+        if badge_seen "$badge"; then out="${out:+$out }$badge"; fi
+    done
+    printf '%s' "$out"
+}
+
 # watch_state — the app's watch state: the loop's state, empty when there is no
 # watch loop, and `unreadable` when the app did not answer, so a dead or hung
 # app never reads as "not watching".
