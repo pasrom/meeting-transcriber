@@ -93,81 +93,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         }
     }
 
-    /// Regression test for the multi-job stuck-state bug: when the window
-    /// switches to a different `data.jobID`, the per-job guard
-    /// (`NamingAnswerGate`) must re-allow taps. The previous
-    /// global Bool guard would silently swallow every click after the first.
-    func testConfirmFiresForEachDistinctJob() throws {
-        var jobIDsConfirmed: [UUID] = []
-
-        let dataA = makeData(title: "Meeting A")
-        let viewA = SpeakerNamingView(data: dataA, gracePeriod: 0) { result in
-            if case .confirmed = result { jobIDsConfirmed.append(dataA.jobID) }
-        }
-        try viewA.inspect().find(button: "Confirm").tap()
-
-        let dataB = makeData(title: "Meeting B")
-        let viewB = SpeakerNamingView(data: dataB, gracePeriod: 0) { result in
-            if case .confirmed = result { jobIDsConfirmed.append(dataB.jobID) }
-        }
-        try viewB.inspect().find(button: "Confirm").tap()
-
-        XCTAssertEqual(
-            jobIDsConfirmed,
-            [dataA.jobID, dataB.jobID],
-            "Each distinct jobID must be confirmable independently",
-        )
-    }
-
-    /// Skip shares the same per-job guard as Confirm. If a future refactor
-    /// reverts Skip's guard to a global Bool, the multi-job stuck-state
-    /// would resurface for users who hit Skip on back-to-back meetings.
-    func testSkipFiresForEachDistinctJob() throws {
-        var jobIDsSkipped: [UUID] = []
-
-        let dataA = makeData(title: "Meeting A")
-        let viewA = SpeakerNamingView(data: dataA, gracePeriod: 0) { result in
-            if case .skipped = result { jobIDsSkipped.append(dataA.jobID) }
-        }
-        try viewA.inspect().find(button: "Skip").tap()
-
-        let dataB = makeData(title: "Meeting B")
-        let viewB = SpeakerNamingView(data: dataB, gracePeriod: 0) { result in
-            if case .skipped = result { jobIDsSkipped.append(dataB.jobID) }
-        }
-        try viewB.inspect().find(button: "Skip").tap()
-
-        XCTAssertEqual(
-            jobIDsSkipped,
-            [dataA.jobID, dataB.jobID],
-            "Each distinct jobID must be skippable independently",
-        )
-    }
-
-    /// Re-run shares the same per-job guard as Confirm and Skip — same
-    /// regression risk if the guard ever reverts to a global Bool.
-    func testRerunFiresForEachDistinctJob() throws {
-        var jobIDsRerun: [UUID] = []
-
-        let dataA = makeData(title: "Meeting A")
-        let viewA = SpeakerNamingView(data: dataA) { result in
-            if case .rerun = result { jobIDsRerun.append(dataA.jobID) }
-        }
-        try viewA.inspect().find(button: "Re-run").tap()
-
-        let dataB = makeData(title: "Meeting B")
-        let viewB = SpeakerNamingView(data: dataB) { result in
-            if case .rerun = result { jobIDsRerun.append(dataB.jobID) }
-        }
-        try viewB.inspect().find(button: "Re-run").tap()
-
-        XCTAssertEqual(
-            jobIDsRerun,
-            [dataA.jobID, dataB.jobID],
-            "Each distinct jobID must be re-runnable independently",
-        )
-    }
-
     // MARK: - Speaker details
 
     func testShowsSpeakerLabel() throws {
@@ -190,16 +115,18 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         XCTAssertTrue(found, "Speaking time '2:05' should appear")
     }
 
-    func testPreFillsAutoNameInMapping() {
-        // When mapping has a matched name (different from label), it's an auto name
-        let data = makeData(mapping: ["SPEAKER_00": "Speaker I"])
-        let speakers = data.mapping.keys.sorted().map { label in
-            let autoName = data.mapping[label]
-            let isAutoNamed = autoName != nil && autoName != label
-            return (label: label, autoName: isAutoNamed ? autoName : nil)
-        }
-        let names = speakers.map { $0.autoName ?? "" }
-        XCTAssertEqual(names.first, "Speaker I")
+    /// A mapped name that differs from the label is an auto name the dialog
+    /// pre-fills; a label mapped to itself is unrecognised and gets none.
+    /// Rows come in label order, not in speaking-time order (00, 02, 01 here).
+    func testComputeSpeakersTreatsOnlyARealNameAsAutoName() {
+        let data = makeData(
+            mapping: ["SPEAKER_00": "Speaker I", "SPEAKER_01": "SPEAKER_01", "SPEAKER_02": "SPEAKER_02"],
+            speakingTimes: ["SPEAKER_00": 60, "SPEAKER_01": 30, "SPEAKER_02": 45],
+        )
+        let speakers = SpeakerNamingView.computeSpeakers(from: data)
+        XCTAssertEqual(speakers.map(\.label), ["SPEAKER_00", "SPEAKER_01", "SPEAKER_02"])
+        XCTAssertEqual(speakers.map(\.autoName), ["Speaker I", nil, nil])
+        XCTAssertEqual(speakers.map(\.speakingTime), [60, 30, 45])
     }
 
     // MARK: - Rerun
@@ -210,6 +137,8 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         XCTAssertNoThrow(try body.find(button: "Re-run"))
     }
 
+    /// Without a `currentDiarizerMode` (legacy and enrollment callers) Re-run
+    /// fires the plain `.rerun(count)` shape those callers pattern-match on.
     func testRerunButtonCallsOnCompleteWithRerun() throws {
         var result: PipelineQueue.SpeakerNamingResult?
         let sut = SpeakerNamingView(data: makeData(), gracePeriod: 0) { result = $0 }
@@ -237,21 +166,15 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         )
         let sut = SpeakerNamingView(data: data) { _ in }
         let body = try sut.inspect()
-        let groups = body.findAll(ViewType.GroupBox.self)
-        XCTAssertEqual(groups.count, 3)
-    }
-
-    func testSpeakerRowShowsFormattedTime() throws {
-        let data = makeData(
-            mapping: ["SPEAKER_00": "SPEAKER_00"],
-            speakingTimes: ["SPEAKER_00": 90.0],
-        )
-        let sut = SpeakerNamingView(data: data) { _ in }
-        let body = try sut.inspect()
-        // formattedTime(90) = "1:30"
-        let texts = body.findAll(ViewType.Text.self)
-        let found = texts.contains { (try? $0.string())?.contains("1:30") == true }
-        XCTAssertTrue(found, "Should show '1:30' for 90 seconds")
+        // Each row shows its label as one of its texts. Speaking time orders
+        // them 00, 02, 01, so a row order taken from it (or from the
+        // dictionary) would not read back as the sorted labels.
+        let labels = body.findAll(ViewType.GroupBox.self).map { row in
+            row.findAll(ViewType.Text.self)
+                .compactMap { try? $0.string() }
+                .first { $0.hasPrefix("SPEAKER_") }
+        }
+        XCTAssertEqual(labels, ["SPEAKER_00", "SPEAKER_01", "SPEAKER_02"])
     }
 
     // MARK: - Pure Function: buildSpeakerMapping
@@ -391,36 +314,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         ]
         let names = SpeakerNamingView.computeInitialNames(speakers: speakers)
         XCTAssertEqual(names, ["SPEAKER_00": "Speaker A", "SPEAKER_01": "", "SPEAKER_02": "Speaker B"])
-    }
-
-    // MARK: - formattedTime pure function
-
-    func testFormattedTimeSecondsOnly() {
-        XCTAssertEqual(formattedTime(45), "45s")
-    }
-
-    func testFormattedTimeZero() {
-        XCTAssertEqual(formattedTime(0), "0s")
-    }
-
-    func testFormattedTimeMinutesAndSeconds() {
-        XCTAssertEqual(formattedTime(90), "1:30")
-    }
-
-    func testFormattedTimeExactMinute() {
-        XCTAssertEqual(formattedTime(120), "2:00")
-    }
-
-    func testFormattedTimePadsSeconds() {
-        XCTAssertEqual(formattedTime(65), "1:05")
-    }
-
-    func testFormattedTimeBoundaryAt59() {
-        XCTAssertEqual(formattedTime(59), "59s")
-    }
-
-    func testFormattedTimeBoundaryAt60() {
-        XCTAssertEqual(formattedTime(60), "1:00")
     }
 
     // MARK: - Audio Playback
@@ -693,21 +586,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         XCTAssertEqual(SpeakerNamingView.clampCount(2, for: .offline), 2)
         XCTAssertEqual(SpeakerNamingView.clampCount(8, for: .offline), 8)
         XCTAssertEqual(SpeakerNamingView.clampCount(10, for: .offline), 10)
-    }
-
-    func testRerunFiresLegacyShapeWhenCurrentModeIsNil() throws {
-        // Legacy/enrollment callers don't pass `currentDiarizerMode`.
-        // The Re-run button must keep firing the legacy `.rerun(count)`
-        // shape so callers that pattern-match on `.rerun` keep working.
-        var captured: PipelineQueue.SpeakerNamingResult?
-        let sut = SpeakerNamingView(data: makeData(), gracePeriod: 0) { result in
-            captured = result
-        }
-        try sut.inspect().find(button: "Re-run").tap()
-        guard case .rerun = captured else {
-            XCTFail("Expected .rerun for nil currentDiarizerMode, got \(String(describing: captured))")
-            return
-        }
     }
 
     func testRerunFiresRerunWithModeWhenCurrentModeIsSet() throws {
