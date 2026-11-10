@@ -602,15 +602,11 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         // Perform file I/O off the main thread
         Task.detached { [audioPath, chosen] in
             do {
-                guard let (snippet, sampleRate) = try Self.snippetSamples(
+                guard let snippet = try Self.snippetWAVData(
                     audioPath: audioPath, start: chosen.start, end: chosen.end,
                 ) else { return }
 
-                let tmpPath = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("speaker_\(label).wav")
-                try AudioMixer.saveWAV(samples: snippet, sampleRate: sampleRate, url: tmpPath)
-
-                let newPlayer = try AVAudioPlayer(contentsOf: tmpPath)
+                let newPlayer = try AVAudioPlayer(data: snippet)
                 let duration = newPlayer.duration
 
                 await MainActor.run {

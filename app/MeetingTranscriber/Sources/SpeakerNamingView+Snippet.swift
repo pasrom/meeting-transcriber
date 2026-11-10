@@ -25,4 +25,22 @@ extension SpeakerNamingView {
         guard let channel = buffer.floatChannelData?[0] else { return nil }
         return (Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))), rate)
     }
+
+    /// The same span as a playable WAV held in memory.
+    ///
+    /// The WAV goes through a file because that is what `AudioMixer.saveWAV`
+    /// writes, and the file is removed before this returns. The player plays
+    /// the bytes, so nothing has to outlive playback, and no copy of the
+    /// meeting's audio stays in `scratchDir`. It used to stay there for good,
+    /// one file per speaker label.
+    nonisolated static func snippetWAVData(
+        audioPath: URL, start: TimeInterval, end: TimeInterval,
+        scratchDir: URL = FileManager.default.temporaryDirectory,
+    ) throws -> Data? {
+        guard let (samples, rate) = try snippetSamples(audioPath: audioPath, start: start, end: end) else { return nil }
+        let wav = scratchDir.appendingPathComponent("speaker_snippet_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: wav) }
+        try AudioMixer.saveWAV(samples: samples, sampleRate: rate, url: wav)
+        return try Data(contentsOf: wav)
+    }
 }

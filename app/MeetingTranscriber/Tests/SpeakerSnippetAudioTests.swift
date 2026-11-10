@@ -2,7 +2,8 @@
 import XCTest
 
 /// The naming dialog's play button cuts one segment out of the meeting's
-/// 16 kHz mix. It must read that segment alone, not the whole meeting.
+/// 16 kHz mix. It must read that segment alone, not the whole meeting, and it
+/// must leave no copy of it behind: the snippet is real meeting audio.
 final class SpeakerSnippetAudioTests: XCTestCase {
     private let sampleRate = 16000
 
@@ -30,6 +31,18 @@ final class SpeakerSnippetAudioTests: XCTestCase {
         XCTAssertEqual(snippet.samples.count, expected.count)
         let worst = zip(snippet.samples, expected).map { abs($0 - $1) }.max() ?? .infinity
         XCTAssertLessThanOrEqual(worst, 2.0 / 32768, "read from the wrong position")
+    }
+
+    func testNoCopyOfTheSnippetIsLeftOnDisk() throws {
+        let (mix, _) = try makeMix()
+        let scratch = try makeTempDirectory(prefix: "SnippetScratch")
+
+        let wav = try XCTUnwrap(SpeakerNamingView.snippetWAVData(
+            audioPath: mix, start: 0.5, end: 1.0, scratchDir: scratch,
+        ))
+
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: scratch.path), [])
+        XCTAssertGreaterThan(wav.count, 44, "a WAV header with no samples")
     }
 
     func testASegmentPastTheEndOfTheAudioGivesNothing() throws {
