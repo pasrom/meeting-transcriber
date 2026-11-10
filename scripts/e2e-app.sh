@@ -790,6 +790,18 @@ IS_DEFAULT_FIXTURE=false
 RPC_READY_TIMEOUT_S=30
 PIPELINE_TIMEOUT_S=240
 
+# How far into the recording a transcript of the default fixture must reach,
+# in seconds (transcript_covered_seconds, which underestimates on purpose).
+# Chosen low, since the recording starts only once the meeting is detected and
+# so misses a variable opening stretch: the record-only lane requires 25 s of
+# active speech in the same kind of capture (WAV_VERDICT_FIXTURE_MIN_ACTIVE_S),
+# and 25 s of speech spans at least 25 s, of which the estimate of the last
+# block's length, at four words a second, may see well under half. A
+# transcript that stops short of this covers a small part of what was played,
+# which is the truncation this catches. Calibrate on the runner; the measured
+# values will likely allow a higher floor.
+TRANSCRIPT_MIN_COVERAGE_S=15
+
 # Record-only skips the whole pipeline, so the budget is just: detector
 # notices the simulator stopped (~1 s poll) + endGrace (≥1 s) + recorder
 # finalize (~3 s) + sidecar write (instant). 60 s gives ample buffer.
@@ -2400,6 +2412,21 @@ assert_transcript_is_german() {
     log "$label: transcript content OK — matched $GERMAN_MARKER_MATCHED/${#GERMAN_MARKER_WORDS[@]} German words [$GERMAN_MARKER_HITS]"
 }
 
+# Fail the lane unless the transcript reaches TRANSCRIPT_MIN_COVERAGE_S into
+# the recording (transcript_covered_seconds: the latest block start plus a
+# deliberately short estimate of its length). The size and language checks
+# above both pass on a transcript of the first few sentences, so a pipeline
+# that transcribes only the opening of a recording would otherwise stay green.
+# For the default fixture only: the floor is set from its length.
+assert_transcript_covers_recording() {
+    local label="$1" transcript_path="$2" covered
+    covered="$(transcript_covered_seconds "$transcript_path")" \
+        || fail "$label: transcript carries no [MM:SS] segment line, so how much of the recording it covers cannot be told. Preview:"$'\n'"$(head -c 500 "$transcript_path")"
+    [ "$covered" -ge "$TRANSCRIPT_MIN_COVERAGE_S" ] \
+        || fail "$label: the transcript reaches only about ${covered}s into the recording (its latest block start plus its words at ${TRANSCRIPT_WORDS_PER_SECOND} a second), but a recording of the 49.8 s fixture must reach at least ${TRANSCRIPT_MIN_COVERAGE_S}s. Only the opening of the recording was transcribed (a truncated recording, a pipeline that stopped after its first chunk), or the recording started very late. Preview:"$'\n'"$(tail -c 500 "$transcript_path")"
+    log "$label: transcript covers the recording to at least ${covered}s (floor ${TRANSCRIPT_MIN_COVERAGE_S}s)"
+}
+
 run_one_meeting() {
     local label="$1"
     # Reset between meetings so --two-meetings captures each run's first
@@ -2443,6 +2470,7 @@ run_one_meeting() {
         log "$label: mic-device-change survival lane — skipping content keyword assertion"
     elif [ "$IS_DEFAULT_FIXTURE" = true ]; then
         assert_transcript_is_german "$label" "$transcript_path"
+        assert_transcript_covers_recording "$label" "$transcript_path"
     else
         # Custom --fixture: unknown spoken content, so keep only the size check.
         log "$label: custom fixture — skipping content keyword assertion (size check only)"
@@ -2753,13 +2781,12 @@ run_one_record_only_meeting() {
 
 # Re-import a previously-recorded WAV via POST /action/enqueueFile — same
 # code path the menu's "Open from Recording" entry takes. Polls /state for
-# a new lastJob in `done`, asserts transcript exists, is non-trivial, and
-# contains the expected fixture keyword. Confirms the round-trip:
+# a new lastJob in `done`, asserts transcript exists, is non-trivial, reads
+# as German and covers the recording. Confirms the round-trip:
 # recorder-produced WAV is loadable + transcribable.
 run_one_reimport() {
     local label="$1"
     local audio_path="$2"
-    local expected_phrase="${3:-meeting}"  # case-insensitive substring
 
     [ -f "$audio_path" ] || fail "$label: re-import source not found: $audio_path"
 
@@ -2787,13 +2814,20 @@ run_one_reimport() {
 
     # Content assertion: re-imported WAV came from the live recording stack,
     # so a successful round-trip means the engine actually recognised the
-    # fixture's spoken content — not just emitted any non-empty file.
-    # `meeting` is case-insensitive-robust (Parakeet may capitalise/translate;
-    # WhisperKit may emit "Meeting" or "meeting" depending on punctuation).
-    grep -qi "$expected_phrase" "$transcript_path" \
-        || fail "$label: transcript does not contain '$expected_phrase' (case-insensitive). Preview:$(printf '\n')$(head -c 500 "$transcript_path")"
+    # fixture's spoken content — not just emitted any non-empty file. The same
+    # two checks as the meeting lanes, for the same reason: the WAV is a live
+    # recording that misses a variable opening stretch, so one word of the
+    # script (this used to grep for the fixture's only English word) is a gate
+    # that the recording's start time decides, and a German check with a
+    # coverage floor is not.
+    if [ "$IS_DEFAULT_FIXTURE" = true ]; then
+        assert_transcript_is_german "$label" "$transcript_path"
+        assert_transcript_covers_recording "$label" "$transcript_path"
+    else
+        log "$label: custom fixture — skipping content assertions (size check only)"
+    fi
 
-    log "$label: transcript $transcript_path ($TRANSCRIPT_SIZE bytes, contains '$expected_phrase')"
+    log "$label: transcript $transcript_path ($TRANSCRIPT_SIZE bytes)"
     log "$label: preview:"
     head -c 500 "$transcript_path" | sed 's/^/    /'
     echo
