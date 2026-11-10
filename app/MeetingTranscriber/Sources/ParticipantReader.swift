@@ -134,8 +134,7 @@ enum ParticipantReader {
             if text.contains(":") && text.contains(where: \.isNumber) { continue }
 
             // Skip known UI labels
-            if skipPatterns.contains(lower) { continue }
-            if skipPatterns.contains(where: { lower.hasPrefix($0) }) { continue }
+            if skipPatterns.contains(where: { startsWithWord($0, in: lower) }) { continue }
 
             // Remove "(you)" suffix
             if lower.hasSuffix("(you)") {
@@ -148,6 +147,16 @@ enum ParticipantReader {
             }
         }
         return names
+    }
+
+    /// Whether `text` starts with `word` as a whole word, its plural
+    /// included: "share screen" and "presenters" are labels, "sharelle" is a
+    /// name.
+    private static func startsWithWord(_ word: String, in text: String) -> Bool {
+        guard text.hasPrefix(word) else { return false }
+        var rest = text.dropFirst(word.count)
+        if rest.first == "s" { rest = rest.dropFirst() }
+        return rest.first.map { !$0.isLetter } ?? true
     }
 
     // MARK: - AX Helpers
