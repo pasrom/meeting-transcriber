@@ -975,18 +975,15 @@ extension PipelineQueue {
         )
 
         // --- Persist 16kHz audio for re-diarization (move instead of copy to avoid double I/O) ---
-        try? FileManager.default.moveItem(
-            at: workDir.appendingPathComponent("mix_16k.wav"),
-            to: recordingsDir.appendingPathComponent("\(ctx.slug)_16k.wav"),
-        )
-
-        if transcription.isDualSource {
-            for (name, suffix) in [("app_16k.wav", "_app_16k.wav"), ("mic_16k.wav", "_mic_16k.wav")] {
-                try? FileManager.default.moveItem(
-                    at: workDir.appendingPathComponent(name),
-                    to: recordingsDir.appendingPathComponent("\(ctx.slug)\(suffix)"),
-                )
-            }
+        // Replacing, because a job run a second time keeps its stem and the
+        // first run's copies are already there; a plain move fails on them.
+        // Only when this run has a copy, so a missing one never costs the old.
+        var tracks = [("mix_16k.wav", "_16k.wav")]
+        if transcription.isDualSource { tracks += [("app_16k.wav", "_app_16k.wav"), ("mic_16k.wav", "_mic_16k.wav")] }
+        for (name, suffix) in tracks {
+            let source = workDir.appendingPathComponent(name)
+            guard FileManager.default.fileExists(atPath: source.path) else { continue }
+            try? Self.moveIntoPlace(source, to: recordingsDir.appendingPathComponent("\(ctx.slug)\(suffix)"))
         }
 
         // --- Persist transcript segments for late re-assignment ---
