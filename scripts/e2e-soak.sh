@@ -10,8 +10,9 @@
 #
 # This lane holds ONE meeting open for the requested duration, samples
 # `GET /metrics` throughout, and reports how memory moved across the run. It
-# then asserts the pipeline still produces a job at the end — a soak that leaks
-# and a soak that quietly stops working are different failures, and both matter.
+# then asserts the meeting still lands as a recording at the end — a soak that
+# leaks and a soak that quietly stops working are different failures, and both
+# matter.
 #
 # Measurement: `/metrics` self-reports `physFootprintBytes` (Activity Monitor's
 # "Memory" column) via proc_pid_rusage. Growth is a least-squares slope over all
@@ -209,7 +210,8 @@ quit_running_app || true
 
 # Record-only: the soak is about the resident process over an hour, and running
 # transcription on every loop of the fixture would measure the ASR engine
-# instead. The pipeline assertion at the end re-enables the full path.
+# instead. That capture still works at the end is checked by the recording's
+# sidecar, not by a pipeline job.
 write_dev_default "$BUNDLE_ID" debugRPCEnabled true bool
 write_dev_default "$BUNDLE_ID" autoWatch true bool
 write_dev_default "$BUNDLE_ID" recordOnly true bool
@@ -225,7 +227,7 @@ log "RPC up"
 # Launch-time work (model preload, snapshot load, orphan recovery) allocates;
 # letting it finish keeps it out of the growth curve, where it would read as a
 # leak in the first samples.
-log "Settling for up to ${SETTLE_TIMEOUT_S}s before the baseline sample"
+log "Settling for ${SETTLE_TIMEOUT_S}s before the baseline sample"
 sleep "$SETTLE_TIMEOUT_S"
 
 # --- soak -----------------------------------------------------------------

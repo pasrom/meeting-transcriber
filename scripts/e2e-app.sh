@@ -765,21 +765,18 @@ RECORD_ONLY_MARKER="/tmp/e2e-app-record-only-marker.$$"
 
 [ -n "$SIMULATOR_FIXTURE" ] || SIMULATOR_FIXTURE="$DEFAULT_FIXTURE"
 
-# Content-assertion keywords for the default two_speakers_de fixture. The
-# `run_one_meeting` transcript check greps for these German content words so a
-# live-recorded run can't go green on a >100-byte GARBAGE transcript: an empty
-# file, a wrong-language hallucination, or silent-capture noise all clear the
-# size check but hit zero of these. This list is identical to the xctest E2E's
-# `expectedKeywords` (ParakeetE2ETests.swift / WhisperKitE2ETests.swift) and
-# must stay in sync with them if the fixture is regenerated. The fixture also
-# speaks "Meeting", but neither this list nor the xctest set includes it: it is
-# the one English word, so requiring only German words proves the German
-# fixture actually transcribed rather than an English hallucination.
-# The check itself lives in lib/e2e-helpers.sh as `transcript_is_german` and
-# keys on common German words, NOT on the fixture's script. Recording starts
-# only once the app has DETECTED the meeting, so the opening seconds are never
-# captured and which sentences land shifts run to run; a script-derived list
-# therefore measured recording-start timing, not transcription quality.
+# Content assertion for the default two_speakers_de fixture. The
+# `run_one_meeting` transcript check requires German words so a live-recorded
+# run can't go green on a >100-byte GARBAGE transcript: an empty file, a
+# wrong-language hallucination, or silent-capture noise all clear the size
+# check but hit none of them.
+# The check lives in lib/e2e-helpers.sh as `transcript_is_german` and keys on
+# common German words, NOT on the fixture's script, unlike the xctest E2E's
+# `expectedKeywords`, which check a transcription of the whole fixture.
+# Recording starts only once the app has DETECTED the meeting, so the opening
+# seconds are never captured and which sentences land shifts run to run; a
+# script-derived list therefore measured recording-start timing, not
+# transcription quality.
 # Applied only when the simulator plays the known fixture (and not the
 # mic-device-change survival lane); a custom --fixture keeps only the
 # >100-byte size check.
@@ -812,9 +809,10 @@ WAV_VERDICT_FIXTURE_MIN_ACTIVE_S=25
 # Observed worst case on Mini is ~1 s; 2 s is honest margin.
 RECORDER_FINALIZE_WAIT_S=2
 
-# WatchLoop's per-app cooldown (`MeetingDetector.swift` cooldownDuration
-# = 5 s) plus a 3 s buffer so the second meeting isn't suppressed as a
-# re-detection. Bump if MeetingDetector.cooldownDuration grows.
+# The detector's per-app cooldown (`cooldownDuration` = 5 s in
+# PowerAssertionDetector.swift, the detector the simulator's meeting is found
+# by) plus a 3 s buffer so the second meeting isn't suppressed as a
+# re-detection. Bump if that cooldownDuration grows.
 INTER_MEETING_COOLDOWN_S=8
 
 # --- helpers --------------------------------------------------------------
@@ -3635,7 +3633,7 @@ run_naming_switch() {
         || fail "$label: typed '$typed' into $survivor but that field reads '$value' (the keystrokes went elsewhere)"
     other_after="$("$driver" read --identifier "$other_field" 2>/dev/null | sed -n 's/^value=//p')"
     [ "$other_after" = "$other_before" ] \
-        || fail "$label: typing into $survivor changed M_SPEAKER_00 from '$other_before' to '$other_after' (misrouted write)"
+        || fail "$label: typing into $survivor changed $other_label from '$other_before' to '$other_after' (misrouted write)"
     log "$label: '$typed' landed in $survivor and nowhere else ✅"
 
     # --- the confirmed name has to reach persistent state ----------------------
