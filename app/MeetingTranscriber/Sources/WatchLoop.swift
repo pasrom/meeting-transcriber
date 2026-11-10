@@ -174,10 +174,7 @@ class WatchLoop {
     func start() {
         guard watchTask == nil else { return }
 
-        update { next in
-            next.phase = .watching
-            next.detail = "Polling for meetings..."
-        }
+        returnToWatching()
         logger.info("Watch mode started (poll: \(self.pollInterval)s, grace: \(self.endGracePeriod)s)")
 
         watchTask = Task { [weak self] in
@@ -412,6 +409,11 @@ class WatchLoop {
         // later, which would cut its first seconds.
         if endReason == .replacedByNewCall {
             if !Task.isCancelled, let next = detector.checkOnce() {
+                // Leave `.recording` first, as every other recording start
+                // does, so `onStateChange` fires for the next call. Both
+                // transitions run in one main-actor stretch, so no UI
+                // renders the gap.
+                returnToWatching()
                 return await runMeeting(next)
             }
             detector.reset()
@@ -419,14 +421,16 @@ class WatchLoop {
             detector.reset(appName: meeting.pattern.appName)
         }
 
-        if !Task.isCancelled {
-            update { next in
-                next.phase = .watching
-                next.currentMeeting = nil
-                next.detail = "Polling for meetings..."
-            }
-        }
+        if !Task.isCancelled { returnToWatching() }
         return false
+    }
+
+    private func returnToWatching() {
+        update { next in
+            next.phase = .watching
+            next.currentMeeting = nil
+            next.detail = "Polling for meetings..."
+        }
     }
 
     // MARK: - Meeting Handling

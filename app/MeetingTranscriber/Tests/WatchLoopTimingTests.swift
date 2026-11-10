@@ -199,6 +199,8 @@ final class WatchLoopTimingTests: XCTestCase {
             return recorder
         }
         loop.permissionChecker = { .allHealthy }
+        var transitions: [WatchLoop.State] = []
+        loop.onStateChange = { _, new in transitions.append(new) }
 
         loop.start()
         // Wall-clock bail-out: a watch task that exits or parks outside
@@ -211,6 +213,13 @@ final class WatchLoopTimingTests: XCTestCase {
 
         XCTAssertEqual(recorders.count, 2, "each call must get its own recording")
         XCTAssertTrue(recorders.allSatisfy(\.stopCalled))
+        // Channel health, the live-caption flush and the "Meeting Detected"
+        // notification all hang on entering `.recording`, so the second call
+        // must enter it too rather than inherit the first call's phase.
+        XCTAssertEqual(
+            transitions.count { $0 == .recording }, 2,
+            "each recording must be entered by its own transition, got \(transitions)",
+        )
         if recordingStarts.count == 2 {
             XCTAssertGreaterThan(recordingStarts[1], 1.2)
             // The end poll sees the switch within one poll; re-confirming the
