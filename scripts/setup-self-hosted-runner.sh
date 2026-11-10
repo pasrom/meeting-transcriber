@@ -2,29 +2,30 @@
 # One-time setup for a self-hosted runner host that will run the
 # live-recording E2E driver (scripts/e2e-app.sh).
 #
-# What this does:
+# It runs in two phases, the script exiting in between:
 #   1. Creates a self-signed code-signing cert in a dedicated dev keychain.
 #      That keychain has an empty password and lives in the runner user's
-#      Library — no sudo, no TouchID, no GUI prompts.
-#   2. Builds the dev .app via run_app.sh --build-only.
-#   3. Signs the .app with the new cert. The cert is NOT in the system
-#      trust store (would need sudo + GUI auth, or an MDM-installed PPPC
-#      profile — both blocked on macOS 26 without an actual MDM server).
-#      That's fine for our purpose: TCC matches future builds via the
-#      cert's leaf SHA-1, which stays constant across rebuilds even if
-#      the chain is untrusted.
-#   4. Deploys to ~/Applications/MeetingTranscriber-Dev.app (stable path).
+#      Library — no sudo, no TouchID, no GUI prompts. Then it stops and prints
+#      the one command that trusts the cert for code signing in the login
+#      keychain: per user, but it needs a TouchID / password prompt, so it is
+#      run from a GUI Terminal. (The system-wide `add-trusted-cert -d` is
+#      refused on macOS 26 without an MDM server.)
+#   2. Run again once the cert is trusted: builds the dev .app via
+#      run_app.sh --build-only, deploys it to
+#      ~/Applications/MeetingTranscriber-Dev.app (stable path), signs it with
+#      the cert, and sets up the CI keychain and the Spotlight exclusion of
+#      ~/Library/Keychains. TCC matches future builds via the cert's leaf
+#      SHA-1, which stays constant across rebuilds.
 #
-# What you do once after this script:
-#   - Launch the deployed .app (e.g. `open ~/Applications/MeetingTranscriber-Dev.app`).
-#   - When macOS prompts for Microphone, click Allow.
-#   - When the app first tries to detect a meeting via Screen Recording,
-#     System Settings → Privacy & Security → Screen & System Audio
-#     Recording → toggle on for MeetingTranscriber-Dev.app.
-#   - From that point on, every rebuild keeps the same cert leaf SHA-1, so
-#     TCC keeps the grants — scripts/e2e-app.sh runs end-to-end.
+# What you do once after this script: launch the deployed .app and grant
+# Microphone and Screen & System Audio Recording; the closing message lists
+# the steps.
 #
-# Re-running is safe: the cert + dev keychain are recreated only if missing.
+# Re-running once the cert is trusted is safe: the cert and dev keychain are
+# kept, and phase 2 runs again. Re-running before the cert is trusted, or
+# after its trust was lost, is NOT: the step 1 check sees only a trusted
+# identity, so it deletes the dev keychain and mints a new cert with a new
+# SHA-1, and every TCC grant made against the old one no longer applies.
 
 set -euo pipefail
 
@@ -139,8 +140,8 @@ else
 fi
 
 # Read the SHA-1 fingerprint straight from the .crt — works whether or
-# not the cert is trusted. (`find-identity -v` would only see trusted
-# identities; we don't trust this cert, so `-v` would always be empty.)
+# not the cert is trusted yet. (`find-identity -v` only sees trusted
+# identities, so it is empty for a cert step 1 has just created.)
 CERT_HASH="$(openssl x509 -in "$CERT_PATH" -noout -fingerprint -sha1 \
     | sed 's/^.*=//' | tr -d ':')"
 [ -n "$CERT_HASH" ] || fail "could not extract cert SHA-1 from $CERT_PATH"
@@ -203,10 +204,10 @@ fi
 security unlock-keychain -p "$DEV_KEYCHAIN_PASS" "$DEV_KEYCHAIN" \
     || fail "could not unlock dev keychain"
 
-# Sign explicitly with our cert — run_app.sh's signing step uses
-# `find-identity -v` and so won't pick up our untrusted cert. Doing it
-# here keeps run_app.sh untouched for other callers. Through the shared
-# helper, so this bootstrap keeps the bundle's entitlements the way the e2e
+# Sign explicitly with our cert, by its SHA-1 and keychain, rather than
+# leaving the choice to run_app.sh's own signing step, which picks among every
+# identity the keychains offer. Doing it here keeps run_app.sh untouched for
+# other callers. Through the shared helper, so this bootstrap keeps the bundle's entitlements the way the e2e
 # lanes now do; signing it bare used to leave the very bundle a human grants
 # TCC to without any (issue #609).
 log "Signing with $CERT_NAME"
@@ -272,10 +273,11 @@ Next (one-time, in the GUI session as user '$USER'):
   2. macOS will prompt for Microphone the first time the app tries to
      record. Click Allow.
 
-  3. macOS may also prompt for Screen Recording (used for meeting
-     detection via window titles). Allow it. Or pre-grant via System
-     Settings → Privacy & Security → Screen & System Audio Recording →
-     "+" → $APP_BUNDLE_PATH.
+  3. macOS may also prompt for Screen Recording. Allow it. Meeting
+     detection does not need it, but it gates the app-audio capture when
+     the Audio Recording grant is absent, and gives meetings their window
+     title. Or pre-grant via System Settings → Privacy & Security →
+     Screen & System Audio Recording → "+" → $APP_BUNDLE_PATH.
 
   4. Verify in System Settings → Privacy & Security:
        - Microphone               → MeetingTranscriber-Dev.app on
