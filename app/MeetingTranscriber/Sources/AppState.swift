@@ -421,9 +421,9 @@ final class AppState {
             let naming = namingRPCClosures()
             // Blocking one-call: enqueue + wait until terminal (auto-skipping
             // the headless naming pause), returning the final status inline.
-            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { [weak self] url, maxWait in
+            let transcribe: BlockingTranscribe = { [weak self] url, maxWait, onEnqueued in
                 guard let self else { return .noFile }
-                return await pipeline.transcribeAndWait(path: url, maxWaitSeconds: maxWait)
+                return await pipeline.transcribeAndWait(path: url, maxWaitSeconds: maxWait, onEnqueued: onEnqueued)
             }
             let watch = watchRPCClosures()
             let record = recordRPCClosures()

@@ -42,7 +42,7 @@
             namingStatus: @escaping (UUID) -> NamingStatusDTO? = { _ in nil },
             confirmNaming: @escaping (UUID, [String: String]) -> Bool = { _, _ in false },
             skipJobNaming: @escaping (UUID) -> Bool = { _ in false },
-            transcribe: @escaping (URL, Double) async -> BlockingTranscribeResult = { _, _ in .noFile },
+            transcribe: @escaping BlockingTranscribe = { _, _, _ in .noFile },
             watchStatus: @escaping () -> WatchStatusDTO = { .notWatching },
             watchControl: @escaping (WatchAction) async -> WatchControlOutcome = { _ in .failed },
             recordStatus: @escaping () -> RecordStatusDTO = { .notRecording },
@@ -752,7 +752,9 @@
                 jobID: UUID().uuidString, state: .done, meetingTitle: "M",
                 transcriptPath: "/out/t.txt", protocolPath: nil, error: nil, warnings: [],
             )
-            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in await Task.yield(); return .completed(dto) }
+            let transcribe: BlockingTranscribe = { _, _, _ in
+                await Task.yield(); return .completed(dto)
+            }
             let base = try await startServer(transcribe: transcribe)
 
             var req = request("POST", base.appendingPathComponent("v1/transcribe"), headers: authHeader)
@@ -769,7 +771,9 @@
                 jobID: UUID().uuidString, state: .transcribing, meetingTitle: "M",
                 transcriptPath: nil, protocolPath: nil, error: nil, warnings: [],
             )
-            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in await Task.yield(); return .timedOut(dto) }
+            let transcribe: BlockingTranscribe = { _, _, _ in
+                await Task.yield(); return .timedOut(dto)
+            }
             let base = try await startServer(transcribe: transcribe)
 
             var req = request("POST", base.appendingPathComponent("v1/transcribe"), headers: authHeader)
@@ -779,7 +783,7 @@
         }
 
         func testV1TranscribeNoFileReturns400() async throws {
-            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in await Task.yield(); return .noFile }
+            let transcribe: BlockingTranscribe = { _, _, _ in await Task.yield(); return .noFile }
             let base = try await startServer(transcribe: transcribe)
 
             var req = request("POST", base.appendingPathComponent("v1/transcribe"), headers: authHeader)
@@ -885,7 +889,7 @@
             // Bind the closure to a typed local (not a trailing closure) so its
             // two-arg shape can't be mis-inferred against the sibling 2-arg
             // confirmNaming parameter, and SwiftFormat can't restyle it.
-            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, wait in
+            let transcribe: BlockingTranscribe = { _, wait, _ in
                 await recorder.record(wait)
                 return .completed(dto)
             }
@@ -936,10 +940,12 @@
             // transcribe yields a fresh job each call; the repeat path instead
             // resolves the stored id via jobStatus (echoed here), so identical
             // jobIDs prove the second request did not re-run transcribe.
-            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in
+            let transcribe: BlockingTranscribe = { _, _, onEnqueued in
+                let id = UUID()
+                onEnqueued(id)
                 await Task.yield()
                 return .completed(JobStatusDTO(
-                    jobID: UUID().uuidString, state: .done, meetingTitle: "M",
+                    jobID: id.uuidString, state: .done, meetingTitle: "M",
                     transcriptPath: "/out/t.txt", protocolPath: nil, error: nil, warnings: [],
                 ))
             }
@@ -966,6 +972,49 @@
             XCTAssertEqual(j1, j2, "repeat returns the same job via the idempotency store, no re-run")
         }
 
+        /// A client whose HTTP timeout is shorter than the wait retries while
+        /// the first request is still waiting on its job. The key must already
+        /// be recorded then, so the retry gets that job's status (202, still
+        /// running) instead of creating a second job for the same file.
+        func testV1TranscribeIdempotencyKeyCoversARetryDuringTheWait() async throws {
+            let jobID = UUID()
+            let gate = MainActorGate()
+            var calls = 0
+            let transcribe: BlockingTranscribe = { _, _, onEnqueued in
+                calls += 1
+                // A second run would mean a second job: answer at once rather
+                // than park the retry behind the first request's wait.
+                guard calls == 1 else { return .noFile }
+                onEnqueued(jobID)
+                await gate.wait()
+                return .completed(Self.jobDTO(jobID, state: .done))
+            }
+            let status: (UUID) -> JobStatusDTO? = { id in Self.jobDTO(id, state: .transcribing) }
+            let base = try await startServer(jobStatus: status, transcribe: transcribe)
+            let url = base.appendingPathComponent("v1/transcribe")
+            let body = Data(#"{"path":"/inbox/a.wav"}"#.utf8)
+            var req = request("POST", url, headers: idempotentHeaders("tx-key-in-flight"))
+            req.httpBody = body
+
+            let first = Task { [req] in try await URLSession.shared.upload(for: req, from: body) }
+            await waitFor(gate.hasWaiter, timeout: .seconds(5))
+            let (d2, r2) = try await URLSession.shared.upload(for: req, from: body)
+            XCTAssertEqual(calls, 1, "the retry must not run a second job")
+            XCTAssertEqual((r2 as? HTTPURLResponse)?.statusCode, 202)
+            XCTAssertEqual(try JSONDecoder().decode(JobStatusDTO.self, from: d2).jobID, jobID.uuidString)
+
+            gate.open()
+            let (_, r1) = try await first.value
+            XCTAssertEqual((r1 as? HTTPURLResponse)?.statusCode, 200)
+        }
+
+        private static func jobDTO(_ id: UUID, state: JobState) -> JobStatusDTO {
+            JobStatusDTO(
+                jobID: id.uuidString, state: state, meetingTitle: "M",
+                transcriptPath: nil, protocolPath: nil, error: nil, warnings: [],
+            )
+        }
+
         // MARK: - POST /v1/transcribe?include=transcript (inline text)
 
         /// Issue #431: a headless remote consumer with no shared filesystem
@@ -982,7 +1031,7 @@
                 jobID: UUID().uuidString, state: .done, meetingTitle: "M",
                 transcriptPath: file.path, protocolPath: nil, error: nil, warnings: [],
             )
-            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in
+            let transcribe: BlockingTranscribe = { _, _, _ in
                 await Task.yield(); return .completed(dto)
             }
             let base = try await startServer(transcribe: transcribe)
@@ -1011,7 +1060,7 @@
                 jobID: UUID().uuidString, state: .done, meetingTitle: "M",
                 transcriptPath: file.path, protocolPath: nil, error: nil, warnings: [],
             )
-            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in
+            let transcribe: BlockingTranscribe = { _, _, _ in
                 await Task.yield(); return .completed(dto)
             }
             let base = try await startServer(transcribe: transcribe)

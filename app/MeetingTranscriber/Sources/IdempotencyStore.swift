@@ -9,10 +9,12 @@
     /// which is all client retry-dedup needs (a toggle off/on resets it). The
     /// FIFO cap stops an unbounded leak on a long-running headless server.
     ///
-    /// The key is recorded after the job is created, so this dedupes *sequential*
-    /// retries (a client re-sending after a response or timeout, the common
-    /// case). Two same-key requests racing in-flight can both enqueue; hardening
-    /// that needs reserve-before-work and is left as a follow-up.
+    /// The key is recorded as soon as the job is created (for the blocking
+    /// transcribe route, before its wait), so this dedupes *sequential* retries
+    /// (a client re-sending after a response or timeout, the common case). Two
+    /// same-key requests arriving before either has created its job can both
+    /// enqueue; hardening that needs reserve-before-work and is left as a
+    /// follow-up.
     struct IdempotencyStore {
         private var byKey: [String: [UUID]] = [:]
         private var order: [String] = []

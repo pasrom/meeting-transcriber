@@ -542,6 +542,24 @@ final class PipelineControllerTests: XCTestCase {
         XCTAssertNotEqual(dto?.state, .done)
     }
 
+    /// The RPC layer records an Idempotency-Key from this callback, so it must
+    /// carry the created job's id, and only when a job was created.
+    func testTranscribeAndWaitHandsTheJobIDOverOnEnqueue() async throws {
+        let pc = makeWiredController()
+        let file = tmpDir.appendingPathComponent("blocking-enqueued.wav")
+        FileManager.default.createFile(atPath: file.path, contents: Data("RIFF".utf8))
+        var handedOver: [UUID] = []
+
+        let result = await pc.transcribeAndWait(path: file, maxWaitSeconds: 0) { handedOver.append($0) }
+        guard case let .timedOut(dto) = result else { XCTFail("expected .timedOut, got \(result)"); return }
+        XCTAssertEqual(handedOver.map(\.uuidString), try [XCTUnwrap(dto).jobID])
+        handedOver = []
+        _ = await pc.transcribeAndWait(
+            path: URL(fileURLWithPath: "/tmp/missing-\(UUID().uuidString).wav"), maxWaitSeconds: 0,
+        ) { handedOver.append($0) }
+        XCTAssertEqual(handedOver, [], "no job, nothing to remember")
+    }
+
     func testTranscribeAndWaitFallsBackToTerminalStoreWhenJobReaped() async {
         // A job that completed and was reaped from the live queue before the poll
         // loop observed it must still resolve via the terminal store (the slow

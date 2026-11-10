@@ -557,13 +557,16 @@ final class PipelineController {
     /// the in-flight status once `maxWaitSeconds` elapses (the job keeps running
     /// and will still finish on its own), else `.completed` with the terminal
     /// status. A Notion export is not waited for: `export` says if it is pending.
+    /// `onEnqueued` gets the job id as soon as the job exists, before the wait.
     func transcribeAndWait(
         path: URL,
         maxWaitSeconds: Double,
         pollInterval: Duration = .milliseconds(200),
+        onEnqueued: @MainActor (UUID) -> Void = { _ in },
     ) async -> BlockingTranscribeResult {
         guard let jobID = enqueueExistingFilesReturningIDs([path], autoSkipNaming: true).first
         else { return .noFile }
+        onEnqueued(jobID)
         let deadline = ContinuousClock.now.advanced(by: .seconds(maxWaitSeconds))
         while ContinuousClock.now < deadline {
             if let job = queue.jobs.first(where: { $0.id == jobID }) {
@@ -581,20 +584,14 @@ final class PipelineController {
     }
 }
 
+/// The blocking-transcribe seam behind `POST /v1/transcribe`: file, wait in
+/// seconds, and a callback the job id is handed to once the job exists.
+typealias BlockingTranscribe = (URL, Double, @MainActor (UUID) -> Void) async -> BlockingTranscribeResult
+
 /// Outcome of a blocking `transcribeAndWait`. The RPC layer maps `noFile` → 400,
 /// `completed` → 200, `timedOut` → 202.
 enum BlockingTranscribeResult {
     case noFile
     case completed(JobStatusDTO)
     case timedOut(JobStatusDTO?)
-
-    /// The job this result refers to, if any (nil only for `.noFile`). Lets the
-    /// RPC layer record the created job under an Idempotency-Key.
-    var jobID: UUID? {
-        switch self {
-        case .noFile: nil
-        case let .completed(dto): UUID(uuidString: dto.jobID)
-        case let .timedOut(dto): dto.flatMap { UUID(uuidString: $0.jobID) }
-        }
-    }
 }
