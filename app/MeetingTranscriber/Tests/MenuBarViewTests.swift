@@ -820,6 +820,9 @@ final class MenuBarViewTests: XCTestCase {
         let sut = try makeView(status: makeStatus(), updateChecker: checkerWithUpdate())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Update Available: v1.0.0"))
+        // Control for the two "hidden" tests below: the prefix search they
+        // rely on does find the indicator when it is shown.
+        XCTAssertNoThrow(try findUpdateIndicator(in: body))
     }
 
     func testUpdateIndicatorSaysItCopiesBrewCommandForHomebrewInstall() throws {
@@ -836,13 +839,21 @@ final class MenuBarViewTests: XCTestCase {
 
         let sut = try makeView(status: makeStatus(), updateChecker: checker)
         let body = try sut.inspect()
-        XCTAssertThrowsError(try body.find(text: "Update Available:"))
+        XCTAssertThrowsError(try findUpdateIndicator(in: body))
     }
 
     func testUpdateIndicatorHiddenWhenNoChecker() throws {
         let sut = try makeView(status: makeStatus())
         let body = try sut.inspect()
-        XCTAssertThrowsError(try body.find(text: "Update Available:"))
+        XCTAssertThrowsError(try findUpdateIndicator(in: body))
+    }
+
+    /// The update indicator, found by prefix: `find(text:)` matches the whole
+    /// string, and the indicator always carries the version tag, so the bare
+    /// label is absent in every state and a "hidden" assertion on it could
+    /// never fail.
+    private func findUpdateIndicator(in body: InspectableView<some BaseViewType>) throws {
+        _ = try body.find(ViewType.Text.self) { try $0.string().hasPrefix("Update Available:") }
     }
 
     // MARK: - Process Files button
