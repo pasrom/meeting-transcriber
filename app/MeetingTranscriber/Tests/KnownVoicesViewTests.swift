@@ -131,8 +131,9 @@ final class KnownVoicesViewTests: XCTestCase { // swiftlint:disable:this balance
         let matcher = SpeakerMatcher(dbPath: dbPath)
         matcher.saveDB([StoredSpeaker(name: "X", embeddings: [[1, 0, 0]])])
         let view = KnownVoicesView(matcher: matcher) // onMutate omitted
-        // Mutations without a callback must not crash.
+        // Mutations without a callback must not crash, and still apply.
         view.performRename(from: "X", to: "Y")
+        XCTAssertEqual(matcher.allSpeakerNames(), ["Y"])
     }
 
     // MARK: - Render
