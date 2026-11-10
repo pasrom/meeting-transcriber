@@ -238,12 +238,14 @@ SIM_PID=$!
 # every poll, and this lane once blamed the detector, with an empty state dump,
 # while the app was blocked behind a TCC consent prompt.
 
-echo "▸ Waiting for app to detect + start recording (max 30 s)…"
-# `isProcessing` flips true while a job is in the queue. It's informational
-# only — if it never flips we still let step 7 run and time out there,
-# which gives a clearer "recordingSilent never went true" failure than
-# bailing here would. Hence `|| true`: a timeout here is non-fatal.
-poll_state --each assert_app_alive 30 1 state_is '.pipeline.isProcessing == true' || true
+echo "▸ Waiting for app to detect + start recording (max 40 s)…"
+# The watch state, not `pipeline.isProcessing`: that is true only while a job
+# is processed, and a recording is no job, so polling it waited out its whole
+# window on every run. 40 s is the latest start that still leaves the 30 s
+# threshold plus slack inside the simulator's 75 s; a recording that has not
+# started by then cannot raise the flag before the meeting ends.
+poll_state --each assert_app_alive 40 1 state_is '.watchState == "recording"' \
+    || die "$(state_why $? "the app never started recording the simulator's meeting within 40 s, so the silence detector had nothing to watch")"
 
 # --- 7. Poll for recordingSilent flag -----------------------------------------
 
