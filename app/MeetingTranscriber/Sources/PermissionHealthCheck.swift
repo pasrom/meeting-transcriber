@@ -66,11 +66,10 @@ enum PermissionProblem: Equatable {
     /// Accessibility never blocks: its only consumer is `ParticipantReader` (Teams
     /// participant names, read in `handleMeeting`), which a recording does not need.
     /// Settings labels it optional too, via `PermissionRow(optional: true)`, but that
-    /// row is not independent corroboration: its wording promises a mute detection
-    /// that does not exist, since mute handling is sample-level in `AudioMixer` and
-    /// level-based in `ChannelHealthController`, neither of which touches
-    /// Accessibility. Nothing links the row to this switch either, so flipping one
-    /// leaves them disagreeing with no compile error and no failing test.
+    /// row is not independent corroboration: nothing links the row to this switch,
+    /// so flipping one leaves them disagreeing with no compile error and no failing
+    /// test. (Mute handling is sample-level in `AudioMixer` and level-based in
+    /// `ChannelHealthController`; neither touches Accessibility.)
     ///
     /// Screen Recording keeps blocking every recording that taps a process, even
     /// though it is only *one* of two sufficient grants for the app-audio tap, the
