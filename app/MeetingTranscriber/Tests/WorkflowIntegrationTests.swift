@@ -1628,13 +1628,15 @@ final class WorkflowIntegrationTests: XCTestCase {
         try AudioMixer.saveWAV(samples: far, sampleRate: 16000, url: appURL)
         try AudioMixer.saveWAV(samples: far, sampleRate: 8000, url: micURL)
 
-        let id = UUID()
-        h.queue.enqueue(PipelineJob(
+        let job = PipelineJob(
             meetingTitle: "meeting", appName: "File",
             mixPath: nil, appPath: appURL, micPath: micURL, micDelay: 0,
-        ))
+        )
+        // Attached without starting the pipeline, so only this call can
+        // record anything on the job.
+        h.queue.insertJobForTesting(job)
         let analysis = await h.queue.measureEchoBleed(
-            jobID: id, appURL: appURL, micURL: micURL, micDelay: 0,
+            jobID: job.id, appURL: appURL, micURL: micURL, micDelay: 0,
         )
         XCTAssertEqual(analysis.verdict, .notMeasured)
         XCTAssertNil(
