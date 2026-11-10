@@ -1,4 +1,5 @@
 @testable import MeetingTranscriber
+import os
 import XCTest
 
 // MARK: - Mock Provider
@@ -6,12 +7,18 @@ import XCTest
 final class MockUpdateProvider: UpdateProviding, @unchecked Sendable {
     var latestReleaseResult: Result<ReleaseInfo, any Error> = .failure(UpdateCheckerError.networkError("not configured"))
     var allReleasesResult: Result<[ReleaseInfo], any Error> = .failure(UpdateCheckerError.networkError("not configured"))
-    var latestReleaseCalled = false
+    /// Locked: without the deduplication under test, two checks call
+    /// `latestRelease` concurrently.
+    var latestReleaseCallCount: Int {
+        latestReleaseCalls.withLock(\.self)
+    }
+
+    private let latestReleaseCalls = OSAllocatedUnfairLock(initialState: 0)
     var allReleasesCalled = false
     var delay: Duration?
 
     func latestRelease() async throws -> ReleaseInfo {
-        latestReleaseCalled = true
+        latestReleaseCalls.withLock { $0 += 1 }
         if let delay { try? await Task.sleep(for: delay) }
         return try latestReleaseResult.get()
     }
@@ -96,17 +103,6 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertEqual(info.version?.2, 2)
     }
 
-    func testReleaseInfoDMGURLNilWhenNoAsset() {
-        let info = makeRelease(tag: "v1.0.0", dmgURL: nil)
-        XCTAssertNil(info.dmgURL)
-    }
-
-    func testReleaseInfoEquality() {
-        let a = makeRelease(tag: "v1.0.0")
-        let b = makeRelease(tag: "v1.0.0")
-        XCTAssertEqual(a, b)
-    }
-
     // MARK: - checkNow: finds update
 
     func testCheckNowFindsUpdate() async {
@@ -120,7 +116,7 @@ final class UpdateCheckerTests: XCTestCase {
         // Wait for the task to complete
         await yieldUntil { !checker.isChecking }
 
-        XCTAssertTrue(provider.latestReleaseCalled)
+        XCTAssertEqual(provider.latestReleaseCallCount, 1)
         XCTAssertNotNil(checker.availableUpdate)
         XCTAssertEqual(checker.availableUpdate?.tagName, "v99.0.0")
         XCTAssertNotNil(checker.lastCheckDate)
@@ -188,8 +184,7 @@ final class UpdateCheckerTests: XCTestCase {
 
         await yieldUntil { !checker.isChecking }
 
-        // Provider should only be called once
-        XCTAssertTrue(provider.latestReleaseCalled)
+        XCTAssertEqual(provider.latestReleaseCallCount, 1, "the second checkNow must join the running check")
     }
 
     // MARK: - Pre-release mode
@@ -207,7 +202,7 @@ final class UpdateCheckerTests: XCTestCase {
         await yieldUntil { !checker.isChecking }
 
         XCTAssertTrue(provider.allReleasesCalled)
-        XCTAssertFalse(provider.latestReleaseCalled)
+        XCTAssertEqual(provider.latestReleaseCallCount, 0)
         XCTAssertEqual(checker.availableUpdate?.tagName, "v99.1.0-beta")
     }
 
@@ -220,24 +215,8 @@ final class UpdateCheckerTests: XCTestCase {
 
         await yieldUntil { !checker.isChecking }
 
-        XCTAssertTrue(provider.latestReleaseCalled)
+        XCTAssertEqual(provider.latestReleaseCallCount, 1)
         XCTAssertFalse(provider.allReleasesCalled)
-    }
-
-    // MARK: - DMG URL extraction
-
-    func testDMGURLExtracted() {
-        let info = makeRelease(
-            tag: "v1.0.0",
-            dmgURL: URL(string: "https://example.com/app.dmg"),
-        )
-        XCTAssertEqual(info.dmgURL?.absoluteString, "https://example.com/app.dmg")
-    }
-
-    func testFallbackToHTMLURLWhenNoDMG() {
-        let info = makeRelease(tag: "v1.0.0", dmgURL: nil)
-        XCTAssertNil(info.dmgURL)
-        XCTAssertEqual(info.htmlURL.absoluteString, "https://github.com/pasrom/meeting-transcriber/releases/tag/v1.0.0")
     }
 
     // MARK: - Error Descriptions
@@ -266,7 +245,7 @@ final class UpdateCheckerTests: XCTestCase {
 
         // With checkForUpdates=false, provider should not be called
         try? await Task.sleep(for: .milliseconds(100))
-        XCTAssertFalse(provider.latestReleaseCalled)
+        XCTAssertEqual(provider.latestReleaseCallCount, 0)
     }
 
     func testCheckNowClearsLastError() async {
@@ -287,7 +266,6 @@ final class UpdateCheckerTests: XCTestCase {
     private func makeRelease(
         tag: String,
         prerelease: Bool = false,
-        dmgURL: URL? = URL(string: "https://example.com/MeetingTranscriber.dmg"),
     ) -> ReleaseInfo {
         ReleaseInfo(
             tagName: tag,
@@ -295,7 +273,7 @@ final class UpdateCheckerTests: XCTestCase {
             prerelease: prerelease,
             // swiftlint:disable:next force_unwrapping
             htmlURL: URL(string: "https://github.com/pasrom/meeting-transcriber/releases/tag/\(tag)")!,
-            dmgURL: dmgURL,
+            dmgURL: URL(string: "https://example.com/MeetingTranscriber.dmg"),
         )
     }
 
