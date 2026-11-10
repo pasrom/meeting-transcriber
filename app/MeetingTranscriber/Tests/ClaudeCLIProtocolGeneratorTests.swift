@@ -54,6 +54,10 @@
             XCTAssertNil(ClaudeCLIProtocolGenerator.parseStreamJSONLine("not json"))
         }
 
+        func testParseStreamJSONLineEmptyLineReturnsNil() {
+            XCTAssertNil(ClaudeCLIProtocolGenerator.parseStreamJSONLine(""))
+        }
+
         func testParseStreamJSONLineNonObjectJSONReturnsNil() {
             XCTAssertNil(ClaudeCLIProtocolGenerator.parseStreamJSONLine("[1,2,3]"))
         }
