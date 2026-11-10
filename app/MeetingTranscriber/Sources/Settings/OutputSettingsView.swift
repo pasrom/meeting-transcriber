@@ -1,10 +1,21 @@
 import AppKit
+import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "OutputSettingsView")
 
 /// Pure derivations used by `OutputSettingsView`. Extracted so the wrapping
 /// logic can be unit-tested without instantiating a SwiftUI host.
 enum OutputSettingsLogic {
+    /// Install `source` as the custom prompt at `dest`, replacing any prompt
+    /// already there. The picked file is the user's and must survive.
+    static func importPrompt(from source: URL, to dest: URL) throws {
+        // Read and write rather than `replaceItemAt`, which moves the
+        // replacement into place and so removed the file the user picked.
+        try Data(contentsOf: source).write(to: dest, options: .atomic)
+    }
+
     /// Abbreviate `url` for display by replacing the home-directory prefix
     /// with `~` so paths inside the user's home stay compact. Falls back to
     /// the full path when `url` is outside `home`. Matches at the path-
@@ -387,11 +398,10 @@ struct OutputSettingsView: View {
         panel.message = "Select a prompt file to import"
         guard panel.runModal() == .OK, let source = panel.url else { return }
         ensurePromptDirectory()
-        let dest = AppPaths.customPromptFile
-        if FileManager.default.fileExists(atPath: dest.path) {
-            _ = try? FileManager.default.replaceItemAt(dest, withItemAt: source)
-        } else {
-            try? FileManager.default.copyItem(at: source, to: dest)
+        do {
+            try OutputSettingsLogic.importPrompt(from: source, to: AppPaths.customPromptFile)
+        } catch {
+            logger.error("prompt_import_failed error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
