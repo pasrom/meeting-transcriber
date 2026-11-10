@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generate quality-suite ground-truth fixtures: WAV + sidecar JSON with text +
-# per-speaker turn timestamps. Used by P6 WER/DER regression suite.
+# per-speaker turn timestamps. Used by the WER/DER quality regression suite.
 #
 # Each WAV gets a `<name>_truth.json` next to it describing the expected
 # transcript and diarization timeline. Regenerate any time `say` voices or
