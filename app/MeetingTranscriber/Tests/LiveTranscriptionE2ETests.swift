@@ -125,6 +125,8 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         let matcher = FakeLiveSpeakerMatcher(canned: ["Roman", "Anna"])
         let controller = LiveTranscriptionController(
             engine: engine, vad: vad, captions: captions, speakerMatcher: matcher,
+            // The fixture is burst-delivered (~80 ms of audio per 2 ms wall time).
+            maxQueuedSeconds: 60,
         )
         await controller.prepare()
         return LiveSetup(

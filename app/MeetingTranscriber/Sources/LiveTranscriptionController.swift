@@ -95,8 +95,8 @@ final class LiveTranscriptionController {
     /// One bounded feed per channel (see `CaptionChannelFeed`). The feeds
     /// are (re)armed per recording via `bindFeeds()` and retired by
     /// `flush()`/`retireFeeds()`.
-    private let micFeed = CaptionChannelFeed()
-    private let appFeed = CaptionChannelFeed()
+    private let micFeed: CaptionChannelFeed
+    private let appFeed: CaptionChannelFeed
     /// True once `prepare()` resolved to a kept streaming session (German/English),
     /// which `prepareForNextRecording()` keeps instead of rebuilding.
     private var usingStreamingSession = false
@@ -146,8 +146,12 @@ final class LiveTranscriptionController {
                 languageCode: language, vad: vad, makeSink: makeSink,
             )
         },
+        // Must exceed the slowest single decode plus the 0.8 s partial gate; see transcription.md.
+        maxQueuedSeconds: TimeInterval = 10,
         verboseDiagnostics: @escaping () -> Bool = { false },
     ) {
+        micFeed = CaptionChannelFeed(maxQueuedSeconds: maxQueuedSeconds)
+        appFeed = CaptionChannelFeed(maxQueuedSeconds: maxQueuedSeconds)
         self.engine = engine
         self.vad = vad
         self.captions = captions
@@ -310,7 +314,7 @@ final class LiveTranscriptionController {
     func flush() async {
         let task = Task { [weak self] in
             guard let self else { return }
-            await self.retireFeeds()
+            await self.retireFeeds(logDrops: true)
             async let mic: Void? = self.micPipeline?.flush()
             async let app: Void? = self.appPipeline?.flush()
             _ = await (mic, app)
@@ -367,9 +371,16 @@ final class LiveTranscriptionController {
     /// the consumers so every buffer already delivered is ingested. This is
     /// the deterministic "all pre-stop audio is in the pipelines" barrier
     /// that `flush()` and a rebind rely on.
-    private func retireFeeds() async {
-        await micFeed.retire()
-        await appFeed.retire()
+    private func retireFeeds(logDrops: Bool = false) async {
+        let micDrops = await micFeed.retire()
+        let appDrops = await appFeed.retire()
+        guard logDrops, verboseDiagnostics() else { return }
+        for (channel, drops) in [("mic", micDrops), ("app", appDrops)] {
+            guard let drops else { continue }
+            logger.info(
+                "[\(channel, privacy: .public)] caption queue dropped \(drops.seconds, format: .fixed(precision: 1), privacy: .public) s in \(drops.gaps, privacy: .public) gaps",
+            )
+        }
     }
 
     /// (Re)arm one bounded feed per built pipeline, retiring any previous
