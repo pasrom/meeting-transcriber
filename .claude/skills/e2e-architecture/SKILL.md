@@ -308,6 +308,16 @@ PRs are excluded from the self-hosted runner.
   sibling's leftover into every later step. Hand-run rule on the mini, all three
   before touching it: no `Runner.Worker`, no `e2e-app.sh`, no
   `MeetingTranscriber-Dev` process.
+- **A failed `e2e-app.sh` lane leaves a diagnostics bundle** in CI, written by
+  its exit handler before any cleanup: `$RUNNER_TEMP/e2e-diag/<lane>/` with the
+  app's `/state`, queue snapshot and pipeline-log tail, the lane's own
+  simulator log (`/tmp/e2e-app-sim-<lane>.log`) and the app's crash reports
+  since the run started, uploaded once as the `e2e-diagnostics` artifact. The
+  artifact is public, so the structured files are rebuilt from an allowlist of
+  fields that leaves out names, titles, spoken text, paths and endpoints;
+  `e2e_write_diagnostics` in `scripts/lib/e2e-helpers.sh` lists what is kept,
+  and `scripts/tests/test_e2e_diagnostics.sh` feeds it samples full of names.
+  A field added to `/state` stays out of the bundle until it is added there.
 - Limitations: needs one-time runner setup (see below); can't run on
   GitHub-hosted runners — only on a self-hosted Mac with an interactive
   GUI session and a stable code-signing identity.
