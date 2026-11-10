@@ -41,7 +41,7 @@ extension PipelineController {
             // real one, which is exactly what injecting the folder was meant to
             // prevent.
             await StagingRecoveryGate.recover(in: q.stagingDir, requestedAt: requestedAt)
-            await q.recoverOrphanedRecordings()
+            await q.recoverOrphanedRecordings(recordingsDir: q.stagingDir)
         }
     }
 }
