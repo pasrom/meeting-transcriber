@@ -14,7 +14,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT/scripts/lib/e2e-helpers.sh"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# Set at the very end; see test_kill_and_verify_gone.sh for why a `set -u`
+# abort would otherwise read as a pass.
+COMPLETED=0
+cleanup() {
+    local rc=$?
+    rm -rf "$TMP"
+    if [ "$COMPLETED" -ne 1 ]; then
+        echo "FAIL: the test aborted before reaching its end" >&2
+        exit 1
+    fi
+    exit "$rc"
+}
+trap cleanup EXIT
 PASSED=0
 
 ok()  { echo "$1 ... PASS"; PASSED=$(( PASSED + 1 )); }
@@ -521,4 +533,5 @@ expect_probe banner_only_failure_has_a_placeholder_reason stream log-banner-only
 expect_probe unknown_mode_is_a_caller_error tail log-ok 2 "unknown mode 'tail'"
 UNIFIED_LOG_PROBE_LOGGER=false expect_probe show_failed_write_is_reported show log-ok 3 "could not write the probe entry with logger"
 
+COMPLETED=1
 echo "$PASSED passed"

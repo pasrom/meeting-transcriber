@@ -30,7 +30,19 @@ command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 unavailable"; exit 0
 # A throwaway copy of the project layout the script writes into, so the real
 # baseline in the working tree is never a participant in this test.
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# Set at the very end; see test_kill_and_verify_gone.sh for why a `set -u`
+# abort would otherwise read as a pass.
+COMPLETED=0
+cleanup() {
+    local rc=$?
+    rm -rf "$WORK"
+    if [ "$COMPLETED" -ne 1 ]; then
+        echo "FAIL: the test aborted before reaching its end" >&2
+        exit 1
+    fi
+    exit "$rc"
+}
+trap cleanup EXIT
 mkdir -p "$WORK/scripts" "$WORK/$(dirname "$BASELINE_REL")"
 cp "$SCRIPT" "$WORK/scripts/"
 SENTINEL='[{"engine":"sentinel","fixture":"untouched","wer":0.5}]'
@@ -64,6 +76,7 @@ else
     bad "the blessed row reached the baseline" "the script reported success but the baseline does not contain the row: $(cat "$WORK/$BASELINE_REL")"
 fi
 
+COMPLETED=1
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "$PASSED checks passed"
