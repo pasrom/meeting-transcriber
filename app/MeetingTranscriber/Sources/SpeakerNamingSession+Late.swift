@@ -30,6 +30,9 @@ extension SpeakerNamingSession {
 
     // MARK: - Protocol for accepted auto-names
 
+    /// Matched by /v1 clients and persisted jobs; keep the text stable.
+    static let missingTranscriptWarning = "Protocol not generated — transcript file is missing"
+
     /// Takes the delegate as a strong parameter (captured by the spawning Task
     /// in `acceptAutoNames`) so the queue stays alive across the LLM-generation
     /// await; see `delegate` for the keep-alive rationale. Internal (not
@@ -52,8 +55,7 @@ extension SpeakerNamingSession {
             // Reachable when the transcript was moved or deleted between the
             // pipeline writing it and the user resolving naming: the caller's
             // readiness probe only checks that `transcriptPath` is non-nil.
-            // Matched by /v1 clients and persisted jobs; keep the text stable.
-            delegate.addWarning(id: jobID, "Protocol not generated — transcript file is missing")
+            delegate.addWarning(id: jobID, Self.missingTranscriptWarning)
             finishIfUnresolved(jobID: jobID, delegate: delegate)
             return
         }
@@ -141,44 +143,55 @@ extension SpeakerNamingSession {
             jobID: jobID,
         )
 
-        if let transcriptPath = job.transcriptPath {
-            do {
-                let transcript = try SpeakerSlotRename.apply(
-                    to: String(contentsOf: transcriptPath, encoding: .utf8),
-                    mapping: mapping,
-                    autoNames: namingData.mapping,
-                )
-                try transcript.write(to: transcriptPath, atomically: true, encoding: .utf8)
-                // Re-applying speaker names rewrites the transcript — keep it
-                // owner-only (the original save in saveTranscript already is).
-                try FileManager.default.restrictToOwner(transcriptPath)
-                // Dropped here, not after the protocol call below, so that the
-                // naming sidecar still being on disk means exactly one thing:
-                // this rewrite did not happen. `ProtocolResumePolicy` reads it
-                // that way, because the state hop into `.generatingProtocol` is
-                // synchronous and therefore says nothing about the transcript.
-                // Idempotent, and the unconditional call at the end still covers
-                // the paths that never reach this line.
-                removeNamingData(jobID: jobID, slug: slug)
+        // Without a readable transcript there is nothing to rename and nothing
+        // to make a protocol from. The job still ends `.done`, as on the
+        // auto-accept path, so it carries that path's warning too: otherwise it
+        // looks like a normal finish.
+        guard let transcriptPath = job.transcriptPath,
+              let saved = try? String(contentsOf: transcriptPath, encoding: .utf8)
+        else {
+            delegate.addWarning(id: jobID, Self.missingTranscriptWarning)
+            removeNamingData(jobID: jobID, slug: slug)
+            delegate.updateJobState(id: jobID, to: .done)
+            return
+        }
+        do {
+            let transcript = SpeakerSlotRename.apply(
+                to: saved,
+                mapping: mapping,
+                autoNames: namingData.mapping,
+            )
+            try transcript.write(to: transcriptPath, atomically: true, encoding: .utf8)
+            // Re-applying speaker names rewrites the transcript — keep it
+            // owner-only (the original save in saveTranscript already is).
+            try FileManager.default.restrictToOwner(transcriptPath)
+            // Dropped here, not after the protocol call below, so that the
+            // naming sidecar still being on disk means exactly one thing:
+            // this rewrite did not happen. `ProtocolResumePolicy` reads it
+            // that way, because the state hop into `.generatingProtocol` is
+            // synchronous and therefore says nothing about the transcript.
+            // Idempotent, and the unconditional call at the end still covers
+            // the paths that never reach this line.
+            removeNamingData(jobID: jobID, slug: slug)
 
-                try await delegate.generateProtocol(
-                    jobID: jobID,
-                    transcript: transcript,
-                    title: job.meetingTitle,
-                    // Beside the transcript it is made from, which is the rule
-                    // the protocol-only resume uses too. The session's own
-                    // folder is wherever the setting points now, which after a
-                    // repoint is not where this `.txt` is.
-                    protocolsDir: transcriptPath.deletingLastPathComponent(),
-                    speakerNames: Array(fullMapping.values),
-                )
-            } catch is CancellationError {
-                // Cancelled with its job: nothing failed, and there is no job
-                // left to finish.
-                return
-            } catch {
-                logger.error("Failed to re-apply speaker names: \(error.localizedDescription, privacy: .public)")
-            }
+            try await delegate.generateProtocol(
+                jobID: jobID,
+                transcript: transcript,
+                title: job.meetingTitle,
+                // Beside the transcript it is made from, which is the rule
+                // the protocol-only resume uses too. The session's own
+                // folder is wherever the setting points now, which after a
+                // repoint is not where this `.txt` is.
+                protocolsDir: transcriptPath.deletingLastPathComponent(),
+                speakerNames: Array(fullMapping.values),
+            )
+        } catch is CancellationError {
+            // Cancelled with its job: nothing failed, and there is no job
+            // left to finish.
+            return
+        } catch {
+            logger.error("Failed to re-apply speaker names: \(error.localizedDescription, privacy: .public)")
+            delegate.addWarning(id: jobID, "Protocol not generated: rewriting the transcript with the speaker names failed")
         }
 
         removeNamingData(jobID: jobID, slug: slug)
