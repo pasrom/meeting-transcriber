@@ -14,13 +14,9 @@ final class LiveSpeakerMatcherTests: XCTestCase {
     /// (e.g. returning `__live__` to the caller) or where the matcher
     /// returns a hallucinated name from an empty DB.
     func testMatchReturnsNilWithEmptyDB() async {
-        let tempDB = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test-empty-speakers-\(UUID()).json")
-        defer { try? FileManager.default.removeItem(at: tempDB) }
         // Empty DB: a fresh SpeakerMatcher with no entries falls through
         // every threshold check.
-        let sm = SpeakerMatcher(dbPath: tempDB)
-        let matcher = LiveSpeakerMatcher(speakerMatcher: sm)
+        let (matcher, _) = makeMatcher(slug: "empty-speakers")
 
         // `match` calls into the actor, which lazy-loads the WeSpeaker
         // model. Pre-warm fails fast in xctest's sandbox if the model
@@ -37,10 +33,7 @@ final class LiveSpeakerMatcherTests: XCTestCase {
     /// `match` returning nil on any model-load failure so a transient
     /// network blip during the WeSpeaker download doesn't break captions.
     func testMatchReturnsNilWhenAudioIsEmpty() async {
-        let tempDB = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test-empty-audio-\(UUID()).json")
-        defer { try? FileManager.default.removeItem(at: tempDB) }
-        let matcher = LiveSpeakerMatcher(speakerMatcher: SpeakerMatcher(dbPath: tempDB))
+        let (matcher, _) = makeMatcher(slug: "empty-audio")
         let name = await matcher.match(audio: [])
         XCTAssertNil(name, "empty audio must resolve to nil")
     }
@@ -96,7 +89,8 @@ final class LiveSpeakerMatcherTests: XCTestCase {
         )
     }
 
-    /// Build a matcher backed by an isolated temp DB + in-memory cache.
+    /// Build a matcher backed by an isolated temp DB + in-memory cache, so no
+    /// test reads or writes the frame-count cache in `UserDefaults.standard`.
     /// Returns the cache so the test can inspect read/write activity.
     /// Cleanup of the temp DB is registered via `addTeardownBlock` so the
     /// helper composes with async setUp/tearDown.
