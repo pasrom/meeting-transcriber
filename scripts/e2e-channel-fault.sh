@@ -131,24 +131,19 @@ SIM_SECONDS=$((WINDOW_SECONDS * 8))
 # the app's built-in defaults, racing a threshold three times longer than the
 # one it had set.
 # So the settings go through write_dev_default, which writes the standard plist
-# by path, and the container plist too when it exists, and both are restored
-# (see write_dev_default in scripts/lib/e2e-helpers.sh).
-CONTAINER_PLIST="$(dev_container_plist)"
-STANDARD_PLIST="$(dev_standard_plist)"
+# by path, and the container plist too when it exists, and both are recorded
+# and restored (see write_dev_default and dev_defaults_record in
+# scripts/lib/e2e-helpers.sh).
 
 set_dev_default() {
     local key="$1" value="$2" type="$3"
     write_dev_default "$BUNDLE_ID" "$key" "$value" "$type"
 }
 
-SAVED_AUTOWATCH_CONTAINER=""
-SAVED_THRESHOLD_CONTAINER=""
-SAVED_INDICATOR_CONTAINER=""
-SAVED_RPC_CONTAINER=""
-SAVED_AUTOWATCH_STANDARD=""
-SAVED_THRESHOLD_STANDARD=""
-SAVED_INDICATOR_STANDARD=""
-SAVED_RPC_STANDARD=""
+# The record of the settings this lane overrides, taken in step 3. Empty until
+# then: `cleanup` is trapped before that and restores only a record that
+# exists, so a build failure cannot delete settings this lane never read.
+DEFAULTS_RECORD=""
 
 cleanup() {
     if [ -n "${NOISE_PID:-}" ] && kill -0 "$NOISE_PID" 2>/dev/null; then
@@ -160,19 +155,7 @@ cleanup() {
     pkill -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" 2>/dev/null || true
     sweep_run_artifacts "$REC_DIR" "$RUN_START_MARKER"
     rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
-    # Only the two domains that exist as files. Restoring "$BUNDLE_ID" as a third
-    # target would just be the container again wherever the redirect is active,
-    # and the standard plist wherever it is not.
-    if [ -f "$CONTAINER_PLIST" ]; then
-        restore_bool_default  "$CONTAINER_PLIST" autoWatch                       "$SAVED_AUTOWATCH_CONTAINER"
-        restore_float_default "$CONTAINER_PLIST" asymmetricSilenceWarningSeconds "$SAVED_THRESHOLD_CONTAINER"
-        restore_bool_default  "$CONTAINER_PLIST" perChannelIndicatorEnabled      "$SAVED_INDICATOR_CONTAINER"
-        restore_bool_default  "$CONTAINER_PLIST" debugRPCEnabled                  "$SAVED_RPC_CONTAINER"
-    fi
-    restore_bool_default  "$STANDARD_PLIST" autoWatch                       "$SAVED_AUTOWATCH_STANDARD"
-    restore_float_default "$STANDARD_PLIST" asymmetricSilenceWarningSeconds "$SAVED_THRESHOLD_STANDARD"
-    restore_bool_default  "$STANDARD_PLIST" perChannelIndicatorEnabled      "$SAVED_INDICATOR_STANDARD"
-    restore_bool_default  "$STANDARD_PLIST" debugRPCEnabled                  "$SAVED_RPC_STANDARD"
+    [ -z "$DEFAULTS_RECORD" ] || defaults_restore_record "$DEFAULTS_RECORD" || true
     bootout_stale_launchctl
 }
 trap cleanup EXIT
@@ -210,16 +193,10 @@ quit_running_app "$BUNDLE_ID"
 # than it believed. `e2e-app.sh` has always quit first; this lane inherited the
 # other order from `e2e-silent-recording.sh`, which has the same defect.
 
-if [ -f "$CONTAINER_PLIST" ]; then
-    SAVED_AUTOWATCH_CONTAINER="$(snapshot_default "$CONTAINER_PLIST" autoWatch)"
-    SAVED_THRESHOLD_CONTAINER="$(snapshot_default "$CONTAINER_PLIST" asymmetricSilenceWarningSeconds)"
-    SAVED_INDICATOR_CONTAINER="$(snapshot_default "$CONTAINER_PLIST" perChannelIndicatorEnabled)"
-    SAVED_RPC_CONTAINER="$(snapshot_default "$CONTAINER_PLIST" debugRPCEnabled)"
-fi
-SAVED_AUTOWATCH_STANDARD="$(snapshot_default "$STANDARD_PLIST" autoWatch)"
-SAVED_THRESHOLD_STANDARD="$(snapshot_default "$STANDARD_PLIST" asymmetricSilenceWarningSeconds)"
-SAVED_INDICATOR_STANDARD="$(snapshot_default "$STANDARD_PLIST" perChannelIndicatorEnabled)"
-SAVED_RPC_STANDARD="$(snapshot_default "$STANDARD_PLIST" debugRPCEnabled)"
+DEFAULTS_RECORD="$(mktemp "${TMPDIR:-/tmp}/e2e-channel-fault-defaults.XXXXXX")"
+dev_defaults_record "$DEFAULTS_RECORD" "$BUNDLE_ID" \
+    autoWatch asymmetricSilenceWarningSeconds perChannelIndicatorEnabled debugRPCEnabled \
+    || die "could not record the dev bundle's settings; nothing was changed"
 
 set_dev_default autoWatch                       true              bool
 set_dev_default asymmetricSilenceWarningSeconds "$WINDOW_SECONDS" float
