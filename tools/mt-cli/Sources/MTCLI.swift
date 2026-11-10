@@ -355,7 +355,7 @@ struct UIPress: AsyncParsableCommand {
         commandName: "ui-press",
         abstract: "Press a control (by accessibility identifier) in an allowed app window. "
             + "Drives a real in-process UI action — assert the effect via `state`, "
-            + "not the returned `pressed` flag.",
+            + "not the returned `dispatched` flag.",
     )
 
     @Argument(help: "Accessibility identifier of the control to press.")

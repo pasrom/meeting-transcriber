@@ -72,7 +72,7 @@
             ) else { return false }
             // A synthetic click on an inactive app is delivered but not acted on:
             // measured against the running app, the sidebar selection did not change
-            // and the endpoint still answered `{"pressed":true}`. Making the window
+            // and the endpoint still answered `{"dispatched":true}`. Making the window
             // key first is what turns the post into an actual hit-test.
             if !window.isKeyWindow {
                 app.activate(ignoringOtherApps: true)

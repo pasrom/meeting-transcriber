@@ -164,7 +164,7 @@ step "UI press (accessibility action) — the PoC verification"
 # Read record-only, press the toggle, assert /state flips. This is the whole
 # point of the slice: does an in-process accessibilityPerformPress() actually
 # fire the SwiftUI action behind the AppKit-bridged toggle? The assertion is the
-# effect in /state, not the returned `pressed` flag.
+# effect in /state, not the returned `dispatched` flag.
 read_record_only() {
     "$MT_CLI_BIN" state \
         | python3 -c "import json,sys; print(json.load(sys.stdin)['settings']['recording']['recordOnly'])"

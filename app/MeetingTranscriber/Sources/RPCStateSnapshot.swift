@@ -9,7 +9,7 @@
         let pendingNamingJobs: [PendingNaming]
         let engines: Engines
         /// The most recent pipeline job that finished — `.done` or `.error`.
-        /// Surfaced so a driver script can poll `/state` (or hit `/jobs/last`)
+        /// Surfaced so a driver script can poll `/state`
         /// and assert on the outcome of a triggered meeting without needing
         /// to scrape disk paths from logs.
         let lastJob: LastJob?
