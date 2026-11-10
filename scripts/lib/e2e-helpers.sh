@@ -1899,6 +1899,20 @@ defaults_record_keys() {
     printf '%s' "$lines" >>"$record"
 }
 
+# dev_defaults_record <record> <bundle> <key>... — defaults_record_keys over
+# every plist write_dev_default writes: the standard one, and the container one
+# when it exists. A lane that snapshots only the standard plist leaves its
+# values in the container on exit. Put back with defaults_restore_record, which
+# is a no-op for a record that does not exist yet, so an exit trap armed before
+# this ran restores nothing rather than deleting keys it never read.
+dev_defaults_record() {
+    local record="$1" bundle="$2" container
+    shift 2
+    defaults_record_keys "$record" "$(dev_standard_plist "$bundle")" "$@" || return 1
+    container="$(dev_container_plist "$bundle")"
+    [ ! -f "$container" ] || defaults_record_keys "$record" "$container" "$@"
+}
+
 # defaults_mark_lane_values <record> — append to each line the value its key
 # holds now, once the lane has written its own. The restore then puts back only
 # keys that still hold the lane's value: anything else is a choice made since (a
