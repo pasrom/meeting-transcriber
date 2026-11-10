@@ -1779,6 +1779,10 @@ _NC_PRE_AUTOOPEN_CTR=""
 # for why a copy is mandatory). Cleaned up by _naming_confirm_cleanup on any exit.
 _NC_FIXTURE_DIR=""
 
+# Temp dir holding the naming-escape lane's private copy of the fixture. A
+# global, unlike the lane's other locals, so on_exit removes it on every exit.
+_NE_FIXTURE_DIR=""
+
 # Temp dir holding the echo lane's synthesised dual-source pairs. Its own mktemp
 # dir, removed by on_exit; the shipped fixtures it is built from are read-only.
 _ECHO_FIXTURE_DIR=""
@@ -2109,6 +2113,11 @@ on_exit() {
     # (see `_ms_cleanup`). Our own mktemp dir: the model link inside it is
     # removed as a link.
     [ -n "$MIC_STALL" ] && _ms_cleanup
+    # Naming-escape: drop its fixture copy (our own mktemp dir).
+    if [ -n "${_NE_FIXTURE_DIR:-}" ] && [ -d "$_NE_FIXTURE_DIR" ]; then
+        rm -rf "$_NE_FIXTURE_DIR"
+        _NE_FIXTURE_DIR=""
+    fi
     # Echo lane: drop the synthesised pairs (our own mktemp dir, never a real
     # recordings directory).
     if [ -n "${_ECHO_FIXTURE_DIR:-}" ] && [ -d "$_ECHO_FIXTURE_DIR" ]; then
@@ -3000,9 +3009,9 @@ run_naming_escape() {
         || fail "$label: the System Events preflight failed for a reason that is not a missing grant (exit $probe_status): $probe"
     log "$label: frontmost process is '$probe'"
 
-    local fixture_dir fixture_copy
-    fixture_dir="$(mktemp -d /tmp/e2e-naming-escape-fixture.XXXXXX)"
-    fixture_copy="$fixture_dir/two_speakers_de.wav"
+    local fixture_copy
+    _NE_FIXTURE_DIR="$(mktemp -d /tmp/e2e-naming-escape-fixture.XXXXXX)"
+    fixture_copy="$_NE_FIXTURE_DIR/two_speakers_de.wav"
     cp "$DEFAULT_FIXTURE" "$fixture_copy" || fail "$label: could not copy fixture to $fixture_copy"
 
     local enq job_id
@@ -3057,7 +3066,6 @@ run_naming_escape() {
 
     # Leave nothing pending behind; the dialog would reopen on the next launch.
     _naming_skip "$job_id"
-    rm -rf "$fixture_dir"
     log "$label: PASS"
 }
 
