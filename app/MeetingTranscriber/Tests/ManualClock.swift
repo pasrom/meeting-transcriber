@@ -80,10 +80,9 @@ final class ManualClock: Clock, Sendable {
     /// way when the test has seen the process run. Moved before then, the
     /// code would set its deadline from the moved clock and never reach it.
     /// Returns whether something was asleep; it moves the clock either way.
-    /// Disable the wait when testing that no timer should be scheduled.
     @discardableResult
-    func advance(by duration: Duration, waitingForSleeper: Bool = true) async -> Bool {
-        if waitingForSleeper { await waitForSleeper() }
+    func advance(by duration: Duration) async -> Bool {
+        await waitForSleeper()
         let slept = state.withLock { !$0.sleepers.isEmpty }
         let due = state.withLock { current in
             current.now = current.now.advanced(by: duration)
