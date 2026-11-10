@@ -524,6 +524,16 @@ case "$_LANES" in
         exit 2
         ;;
 esac
+# The lane's name in file names: its flag without the dashes, `meeting` for the
+# default single meeting, the mic-stall variant spelled out, and the diarizer
+# mode appended when MTT_DIARIZER_MODE picks one (the Sortformer lane is the
+# default meeting under another mode). Names the files this lane leaves (its
+# simulator log) so a later lane in the same job overwrites none of them.
+_LANE_SLUG="${_LANES# }"
+_LANE_SLUG="${_LANE_SLUG#--}"
+[ -z "$MIC_STALL" ] || _LANE_SLUG="mic-$MIC_STALL"
+[ -n "$_LANE_SLUG" ] || _LANE_SLUG=meeting
+[ -z "${MTT_DIARIZER_MODE:-}" ] || _LANE_SLUG="$_LANE_SLUG-$(printf '%s' "$MTT_DIARIZER_MODE" | tr -c 'A-Za-z0-9-' '_')"
 # Export before the build step below so run_app.sh adds -DE2E_FAULT_INJECTION.
 # --mic-stall may run --no-build against a fault build already deployed; the
 # preflight checks that the deployed bundle really is one.
@@ -768,6 +778,12 @@ RECORDINGS_DIR="$OUTPUT_DIR/recordings"
 # `find -newer` marker so cleanup only touches THIS run's files — never
 # pre-existing user data.
 RECORD_ONLY_MARKER="/tmp/e2e-app-record-only-marker.$$"
+# The simulator's output, one file per lane (see _LANE_SLUG) rather than one
+# that every lane overwrote, so a failed lane's log outlives the lanes after it.
+SIM_LOG="/tmp/e2e-app-sim-$_LANE_SLUG.log"
+# The shared name the single-lane workflows (e2e-crash-recovery.yml,
+# e2e-mic-device-change.yml) upload; on_exit copies the lane's log there.
+_SIM_LOG_LEGACY="/tmp/e2e-app-sim.log"
 
 [ -n "$SIMULATOR_FIXTURE" ] || SIMULATOR_FIXTURE="$DEFAULT_FIXTURE"
 
@@ -848,6 +864,23 @@ INTER_MEETING_COOLDOWN_S=8
 
 log()  { printf '[e2e-app] %s\n' "$*"; }
 fail() { printf '[e2e-app] FAIL: %s\n' "$*" >&2; exit 1; }
+
+# _start_simulator <label> <simulator args...> — start the meeting simulator in
+# the background (its pid in SIM_PID), its output appended to this lane's
+# SIM_LOG under a header naming the meeting; the first start of a run empties
+# the log, so it holds this run only.
+_SIM_LOG_STARTED=""
+_start_simulator() {
+    local label="$1"
+    shift
+    if [ -z "$_SIM_LOG_STARTED" ]; then
+        : >"$SIM_LOG"
+        _SIM_LOG_STARTED=1
+    fi
+    printf '=== %s: meeting-simulator %s\n' "$label" "$*" >>"$SIM_LOG"
+    "$SIMULATOR_BIN" "$@" >>"$SIM_LOG" 2>&1 &
+    SIM_PID=$!
+}
 
 # shellcheck source=lib/e2e-helpers.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/e2e-helpers.sh"
@@ -2104,6 +2137,7 @@ on_exit() {
         fi
     fi
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
+    [ -z "$_SIM_LOG_STARTED" ] || cp -f "$SIM_LOG" "$_SIM_LOG_LEGACY" 2>/dev/null || true
     if [ "$MIC_ONLY" = true ]; then
         # The lane turns auto-watch off; nothing else here would turn it back
         # on, and a human using the dev app on this host would find detection
@@ -2469,8 +2503,7 @@ run_one_meeting() {
     # observed naming-dialog speaker count, not just meeting 1's stale value.
     OBSERVED_NAMING_SPEAKERS=""
     log "$label: starting meeting-simulator → $SIMULATOR_FIXTURE${window_title:+ (window title '$window_title')}"
-    "$SIMULATOR_BIN" "${sim_args[@]}" >/tmp/e2e-app-sim.log 2>&1 &
-    SIM_PID=$!
+    _start_simulator "$label" "${sim_args[@]}"
 
     _await_recording_started "$label"
     _poll_for_new_lastjob_terminal "$label" ignore-recovered
@@ -2746,8 +2779,7 @@ run_one_record_only_meeting() {
     touch "$meeting_marker"
 
     log "$label: starting meeting-simulator (record-only) → $SIMULATOR_FIXTURE"
-    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
-    SIM_PID=$!
+    _start_simulator "$label" "$SIMULATOR_FIXTURE"
 
     # Block until the simulator finishes playing the fixture. Exit code is
     # irrelevant; we assert on filesystem state below.
@@ -2905,8 +2937,7 @@ run_crash_recovery() {
 
     # 1. Start a meeting so the app begins recording.
     log "$label: starting meeting-simulator -> $SIMULATOR_FIXTURE"
-    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
-    SIM_PID=$!
+    _start_simulator "$label" "$SIMULATOR_FIXTURE"
 
     # 2. Wait until the recorder is writing the raw app temp (recording active).
     local orphan_tmp=""
@@ -3836,8 +3867,7 @@ run_mic_stall() {
     local log_start
     log_start="$(date '+%Y-%m-%d %H:%M:%S')"
     log "$label: starting meeting-simulator (looping $SIMULATOR_FIXTURE for ${MIC_STALL_MEETING_S}s)"
-    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" --loop --duration "$MIC_STALL_MEETING_S" >/tmp/e2e-app-sim.log 2>&1 &
-    SIM_PID=$!
+    _start_simulator "$label" "$SIMULATOR_FIXTURE" --loop --duration "$MIC_STALL_MEETING_S"
 
     poll_state 60 1 state_is '.watchState == "recording"' \
         || fail "$(state_why $? "$label: no recording started within 60s of the meeting")"
