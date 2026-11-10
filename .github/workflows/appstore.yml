@@ -43,7 +43,6 @@ on:
       - 'app/MeetingTranscriber/Package.swift'
       - 'app/MeetingTranscriber/Package.resolved'
       - 'app/MeetingTranscriber/Entitlements/AppStore.entitlements'
-      - 'app/MeetingTranscriber/Sources/Info.plist'
       - 'tools/audiotap/**'
       - 'scripts/build_release.sh'
       - 'scripts/appstore-bundle-check.sh'
