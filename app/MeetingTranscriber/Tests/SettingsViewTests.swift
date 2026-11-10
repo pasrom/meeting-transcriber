@@ -350,9 +350,12 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
     // Companion: tapping "Manage…" invokes the factory exactly once.
     func testKnownVoicesMatcherCreatedOnManageTap() throws {
         var matcherInits = 0
+        // A temp DB: the tap really builds the matcher, and a default one opens
+        // (and may migrate) the user's own speakers.json.
+        let dbPath = try makeTempDirectory(prefix: "known-voices").appendingPathComponent("speakers.json")
         let view = makeSpeakers {
             matcherInits += 1
-            return SpeakerMatcher()
+            return SpeakerMatcher(dbPath: dbPath)
         }
         let button = try view.inspect().find(button: "Manage\u{2026}")
         try button.tap()
