@@ -126,12 +126,13 @@ if [ -d "$ICONSET_SRC" ]; then
     echo "  App icon: $RESOURCES/AppIcon.icns"
 fi
 
-# Licences for the third-party code and weights this bundle redistributes.
-# Installed before the model, and unconditionally, so no failure further down
-# can produce a bundle that ships the components without their notices.
+# Licences for the app itself and the third-party code and weights this bundle
+# redistributes. Installed before the model, and unconditionally, so no failure
+# further down can produce a bundle that ships the components without their
+# notices.
 # shellcheck source=lib/bundle-licenses.sh
 source "$SCRIPT_DIR/lib/bundle-licenses.sh"
-install_third_party_licenses "$RESOURCES"
+install_bundled_licenses "$RESOURCES"
 
 # LocalVQE acoustic echo cancellation model.
 # Bundled rather than downloaded on first use; the reasoning is in the header of

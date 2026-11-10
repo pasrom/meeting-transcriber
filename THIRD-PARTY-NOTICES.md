@@ -1,6 +1,8 @@
 # Third-party notices
 
-Meeting Transcriber itself is MIT licensed (see `LICENSE`).
+Meeting Transcriber itself is MIT licensed (see `LICENSE`). That text ships
+inside the app as `Contents/Resources/LICENSE`, so a build distributed from this
+repository or from a fork of it carries the notice MIT asks for.
 
 **Scope:** this file covers every third-party component redistributed in the
 shipped application, whether statically linked into the app binary or bundled as
