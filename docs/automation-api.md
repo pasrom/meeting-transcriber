@@ -376,10 +376,13 @@ Scope and limits:
 - The key map is in-memory per server instance (a bounded FIFO, cap 1024).
   Toggling the server off then on clears it; the dedup window is one session,
   which is all retry-dedup needs.
-- The key is recorded after the job is created, so this dedupes **sequential**
-  retries (a client re-sending after a response or a timeout, the common case).
-  Two same-key requests racing in-flight can both enqueue. Reserve-before-work
-  hardening is a planned follow-up.
+- The key is recorded as soon as the job is created. For `/v1/transcribe` that
+  is before the blocking wait, so a client that gives up on its own HTTP timeout
+  and re-sends while the first request is still waiting gets that job's current
+  status (`202` while it runs) rather than a second job. This dedupes
+  **sequential** retries (a client re-sending after a response or a timeout, the
+  common case). Two same-key requests arriving before either has created its job
+  can both enqueue. Reserve-before-work hardening is a planned follow-up.
 
 ## Data shapes
 

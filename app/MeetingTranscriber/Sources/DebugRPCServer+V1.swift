@@ -250,8 +250,12 @@
             }
             let requested = p.maxWaitSeconds ?? Self.defaultTranscribeWaitSeconds
             let wait = min(max(0, requested), Self.maxTranscribeWaitSeconds)
-            let result = await transcribe(URL(fileURLWithPath: p.path), wait)
-            if let key = idempotencyKey, let jobID = result.jobID { idempotency.remember(key, [jobID]) }
+            // The key is recorded once the job exists, not after the wait: a
+            // client whose own timeout is shorter than the wait retries while
+            // this handler is still waiting, and must get this job back.
+            let result = await transcribe(URL(fileURLWithPath: p.path), wait) { [weak self] jobID in
+                if let key = idempotencyKey { self?.idempotency.remember(key, [jobID]) }
+            }
             switch result {
             case .noFile:
                 return HTTPResponse.badRequest()

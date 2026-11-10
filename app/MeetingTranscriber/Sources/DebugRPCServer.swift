@@ -87,7 +87,7 @@
         let namingStatus: (UUID) -> NamingStatusDTO? // GET /v1/jobs/<id>/naming
         let confirmNaming: (UUID, [String: String]) -> Bool // POST .../naming
         let skipJobNaming: (UUID) -> Bool // POST .../naming/skip
-        let transcribe: (URL, Double) async -> BlockingTranscribeResult // POST /v1/transcribe
+        let transcribe: BlockingTranscribe // POST /v1/transcribe
         let watchStatus: () -> WatchStatusDTO // GET /v1/watch
         let watchControl: (WatchAction) async -> WatchControlOutcome // POST /v1/watch
         let recordStatus: () -> RecordStatusDTO // GET /v1/record
@@ -117,7 +117,7 @@
             namingStatus: @escaping (UUID) -> NamingStatusDTO? = { _ in nil },
             confirmNaming: @escaping (UUID, [String: String]) -> Bool = { _, _ in false },
             skipJobNaming: @escaping (UUID) -> Bool = { _ in false },
-            transcribe: @escaping (URL, Double) async -> BlockingTranscribeResult = { _, _ in .noFile },
+            transcribe: @escaping BlockingTranscribe = { _, _, _ in .noFile },
             watchStatus: @escaping () -> WatchStatusDTO = { .notWatching },
             watchControl: @escaping (WatchAction) async -> WatchControlOutcome = { _ in .failed },
             recordStatus: @escaping () -> RecordStatusDTO = { .notRecording },
