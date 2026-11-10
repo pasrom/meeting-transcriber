@@ -35,4 +35,4 @@
 --disable repeatedGuard
 
 # File scope
---exclude FluidAudio,.build,app/MeetingTranscriber/.build,app/MeetingTranscriber/.build-appstore,tools/audiotap/.build,tools/meeting-simulator/.build
+--exclude .build,app/MeetingTranscriber/.build,app/MeetingTranscriber/.build-appstore,tools/audiotap/.build,tools/meeting-simulator/.build

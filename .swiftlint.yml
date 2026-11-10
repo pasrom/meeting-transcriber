@@ -11,7 +11,6 @@ included:
   - scripts/generate_menu_bar_gifs.swift
 
 excluded:
-  - FluidAudio
   - .build
   - app/MeetingTranscriber/.build
   - app/MeetingTranscriber/.build-appstore
