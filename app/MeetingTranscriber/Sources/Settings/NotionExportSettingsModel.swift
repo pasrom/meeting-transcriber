@@ -108,7 +108,7 @@ final class NotionExportSettingsModel: ObservableObject {
     /// Settings is hidden on close, so the field may receive neither a focus
     /// change nor onDisappear. Other windows closing must not commit its draft.
     func settingsWindowWillClose(_ notification: Notification) {
-        guard (notification.object as? NSWindow)?.identifier?.rawValue == "settings" else { return }
+        guard notification.closesSettingsWindow else { return }
         commitAPIKey()
     }
 

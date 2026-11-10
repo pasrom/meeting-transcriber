@@ -72,6 +72,8 @@ enum A11yID {
     static let includeFullTranscriptToggle = "includeFullTranscriptToggle"
     static let saveRawTranscriptToggle = "saveRawTranscriptToggle"
     static let useAITitleForFilenamesToggle = "useAITitleForFilenamesToggle"
+    static let openAIAPIKeyField = "openAIAPIKeyField"
+    static let claudeAPIKeyField = "claudeAPIKeyField"
     static let openAIAPIKeyPlacementPicker = "openAIAPIKeyPlacementPicker"
     static let openAIAPIKeyHeaderNameField = "openAIAPIKeyHeaderNameField"
     static let openAIAPIKeyHeaderNameWarning = "openAIAPIKeyHeaderNameWarning"

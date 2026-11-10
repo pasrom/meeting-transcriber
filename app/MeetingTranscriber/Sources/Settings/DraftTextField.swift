@@ -17,11 +17,15 @@ import SwiftUI
 /// and again whenever the owner changes it behind the field (a folder picker, a
 /// Clear button): the owner's value wins over an edit in progress, because the
 /// alternative is a field that shows one path while the setting holds another.
+///
+/// `secure` makes it a `SecureField`, for a secret such as an API key, where a
+/// keystroke written through would be a Keychain write.
 struct DraftTextField: View {
     let title: String
     let prompt: Text?
     let value: String
     @Binding var draft: String
+    let secure: Bool
     let commit: (String) -> Void
     @FocusState private var isFocused: Bool
 
@@ -30,12 +34,14 @@ struct DraftTextField: View {
         value: String,
         draft: Binding<String>,
         prompt: Text? = nil,
+        secure: Bool = false,
         commit: @escaping (String) -> Void,
     ) {
         self.title = title
         self.prompt = prompt
         self.value = value
         _draft = draft
+        self.secure = secure
         self.commit = commit
     }
 
@@ -45,7 +51,17 @@ struct DraftTextField: View {
         // outside any body: a draft set from code (on appear, or when the owner's
         // value changes) would not repaint the field.
         let _ = draft // swiftlint:disable:this redundant_discardable_let
-        TextField(title, text: $draft, prompt: prompt)
+        if secure {
+            committing(SecureField(title, text: $draft, prompt: prompt))
+        } else {
+            committing(TextField(title, text: $draft, prompt: prompt))
+        }
+    }
+
+    /// The draft and commit wiring, attached to the field itself so either kind
+    /// carries it directly.
+    private func committing(_ field: some View) -> some View {
+        field
             .focused($isFocused)
             .onAppear { draft = value }
             .onChange(of: value) { _, newValue in draft = newValue }
