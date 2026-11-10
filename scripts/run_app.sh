@@ -20,8 +20,6 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TRANSCRIBER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-export TRANSCRIBER_ROOT
-
 SPM_DIR="$TRANSCRIBER_ROOT/app/MeetingTranscriber"
 BUILD_BINARY="$SPM_DIR/.build/release/MeetingTranscriber"
 APP_BUNDLE="$SPM_DIR/.build/MeetingTranscriber-Dev.app"
@@ -141,7 +139,6 @@ if [ "$BUILD_ONLY" = true ]; then
 fi
 
 echo "Starting Meeting Transcriber..."
-echo "  TRANSCRIBER_ROOT=$TRANSCRIBER_ROOT"
 
 # Launch via `open` so macOS LaunchServices properly registers the app
 # (required for notification permissions, etc.).
