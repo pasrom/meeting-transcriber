@@ -168,21 +168,33 @@ struct RecordOnlyWrite: Sendable {
         let stem = try Self.freeStem(basename, for: suffixes, in: destDir)
         let finalNames = suffixes.map { stem + $0 }
         let sidecarURL = destDir.appendingPathComponent(stem + RecordingSidecar.filenameSuffix)
-        try Self.placeCopies(of: Array(zip(sources, finalNames)), in: destDir, using: transfer)
+        // Until the sidecar commits, a failure takes back the files this call
+        // moved into place: no sidecar will describe them, and the sources
+        // stay for the next launch, which would write the recording again
+        // beside them. Only names this call placed, never another writer's.
+        var placed: [URL] = []
+        do {
+            try Self.placeCopies(of: Array(zip(sources, finalNames)), in: destDir, using: transfer, placed: &placed)
 
-        let sidecar = RecordingSidecar(
-            title: title,
-            appName: appName,
-            startedAt: recording.recordingStartDate,
-            stoppedAt: stoppedAt,
-            participants: participants,
-            micDelaySeconds: recording.micDelay,
-            trigger: trigger,
-            mixFilename: finalNames[0],
-            appFilename: recording.appPath.map { stem + Self.suffix(of: $0.lastPathComponent, after: basename) },
-            micFilename: recording.micPath.map { stem + Self.suffix(of: $0.lastPathComponent, after: basename) },
-        )
-        try commitSidecar(sidecar, at: sidecarURL)
+            let sidecar = RecordingSidecar(
+                title: title,
+                appName: appName,
+                startedAt: recording.recordingStartDate,
+                stoppedAt: stoppedAt,
+                participants: participants,
+                micDelaySeconds: recording.micDelay,
+                trigger: trigger,
+                mixFilename: finalNames[0],
+                appFilename: recording.appPath.map { stem + Self.suffix(of: $0.lastPathComponent, after: basename) },
+                micFilename: recording.micPath.map { stem + Self.suffix(of: $0.lastPathComponent, after: basename) },
+            )
+            try commitSidecar(sidecar, at: sidecarURL)
+        } catch {
+            for url in placed {
+                try? fm.removeItem(at: url)
+            }
+            throw error
+        }
         let notRemoved = Self.removeSources(sources)
         logger.info("Record-only: wrote sidecar + WAVs to \(destDir.path) for \(title, privacy: .private)")
         return notRemoved
@@ -213,8 +225,11 @@ struct RecordOnlyWrite: Sendable {
     /// Steps 1 and 2: a complete copy of each source under the temporary name
     /// of its final name, then each moved into place. Nothing is replaced: a
     /// move onto a name that exists fails. On a failure the temporary copies
-    /// go.
-    private static func placeCopies(of files: [(source: URL, finalName: String)], in destDir: URL, using transfer: Transfer) throws {
+    /// go; `placed` gets each file moved into place, for the caller to take
+    /// back.
+    private static func placeCopies(
+        of files: [(source: URL, finalName: String)], in destDir: URL, using transfer: Transfer, placed: inout [URL],
+    ) throws {
         let fm = FileManager.default
         var staged: [(temp: URL, final: URL)] = []
         do {
@@ -225,6 +240,7 @@ struct RecordOnlyWrite: Sendable {
             }
             for file in staged {
                 try fm.moveItem(at: file.temp, to: file.final)
+                placed.append(file.final)
             }
         } catch {
             for file in staged {
