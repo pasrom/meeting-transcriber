@@ -790,6 +790,17 @@ IS_DEFAULT_FIXTURE=false
 RPC_READY_TIMEOUT_S=30
 PIPELINE_TIMEOUT_S=240
 
+# How long after the simulator starts a recording must have begun. Detection
+# itself takes two consecutive hits of the 3 s detector poll, so a few seconds;
+# the bound is set from the other side instead: the simulator plays the 49.8 s
+# fixture, so at 40 s only about ten seconds of it are left, which cannot give a
+# transcript that reaches TRANSCRIPT_MIN_COVERAGE_S below. Waiting longer could
+# not rescue the run. Failing here names the likely cause (detector, grants)
+# minutes before the job poll's own timeout would, which can only say that no
+# job arrived. Needs calibrating against the detection latency measured on the
+# runner.
+RECORDING_START_TIMEOUT_S=40
+
 # How far into the recording a transcript of the default fixture must reach,
 # in seconds (transcript_covered_seconds, which underestimates on purpose).
 # Chosen low, since the recording starts only once the meeting is detected and
@@ -2427,6 +2438,19 @@ assert_transcript_covers_recording() {
     log "$label: transcript covers the recording to at least ${covered}s (floor ${TRANSCRIPT_MIN_COVERAGE_S}s)"
 }
 
+# Wait until the app reports a recording, right after the simulator started.
+# Without this the job poll below was the first check, and a meeting that was
+# never detected failed four minutes later as "no new pipeline job", which says
+# nothing about why. Polls through --each assert_app_alive, so a crash is named
+# as one.
+_await_recording_started() {
+    local label="$1"
+    log "$label: waiting up to ${RECORDING_START_TIMEOUT_S}s for /state.watchState == \"recording\""
+    poll_state --each assert_app_alive "$RECORDING_START_TIMEOUT_S" 1 state_is '.watchState == "recording"' \
+        || fail "$(state_why $? "$label: no recording started within ${RECORDING_START_TIMEOUT_S}s of the simulator starting (last watchState: $(jq -r '.watchState // "none"' <<<"${STATE_BODY:-null}" 2>/dev/null)). Likely causes: the detector did not see the simulator's power assertion (auto-watch not on, the watch loop not running, a detector regression), or a TCC grant the recording needs is missing (Microphone, Screen & System Audio Recording) and the app is waiting on a consent prompt. See the e2e-architecture skill, runner setup steps 4 and 5.")"
+    log "$label: recording started"
+}
+
 run_one_meeting() {
     local label="$1"
     # Reset between meetings so --two-meetings captures each run's first
@@ -2436,6 +2460,7 @@ run_one_meeting() {
     "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
     SIM_PID=$!
 
+    _await_recording_started "$label"
     _poll_for_new_lastjob_terminal "$label" ignore-recovered
     local lj_id="$POLL_LJ_ID" lj_state="$POLL_LJ_STATE"
 
