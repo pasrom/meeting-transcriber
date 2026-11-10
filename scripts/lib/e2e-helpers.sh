@@ -1025,6 +1025,36 @@ transcript_is_german() {
     [ "$matched" -ge "$GERMAN_MARKER_WORDS_MIN" ]
 }
 
+# transcript_covered_seconds <transcript> — how far into the recording the
+# transcript reaches, in whole seconds, on stdout; status 1 and no output when it
+# has no segment line (or cannot be read). A line is `[MM:SS] Label: text`, or
+# `[H:MM:SS] ...` from an hour on (TimestampedSegment in the app); only a stamp
+# at the start of a line counts, so a time spoken in the text is not one. A line
+# is a block of one speaker's consecutive segments (mergeConsecutiveSpeakers)
+# and carries only its first segment's start, so where it ends is estimated
+# from its words at TRANSCRIPT_WORDS_PER_SECOND, a rate faster than speech:
+# the estimate falls short of the real end, never past it. Without it a
+# complete transcript whose diarization heard one voice, a single block at
+# [00:00], would read as covering nothing. The latest estimated end over all
+# lines, since nothing promises a merged dual-track transcript is in time order.
+TRANSCRIPT_WORDS_PER_SECOND=4
+transcript_covered_seconds() {
+    awk -v rate="$TRANSCRIPT_WORDS_PER_SECOND" '
+        match($0, /^\[([0-9]+:)?[0-9][0-9]:[0-9][0-9]\]/) {
+            n = split(substr($0, 2, RLENGTH - 2), part, ":")
+            s = (n == 3) ? part[1] * 3600 + part[2] * 60 + part[3] : part[1] * 60 + part[2]
+            text = substr($0, RLENGTH + 1)
+            colon = index(text, ": ")
+            if (colon > 0) text = substr(text, colon + 2)
+            words = split(text, w, /[ \t]+/)
+            for (i = 1; i <= words; i++) if (w[i] == "") words--
+            end = s + int(words / rate)
+            if (!found || end > max) { max = end; found = 1 }
+        }
+        END { if (found) print max; else exit 1 }
+    ' "$1" 2>/dev/null
+}
+
 # _pid_is_alive <pid> — does this process exist, whether or not we may signal it.
 #
 # `kill -0` answers a different question: "may I signal it". It fails the same
