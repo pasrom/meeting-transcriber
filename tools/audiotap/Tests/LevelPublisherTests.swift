@@ -54,8 +54,13 @@ final class LevelPublisherTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.05)
         publisher.publish(level: -120, hasEnergy: false)
         let ages = publisher.currentSignalAges
-        XCTAssertLessThan(try XCTUnwrap(ages.secondsSinceLastBuffer), 0.02)
-        XCTAssertGreaterThan(try XCTUnwrap(ages.secondsSinceLastEnergy), 0.04)
+        let buffer = try XCTUnwrap(ages.secondsSinceLastBuffer)
+        let energy = try XCTUnwrap(ages.secondsSinceLastEnergy)
+        // Both ages come from one reading, so their difference is the time
+        // between the two publishes (at least the 50 ms slept) however long the
+        // runner stalls after the second one; a wall-clock bound on the buffer
+        // age alone would fail on a 20 ms preemption.
+        XCTAssertGreaterThan(energy - buffer, 0.04, "the silent buffer refreshed the energy age")
     }
 
     func testFreshPublishReplacesStaleReading() {
