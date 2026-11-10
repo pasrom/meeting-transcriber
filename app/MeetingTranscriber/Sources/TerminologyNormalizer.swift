@@ -68,6 +68,19 @@ struct TerminologyNormalizer: Sendable {
         }
     }
 
+    /// The same segments with their text normalised. Copy-and-mutate, never a
+    /// memberwise rebuild: a rebuild resets every field it does not name, and
+    /// here that was `suppressed`, which put the loudspeaker copies that echo
+    /// de-duplication had marked back into the transcript.
+    func normalize(_ segments: [TimestampedSegment]) -> [TimestampedSegment] {
+        guard !isEmpty else { return segments }
+        return segments.map { segment in
+            var copy = segment
+            copy.text = normalize(segment.text)
+            return copy
+        }
+    }
+
     private struct Rule: @unchecked Sendable {
         let canonical: String
         let expression: NSRegularExpression

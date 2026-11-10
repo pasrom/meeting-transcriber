@@ -570,7 +570,7 @@ extension PipelineQueue {
                 ctx, engine: engine, workDir: workDir,
                 appAudioPath: appAudioPath, micAudioPath: micAudioPath,
             )
-            let normalizedSegments = normalize(segments, with: normalizer)
+            let normalizedSegments = normalizer.normalize(segments)
             cachedSegments = normalizedSegments
             transcript = normalizedSegments.transcriptText(note: transcriptNote(ctx.jobID))
         } else {
@@ -593,7 +593,7 @@ extension PipelineQueue {
 
             // Use transcribeSegments to cache results for diarization
             let rawSegments = try await engine.transcribeSegments(audioPath: transcriptionPath)
-            var segments = normalize(rawSegments, with: normalizer)
+            var segments = normalizer.normalize(rawSegments)
 
             // Remap timestamps back to original timeline if VAD was used
             if let map = vadMap {
@@ -624,21 +624,6 @@ extension PipelineQueue {
             isDualSource: isDualSource,
             terminologyNormalizer: normalizer,
         )
-    }
-
-    private func normalize(
-        _ segments: [TimestampedSegment],
-        with normalizer: TerminologyNormalizer,
-    ) -> [TimestampedSegment] {
-        guard !normalizer.isEmpty else { return segments }
-        return segments.map { segment in
-            TimestampedSegment(
-                start: segment.start,
-                end: segment.end,
-                text: normalizer.normalize(segment.text),
-                speaker: segment.speaker,
-            )
-        }
     }
 
     /// Stage 2 — optional speaker diarization. Returns the labeled transcript
@@ -903,7 +888,7 @@ extension PipelineQueue {
             return nil
         } else {
             let rawSegments = try await engine.transcribeSegments(audioPath: mix16k)
-            cachedSegments = normalize(rawSegments, with: transcription.terminologyNormalizer)
+            cachedSegments = transcription.terminologyNormalizer.normalize(rawSegments)
         }
         return renderLabeledTranscript(
             run: run, cachedSegments: cachedSegments,
