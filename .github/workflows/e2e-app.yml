@@ -83,7 +83,7 @@ jobs:
     # lane N surfaces as `timed_out` on that step (not as an opaque job-level
     # `cancelled`).
     # Since a failed lane no longer skips the ones after it, the step timeouts
-    # below add up to about 198 min: what a host broken so badly that every
+    # below add up to about 202 min: what a host broken so badly that every
     # step runs into its own timeout would take. This budget then ends the job
     # first, and the lanes it did not reach show as cancelled. Most host faults
     # end a lane long before its timeout (no recording within 40 s, no RPC
@@ -393,8 +393,9 @@ jobs:
       # speaker-naming (this lane does NOT auto-skip the dialog like every other
       # lane does), then drives GET/POST /v1/jobs/<id>/naming with an anonymous
       # Speaker A / Speaker B mapping and asserts the confirmed names land as
-      # transcript speaker labels, the raw diarization labels are gone, and the
-      # speaker DB learned the voices. This is the one user flow the other lanes
+      # transcript speaker labels, the raw diarization labels are gone, the
+      # speaker DB learned the voices, and a second copy of the fixture is
+      # suggested those names (then skipped). This is the one user flow the other lanes
       # never exercise end-to-end; the confirm path is exactly the bug family
       # the late-rerun transcript-rebuild fix addressed (rename-without-
       # re-segment). Under CI the driver snapshots + restores the runner's real
@@ -411,9 +412,11 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
-        # 12 min covers the script's own worst case (two 240 s polls + RPC-ready
-        # + baseline + overhead); a tighter budget would SIGKILL through cleanup.
-        timeout-minutes: 12
+        # 16 min covers the script's own worst case: three 240 s polls (park,
+        # done after the confirm, park of the recognition job), the 60 s
+        # settle after its skip, RPC-ready, baseline and the window checks,
+        # about 15 min; a tighter budget would SIGKILL through cleanup.
+        timeout-minutes: 16
         run: bash scripts/e2e-app.sh --no-build --naming-confirm
 
       # Escape-dismisses-naming lane (issue #577): the only automated cover for

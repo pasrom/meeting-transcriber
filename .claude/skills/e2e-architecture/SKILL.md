@@ -58,8 +58,11 @@ PRs are excluded from the self-hosted runner.
 - The `--naming-confirm` lane additionally drives the speaker-naming CONFIRM
   path end-to-end (enqueue a 2-speaker fixture, park at naming instead of
   auto-skipping, `POST /v1/jobs/<id>/naming` an anonymous mapping, then assert
-  the confirmed names replace the raw diarization labels in the transcript and
-  the speaker DB learns the voices); it snapshots + restores the runner's real
+  the confirmed names replace the raw diarization labels in the transcript, the
+  speaker DB learns the voices, and a second copy of the fixture, enqueued
+  afterwards, is suggested exactly those names: a recognised job still parks at
+  naming, so the suggestions are read off its naming choice and the job is then
+  skipped); it snapshots + restores the runner's real
   `speakers.json`/`recognition_log.jsonl` (`$GITHUB_ACTIONS`-gated) so the
   confirm never pollutes the persistent speaker DB.
 - The `--naming-switch` lane covers issue #700: the dialog switches to the next

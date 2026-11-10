@@ -153,8 +153,9 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        lanes), reads GET /v1/jobs/<id>/naming, POSTs an anonymous
                        Speaker A / Speaker B mapping, then asserts the confirmed
                        names land as transcript speaker labels, the raw
-                       diarization labels are gone, and the speaker DB learned the
-                       voices. Standalone lane (incompatible with the other lane
+                       diarization labels are gone, the speaker DB learned the
+                       voices, and (in CI) a second copy of the fixture is
+                       suggested the confirmed names. Standalone lane (incompatible with the other lane
                        flags). Under CI it snapshots + restores the runner's real
                        speakers.json / recognition_log.jsonl so confirming never
                        pollutes the persistent speaker DB; that snapshot/restore
@@ -3490,6 +3491,51 @@ run_naming_confirm() {
         fi
     else
         log "$label: (could not re-read /state.settings for the runtime readback)"
+    fi
+
+    # --- Assertion 4: a later job recognises the voices just confirmed ---
+    # The point of enrolling a voice is that the next meeting names it without
+    # asking. Enqueue a second copy of the same fixture and read the suggestions
+    # its naming choice makes. A recognised job still parks at speaker naming:
+    # SpeakerNamingSession.resolveSpeakerNames stashes naming data for every
+    # job with embeddings, matched or not, and only a job enqueued with
+    # autoSkipNaming (not this route) finishes on the auto-names; so the check
+    # reads GET /v1/jobs/<id>/naming, whose `suggested` per label is the
+    # matcher's assignment. Same audio, same diarizer, so each voice sits
+    # right on the centroid the confirm stored. Enforced only in CI, for the
+    # reason Assertion 3 is: a local DB may hold other voices that win the
+    # match. The job is skipped afterwards, before the app quits and the exit
+    # trap restores the speaker DB, so its recognition-log row is undone with
+    # the rest; a skip writes no embedding.
+    local recog_copy="$_NC_FIXTURE_DIR/two_speakers_de_recognition.wav" recog_job suggestions missing="" name
+    cp "$DEFAULT_FIXTURE" "$recog_copy" || fail "$label: could not copy fixture to $recog_copy"
+    log "$label: POST /v1/jobs paths=[$recog_copy] (recognition of the confirmed voices)"
+    recog_job="$(jq -r 'select((.jobIDs | length) == 1) | .jobIDs[0]' <<<"$(rpc_post /v1/jobs "$(jq -nc --arg p "$recog_copy" '{paths: [$p]}')")" 2>/dev/null)"
+    [ -n "$recog_job" ] || fail "$label: POST /v1/jobs did not return exactly one job id for the recognition job"
+    log "$label: enqueued recognition job $recog_job"
+    poll_rpc "/v1/jobs/$recog_job" --each assert_app_alive --judge-deadline-read "$PIPELINE_TIMEOUT_S" 5 \
+        _job_parked "$label" "$recog_job" \
+        || fail "$(rpc_why $? "/v1/jobs/$recog_job" "$label: recognition job $recog_job never parked at speaker naming within ${PIPELINE_TIMEOUT_S}s")"
+    rpc_read "/v1/jobs/$recog_job/naming" \
+        || fail "$(rpc_why $? "/v1/jobs/$recog_job/naming" "$label: the recognition job's naming choice")"
+    [ "$RPC_STATUS" = 200 ] || fail "$label: GET naming of the recognition job answered HTTP $RPC_STATUS: $RPC_BODY"
+    suggestions="$(jq -c '[.speakers[].suggested]' <<<"$RPC_BODY")"
+    log "$label: recognition job suggests $suggestions for the voices confirmed as $names_json"
+    # Skipped before the verdict, so a miss does not leave it parked for the
+    # lanes after this one. Best effort, bounded well under the job poll: a
+    # skip only runs the protocol stage, and an unsettled job is the snapshot
+    # reset's to drop.
+    _naming_skip "$recog_job"
+    poll_rpc "/v1/jobs/$recog_job" --each assert_app_alive 60 2 rpc_is "$_JOB_TERMINAL" || true
+    while IFS= read -r name; do
+        jq -e --arg n "$name" 'index($n) != null' <<<"$suggestions" >/dev/null || missing="$missing '$name'"
+    done < <(jq -r '.[]' <<<"$names_json")
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+        [ -z "$missing" ] \
+            || fail "$label: a second copy of the fixture was not recognised: the voices confirmed as$missing are not among its suggestions $suggestions. Confirming enrolled the voices (Assertion 3), but matching a later job against them failed."
+        log "$label: the confirmed voices are recognised in a later job ✅"
+    elif [ -n "$missing" ]; then
+        log "$label: (local run, not enforced) not suggested:$missing"
     fi
 
     # Guard against a future regression that enqueues the shared fixture path
