@@ -7,8 +7,8 @@
     private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "DebugRPCServer")
 
     /// Local-only HTTP server that exposes app state for shell-driven inspection.
-    /// Gated by `MEETINGTRANSCRIBER_DEBUG_RPC=1` env var; never started in
-    /// production builds (the `#if !APPSTORE` wraps the whole file).
+    /// Off by default: started by the Local Automation API toggle in Settings or
+    /// by `MEETINGTRANSCRIBER_DEBUG_RPC=1`. Not in the App Store build (`#if !APPSTORE`).
     ///
     /// Bind: `127.0.0.1:9876`. Two layers of defense:
     /// - Origin-header reject blocks browser CSRF / DNS-rebinding (`fetch()` from a

@@ -75,7 +75,7 @@ toggle stays off the allowlist too, for a different reason: a live press (or any
 that reaches `SMAppService`) registers a real login item for whatever binary hosts it,
 so its tests go through the `LoginItemRegistering` fake.
 
-**Live assertions:** assert the `/state` effect, never the returned `pressed` flag or
+**Live assertions:** assert the `/state` effect, never the returned `dispatched` flag or
 tree structure (depth/frames/child counts). Assert the env-stable, load-bearing pin
 subset (`isVisible`, `floating`, `canJoinAllSpaces`) — `fullScreenAuxiliary` proved
 env-unstable on the CI mini (#511). `e2e-ui-smoke` is a harness-liveness canary only —

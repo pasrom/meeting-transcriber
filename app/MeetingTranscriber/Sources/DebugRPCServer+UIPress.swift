@@ -175,8 +175,8 @@
 
         /// `POST /ui/press` handler. 400 undecodable body / empty identifier, 403
         /// window or identifier off its allowlist, 503 allowed window not open,
-        /// 404 identifier absent, 409 present-but-disabled, 200 pressed
-        /// (`{"pressed":<bool>}`).
+        /// 404 identifier absent, 409 present-but-disabled, 200 dispatched
+        /// (`{"dispatched":<bool>}`).
         func uiPressResponse(body: Data) -> HTTPResponse {
             guard let payload = try? JSONDecoder().decode(UIPressPayload.self, from: body),
                   !payload.identifier.isEmpty
