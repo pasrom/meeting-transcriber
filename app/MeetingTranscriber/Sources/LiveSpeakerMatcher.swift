@@ -71,8 +71,7 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
 
     /// Loaded lazily on first `prepare()`. Subsequent calls await the same
     /// task. Cleared on failure so a transient model-download error doesn't
-    /// latch every future caller (mirrors
-    /// [[feedback-single-flight-clear-loadingtask-on-failure]]).
+    /// latch every future caller.
     private var loadedModels: LoadedModels?
     private var loadingTask: Task<LoadedModels, any Error>?
 

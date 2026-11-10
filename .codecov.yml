@@ -73,8 +73,6 @@ ignore:
   # @main SwiftUI scene shell — NSOpenPanel / NSWorkspace bindings, no
   # mock-point, exercised end-to-end by e2e-app.yml (live recording).
   - "app/MeetingTranscriber/Sources/MeetingTranscriberApp.swift"
-  # Pure AVAudioEngine wrapper — hardware-bound, exercised by e2e-app.yml.
-  - "app/MeetingTranscriber/Sources/MicRecorder.swift"
   # AudioTapLib hardware-bound paths — exercised by e2e-app.yml (live
   # recording with BlackHole), not by xctest. The rest of `tools/audiotap/`
   # is covered by its own test suite and uploaded under the `audiotap` flag.

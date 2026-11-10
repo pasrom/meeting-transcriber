@@ -7,8 +7,7 @@ import Foundation
 /// Electron/WebView2 apps (Teams 2.x, Slack, Discord) render call audio in
 /// helper/renderer child processes rather than the shell process the OS sees
 /// as the window owner. A single-PID `CATapDescription` on the shell returns
-/// silence. Issue #84 reports this for Microsoft Teams 2.x; see
-/// `docs/plans/.local/open/2026-05-18-multi-pid-audio-tap-electron-apps.md`.
+/// silence. Issue #84 reports this for Microsoft Teams 2.x.
 public enum ProcessTreeEnumerator {
     /// Returns every running PID whose executable path resides under
     /// `bundleURL` (a `.app` bundle). Order is the kernel's listing order,
