@@ -82,6 +82,12 @@ jobs:
     # honest margin; each lane has its own step-timeout below so a hang in
     # lane N surfaces as `timed_out` on that step (not as an opaque job-level
     # `cancelled`).
+    # Since a failed lane no longer skips the ones after it, the step timeouts
+    # below add up to about 198 min: what a host broken so badly that every
+    # step runs into its own timeout would take. This budget then ends the job
+    # first, and the lanes it did not reach show as cancelled. Most host faults
+    # end a lane long before its timeout (no recording within 40 s, no RPC
+    # within 30 s), so that is a ceiling rather than an expected duration.
     timeout-minutes: 58
 
     steps:
@@ -144,7 +150,25 @@ jobs:
               exit 1
           fi
 
+      # The build is a step of its own so that one failed lane does not skip
+      # the rest. Every lane below runs `--no-build` against the bundle this
+      # step deploys and signs, under the same condition: not cancelled, and
+      # this step succeeded. The first half keeps the later lanes running after
+      # a red one, so a nightly shows which lanes are red and a broken feature
+      # can be told from a broken host; the job still ends red, since a failed
+      # step fails it whatever ran after. The second half matters because
+      # `--no-build` only checks that the bundle directory exists: after a
+      # failed build every lane would test whatever bundle an earlier run left.
+      # A lane step marked continue-on-error stays non-gating as before.
+      - id: build
+        name: Build, deploy and sign the dev app
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 10
+        run: bash scripts/e2e-app.sh --redeploy-only
+
       - name: Run live-recording E2E driver
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         timeout-minutes: 10
@@ -160,20 +184,21 @@ jobs:
         # placeholder, not the raw IOKit assertion name. That saves one launch,
         # one playback and one transcribe cycle per run; a title regression
         # now turns this step red. `--title-source` still runs it on its own.
-        run: bash scripts/e2e-app.sh --two-meetings
+        run: bash scripts/e2e-app.sh --no-build --two-meetings
 
       # Record-only lane: same recorder path, but WatchLoop short-circuits
       # before VAD/transcription/diarization/protocol and writes a sidecar
       # JSON + WAVs to <output>/recordings/ instead. Catches regressions in
       # the WatchLoop record-only branch, sidecar schema, and partial-move
       # behavior that the transcript-asserting lane (above) doesn't exercise.
-      # `--no-build` reuses the bundle from the previous step to skip ~30 s
-      # of rebuild/re-sign.
+      # `--no-build` reuses the bundle the build step deployed.
       # `--keep-recordings` preserves the produced *_mix.wav across the
       # script's on-exit cleanup so the next step can re-use it instead of
       # recording a fresh meeting. Saves ~30 s of redundant playback +
       # capture and silences the second run on the Mini.
-      - name: Run live-recording E2E driver (record-only)
+      - id: record-only
+        name: Run live-recording E2E driver (record-only)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         timeout-minutes: 10
@@ -193,7 +218,11 @@ jobs:
       # of re-recording one. Recorder-correctness coverage is preserved
       # because the previous step already exercised the recorder under
       # this run's binary.
+      # Only after the record-only step above succeeded: without its WAV,
+      # `--reimport-latest` would pick up whatever recording an earlier run
+      # left and pass on a binary that never recorded it.
       - name: Run live-recording E2E driver (re-import recorded WAV)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.record-only.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         timeout-minutes: 10
@@ -206,7 +235,7 @@ jobs:
       # is non-nil end-to-end. Pre-PR-#325 Sortformer mode returned
       # `embeddings: nil` which silently broke the naming flow (issue #109);
       # the env-gated assertion in `scripts/e2e-app.sh` would have caught it.
-      # `--no-build` reuses the dev .app from the first step; only the
+      # `--no-build` reuses the dev .app from the build step; only the
       # UserDefaults flip + meeting trigger differ. Adds ~30s to total lane.
       # PLACEMENT: after the record-only producer and its re-import consumer,
       # because those two are a pair (`--keep-recordings` exists so the second
@@ -230,12 +259,14 @@ jobs:
       # run's marker at startup — but only for its own lanes, not for the other
       # e2e-*.sh drivers in this workflow.
       - name: Run live-recording E2E driver (microphone only)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         timeout-minutes: 10
         run: bash scripts/e2e-app.sh --no-build --mic-only
 
       - name: Run live-recording E2E driver (Sortformer naming dialog)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
           MTT_DIARIZER_MODE: sortformer
@@ -252,6 +283,7 @@ jobs:
       # the real audio path (CATapDescription → LevelPublisher →
       # polling task); the channel-fault lane below drives that end.
       - name: Run channel-health indicator E2E
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 3
         run: bash scripts/e2e-channel-health.sh --no-build --screenshot
 
@@ -277,10 +309,11 @@ jobs:
       # of opening the bundle, and TCC then answered for an identity the grants
       # were never made against. Fixed in the script; the hard-gate flip still
       # wants those few green nightlies first, so this stays non-gating.
-      # `--no-build` reuses the dev bundle the first e2e-app.sh lane built and
+      # `--no-build` reuses the dev bundle the build step built and
       # signed; it shares the bundle-ID + signing cert with the granted bundle,
       # so the runner's TCC grant applies (continue-on-error hedges a mismatch).
       - name: Run permission-health probe E2E (issue #446)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 3
         continue-on-error: true
         run: bash scripts/e2e-permission-health.sh --no-build
@@ -300,6 +333,7 @@ jobs:
       # `--no-build` reuses the already-deployed bundle + the
       # meeting-simulator + mt-cli built during the earlier lanes.
       - name: Run silent-recording detector E2E
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 3
         run: bash scripts/e2e-silent-recording.sh --no-build
 
@@ -319,6 +353,7 @@ jobs:
       # producer in the loopback would make phase 2 impossible rather than
       # signal a regression.
       - name: Run capture-fault E2E (issue #614)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 6
         continue-on-error: true
         run: bash scripts/e2e-channel-fault.sh --no-build
@@ -335,13 +370,17 @@ jobs:
       # covers everything from `LiveTranscriptionController` inward;
       # this lane covers the parts outside the xctest harness (CATap
       # tap, AudioCaptureSession, recorder live-sink wiring).
-      # `--no-build` reuses the deployed bundle from the earlier lanes.
-      - name: Run live-transcription overlay E2E
+      # `--no-build` reuses the bundle the build step deployed.
+      - id: live-captions
+        name: Run live-transcription overlay E2E
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 5
         run: bash scripts/e2e-live-captions.sh --no-build
 
+      # Its own step's failure, not any earlier one: the lanes before it no
+      # longer stop the job, so `failure()` alone would also fire for them.
       - name: Upload live-captions simulator log
-        if: failure()
+        if: always() && steps.live-captions.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
           name: live-captions-simulator.log
@@ -366,8 +405,9 @@ jobs:
       # (channel-health, silent-recording, live-captions) to leave their tight
       # dBFS-timing windows on a quiet machine, and BEFORE crash-recovery so the
       # SIGKILL-and-relaunch teardown stays the final lane (repo policy).
-      # `--no-build` reuses the dev bundle the earlier lanes built + signed.
+      # `--no-build` reuses the dev bundle the build step built + signed.
       - name: Run live-recording E2E driver (speaker-naming confirm)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         # 12 min covers the script's own worst case (two 240 s polls + RPC-ready
@@ -391,6 +431,7 @@ jobs:
       # PLACEMENT: cheap and non-level-sensitive, so it sits next to the other
       # naming lane and still ahead of crash-recovery.
       - name: Run live-recording E2E driver (speaker-naming escape)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         # One transcribe + diarize to park the dialog, then a keystroke and two
@@ -420,6 +461,7 @@ jobs:
       # PLACEMENT: file-driven and not level-sensitive, so next to the other two
       # naming lanes and ahead of crash-recovery.
       - name: Run live-recording E2E driver (speaker-naming switch)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         # Two transcribe + diarize cycles to park both jobs, a third short
@@ -445,6 +487,7 @@ jobs:
       # runs two full transcribe + diarize cycles — kept with the other
       # file-driven lanes and ahead of crash-recovery's SIGKILL teardown.
       - name: "Run echo-bleed verdict E2E (issue #581)"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         # Two jobs, each transcribing both tracks and then diarizing; ~8 min
@@ -461,6 +504,7 @@ jobs:
       # PLACEMENT: same reasoning as the lane above, and directly after it so
       # the two halves fail next to each other.
       - name: "Run echo-cancellation E2E (issue #581)"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         # Measured at 17 s on the mini, against 19 s for the lane above. The
@@ -496,6 +540,7 @@ jobs:
       # other file-driven lanes and ahead of crash-recovery's SIGKILL teardown.
       - id: protocol-lane
         name: "Run protocol-generation E2E (local OpenAI-compatible stub)"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         # Two imports of a 15 s fixture; under a minute typical. Each job poll is
@@ -528,12 +573,14 @@ jobs:
       # file-driven lanes and ahead of crash-recovery's SIGKILL teardown.
       - id: upgrade-home
         name: Prepare the model the upgrade lane seeds
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         uses: ./.github/actions/runner-home
         timeout-minutes: 20
         with:
           prewarm: "true"
 
       - name: "Run upgrade-from-v0.8.1 E2E"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.upgrade-home.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
           E2E_UPGRADE_MODEL_SOURCE: "${{ steps.upgrade-home.outputs.home }}/Library/Application Support/MeetingTranscriber/huggingface"
@@ -553,8 +600,9 @@ jobs:
       # always-run regression guard. Kept LAST among the test lanes: it
       # SIGKILLs + relaunches the shared bundle, so running it after every
       # other lane means that teardown can't disrupt them. `--no-build` reuses
-      # the bundle the first lane built + signed.
+      # the bundle the build step built + signed.
       - name: "Run crash-recovery E2E (issue #379 part 3)"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         timeout-minutes: 10
