@@ -61,9 +61,6 @@ RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 # shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_BASE="http://127.0.0.1:9876"
 REC_DIR="$HOME/Library/Application Support/MeetingTranscriber/recordings"
-# shellcheck source=lib/bundle-ids.sh
-source "$ROOT/scripts/lib/bundle-ids.sh"
-BUNDLE_ID="$DEV_BUNDLE_ID"
 
 [ -n "$SIMULATOR_FIXTURE" ] || SIMULATOR_FIXTURE="$DEFAULT_FIXTURE"
 
@@ -109,10 +106,8 @@ if ! system_profiler SPAudioDataType 2>/dev/null | grep -A4 "Default Input" | gr
 fi
 
 # Cleanup trap, armed before anything below changes the host: a build or
-# launch failure must still kill the simulator, quit the app and put the
-# settings back.
+# launch failure must still kill the simulator and quit the app.
 SIM_PID=""
-DEFAULTS_RECORD=""
 # Every recording artifact this run creates is newer than this marker; created
 # before the app launches, so before anything can record.
 RUN_START_MARKER=""
@@ -129,7 +124,6 @@ on_exit() {
         sweep_run_artifacts "$REC_DIR" "${RUN_START_MARKER:-}"
     fi
     rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
-    [ -z "${DEFAULTS_RECORD:-}" ] || defaults_restore_record "$DEFAULTS_RECORD" || true
 }
 # INT/TERM exit (and so run on_exit once, from EXIT): a trap that only ran
 # on_exit would return into the interrupted command and let the lane carry on
@@ -138,14 +132,8 @@ trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Snapshot the settings this lane changes, in both plists write_dev_default
-# writes, so the trap puts each back to its own earlier value (see
-# dev_defaults_record in scripts/lib/e2e-helpers.sh).
-DEFAULTS_RECORD="$(mktemp "${TMPDIR:-/tmp}/e2e-live-captions-defaults.XXXXXX")"
-dev_defaults_record "$DEFAULTS_RECORD" "$BUNDLE_ID" \
-    liveTranscriptionEnabled transcriptionEngine debugRPCEnabled autoWatch \
-    || fail "could not record the dev bundle's settings; nothing was changed"
-
+# The app must not be running when it is launched below: `open` would only
+# activate it and drop the launch arguments.
 quit_running_app
 
 # --- build + deploy + sign ------------------------------------------------
@@ -187,16 +175,6 @@ if [ ! -x "$SIMULATOR_BIN" ]; then
     (cd "$SIMULATOR_PKG" && swift build -c release)
 fi
 
-# --- preset live-transcription on, engine Parakeet ------------------------
-
-# These four defaults are the actual production seams the toggle uses.
-# Crucially we do NOT set any debug env var that bypasses the real chain
-# — the test must catch a regression in the wiring, not in a debug shim.
-write_dev_default "$BUNDLE_ID" liveTranscriptionEnabled true bool
-write_dev_default "$BUNDLE_ID" transcriptionEngine parakeet string
-write_dev_default "$BUNDLE_ID" debugRPCEnabled true bool
-write_dev_default "$BUNDLE_ID" autoWatch true bool
-
 # --- launch + wait for RPC ------------------------------------------------
 
 fg_user=$(stat -f "%Su" /dev/console)
@@ -206,13 +184,17 @@ if [ "$fg_user" != "$my_user" ]; then
 fi
 
 RUN_START_MARKER="$(mktemp "${TMPDIR:-/tmp}/e2e-live-captions-start.XXXXXX")"
-log "Launching $DEV_BUNDLE_DEPLOY"
-open "$DEV_BUNDLE_DEPLOY"
-
-log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
-poll_until "$RPC_READY_TIMEOUT_S" 1 rpc_ready \
-    || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
-log "RPC up"
+# Live transcription on with the Parakeet engine, and watching, as launch
+# arguments: the settings the production toggle writes, so the chain under
+# test is the real one, but in the argument domain for this process only, so
+# the lane leaves the host's preferences as it found them (see
+# launch_dev_app). Crucially no debug env var that bypasses the real chain:
+# the one env var brings up the RPC server the lane reads, nothing else.
+log "Launching $DEV_BUNDLE_DEPLOY (waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz)"
+launch_dev_app "$DEV_BUNDLE_DEPLOY" --env MEETINGTRANSCRIBER_DEBUG_RPC=1 -- \
+    liveTranscriptionEnabled=true transcriptionEngine=parakeet autoWatch=true \
+    || fail "$E2E_LAUNCH_ERR"
+log "RPC up; the app reports the launch settings (live transcription on, Parakeet, auto-watch)"
 
 # --- trigger meeting + poll captions --------------------------------------
 

@@ -361,8 +361,9 @@ jobs:
       # Live-transcription overlay e2e (PR #318): asserts on the
       # in-flight LiveCaptionsState exposed at `/state.liveCaptions.
       # recentFinals` rather than the post-pipeline transcript path
-      # the first three lanes already cover. Pre-sets the production
-      # UserDefaults the toggle reads — no debug env-var shortcut —
+      # the first three lanes already cover. Launches the app with the
+      # settings the toggle writes, as launch arguments that it must report
+      # back on /state — no debug env-var shortcut into the chain —
       # so a regression in the recorder → live-sink → controller →
       # streaming-transcriber → engine wiring chain surfaces here.
       # The fixture-based xctest E2E in
