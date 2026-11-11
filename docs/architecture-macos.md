@@ -103,6 +103,8 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/GeneralSettingsView.swift` | Startup (Launch at login, Start watching when the app opens = `AppSettings.autoWatch`) · Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack) · Detection (Poll Interval, Grace Period) |
 | `Settings/AudioSettingsView.swift` | Microphone device · VAD (enabled + threshold) · Per-Channel Indicator |
 | `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Vocabulary section · Live transcription (PoC) toggle |
+| `Settings/LegacyWhisperModelsSection.swift` | Transcription settings "Storage" section — lists WhisperKit model variants an earlier build left in `Documents`, lets the user pick which to trash; shown only while there is something to remove or explain |
+| `Settings/LegacyWhisperModelsState.swift` | `@Observable` state backing `LegacyWhisperModelsSection`: scans for leftover variants, removes the ones the user picked, reports scan/removal failures |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Speaker Naming (open the naming window automatically) · Mic Speaker Name · Known Voices · Recognition Stats · Experimental: Diarization Tuning |
 | `Settings/OutputSettingsView.swift` | LLM provider · notes language · output folder · custom prompt |
 | `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics |
@@ -160,6 +162,12 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `WhisperKitEngine.swift` | WhisperKit transcription engine (99+ languages, ~1 GB model) |
 | `WhisperDecodingClient.swift` | Narrow decode boundary used by `WhisperKitEngine` — production forwards to WhisperKit, tests capture the exact options passed |
 | `WhisperVocabularyPrompt.swift` | Converts the shared custom-vocabulary file into a bounded WhisperKit decoder prompt (experimental, off by default) |
+| `WhisperKitModelSource.swift` | The steps `WhisperKitEngine.loadModel()` takes to reach a usable pipe, local-first, each one testable in isolation |
+| `WhisperKitLocalSnapshot.swift` | Where WhisperKit keeps downloaded models and whether a complete copy of a variant is already present, so a load can skip the network |
+| `WhisperKitModelOrigin.swift` | Where a model variant's files come from (stock Hugging Face repo vs. a custom repo/folder) — part of a variant's identity since a fine-tune can reuse a stock folder name |
+| `WhisperKitModelMigration.swift` | One-time move of WhisperKit models an earlier build downloaded into `Documents/huggingface` over to the current download cache, so an existing install does not re-download |
+| `WhisperKitLoadFailureReason.swift` | The one path-free sentence a failed WhisperKit model load is reported with, in Settings and in job errors |
+| `LegacyWhisperModelInventory.swift` | Finds and removes the WhisperKit model variant folders earlier builds left in `Documents/huggingface`, backing the Settings → Transcription → Storage section |
 | `ParakeetEngine.swift` | NVIDIA Parakeet TDT v3 via FluidAudio (25 EU languages, ~50 MB, ~10× faster) |
 | `ParakeetTokenGrouping.swift` | Pure token-grouping logic extracted from `ParakeetEngine` (testable) |
 | `ParakeetVocabularyConfiguration.swift` | Identity of one Parakeet CTC vocabulary configuration (path + bookmark + file revision) and its preparation lifecycle |
@@ -785,9 +793,9 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 |---|---|---|---|
 | **General** | Startup · Mode · Apps to Watch · Detection | `settings` | — |
 | **Audio** | Microphone · VAD · Echo · Per-Channel Indicator | `settings` | `audioDevices` |
-| **Transcription** | Engine + per-engine options + status | `settings`, three engines | — |
+| **Transcription** | Engine + per-engine options + status · Storage (legacy WhisperKit model cleanup) | `settings`, three engines | — |
 | **Speakers** | Diarization · Speaker Identity · Known Voices · Recognition Stats · Experimental: Diarization Tuning | `settings`, `recognitionStatsLog`, `enrollmentDiarizerFactory` | `knownVoicesSheet` |
-| **Output** | LLM Provider · Notes Language · Output Folder · Prompt | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
+| **Output** | LLM Provider · Notes Language · Output Folder · Prompt · Notion Export | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
 | **Advanced** | Permissions · Diagnostics | — | `micPermission`, `screenRecordingOK`, `accessibilityOK` |
 | **About** | Build identity · Dependencies · Updates | `settings`, `updateChecker?` | — |
 
