@@ -20,7 +20,7 @@ app/MeetingTranscriber/    # Swift macOS menu-bar app (SPM)
                            #   DebugRPCServer + /v1 automation API (#if !APPSTORE).
                            #   Info.plist: bundle metadata and permission usage strings.
   Tests/                   # XCTest + ViewInspector; Fixtures/ test audio (two_speakers_de.wav, ...)
-  Entitlements/            # Homebrew.entitlements (mic only) + AppStore.entitlements (sandbox)
+  Entitlements/            # Homebrew.entitlements (mic only) + AppStore.entitlements (sandbox + app-scoped bookmarks)
 tools/audiotap/            # AudioTapLib: CATapDescription app-audio + AVAudioEngine mic capture (SPM lib)
 tools/meeting-simulator/   # Meeting simulator for testing
 tools/mt-cli/              # Thin Swift client for DebugRPCServer (+ skill.md)
@@ -195,7 +195,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **Debug RPC server** | Yes (off by default; Settings toggle or env flag) | No (`#if !APPSTORE`) |
 | **Safari call audio** | Yes (`ProcessResponsibility` via `dlsym`) | No (private symbol unavailable; bundle-derived PIDs only) |
 | **Chromium helper selection** | Yes (`ChromiumHelperFilter` reads argv via `KERN_PROCARGS2`) | Not measured: if the sandbox refuses the sysctl for other processes, every argv reads empty and the tap keeps all helpers (the issue #791 stall); the refusal is logged with its errno |
-| **Entitlements** | Mic only | Sandbox + mic + network + file picker |
+| **Entitlements** | Mic only | Sandbox + mic + network + file picker + app-scoped bookmarks |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
 | **Tests** | ~4,500 | ~4,100 (CLI + RPC tests excluded via `#if !APPSTORE`) |
 
