@@ -46,6 +46,8 @@ struct MenuBarView: View {
     /// before the setting was turned off still falls back to it when no local
     /// file exists; `JobOpenTarget` owns that rule.
     var notionExportEnabled: Bool = false
+    /// Picks transcripts and queues meeting notes for each.
+    var onGenerateNotesFromTranscripts: () -> Void = {}
 
     private var state: TranscriberState {
         status?.state ?? .idle
@@ -229,6 +231,17 @@ struct MenuBarView: View {
             Label("Process Audio/Video Files...", systemImage: "doc.badge.plus")
         }
         .keyboardShortcut("p")
+
+        // Not in the App Store build: the notes are written next to the picked
+        // file, and the sandbox grants the picked file only, not its folder.
+        #if !APPSTORE
+            Button {
+                onGenerateNotesFromTranscripts()
+            } label: {
+                Label("Generate Meeting Notes from Transcript...", systemImage: "doc.text")
+            }
+            .accessibilityIdentifier(A11yID.generateNotesFromTranscriptButton)
+        #endif
     }
 
     private var queueHeader: QueueHeader {

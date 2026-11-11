@@ -73,7 +73,8 @@ extension PipelineQueue {
     /// volume that comes back is retryable; notes that appeared while it waited
     /// end the offer. Neither becomes a full run or an overwrite.
     func generateNotesOnly(_ job: PipelineJob) async {
-        guard let transcriptPath = job.transcriptPath, let transcript = Self.readTranscript(at: transcriptPath) else {
+        guard let transcriptPath = job.transcriptPath, let transcript = await Self.readTranscriptOffMain(transcriptPath)
+        else {
             // The failure this time is the transcript, so that is what the
             // notification names.
             recordNotesFailure(id: job.id, .transcriptUnreadable)
@@ -161,10 +162,123 @@ extension PipelineQueue {
         return stems.contains { FileManager.default.fileExists(atPath: folder.appendingPathComponent("\($0).md").path) }
     }
 
-    /// The transcript, nil when it is missing, unreadable or blank.
-    static func readTranscript(at url: URL) -> String? {
+    /// `readTranscript` off the main actor, for a file the caller named: it
+    /// can be on a slow volume, and up to `maxTranscriptBytes`.
+    static func readTranscriptOffMain(_ url: URL) async -> String? {
+        await Task.detached { readTranscript(at: url) }.value
+    }
+
+    /// The transcript, nil when it is missing, unreadable, blank or larger
+    /// than `maxTranscriptBytes`.
+    nonisolated static func readTranscript(at url: URL) -> String? {
+        guard let size = fileSize(url), size <= maxTranscriptBytes else { return nil }
         guard let text = try? String(contentsOf: url, encoding: .utf8),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return text
+    }
+}
+
+/// What `enqueueNotes(fromTranscripts:)` did with each file it was given.
+struct NotesFromTranscriptOutcome: Equatable {
+    /// One job per transcript, in the order given.
+    var queued: [UUID] = []
+    /// Transcripts with a `.md` of the same name next to them. Never overwritten.
+    var notesExist: [URL] = []
+    /// Not a `.txt`, missing, empty or larger than `maxTranscriptBytes`.
+    var unreadable: [URL] = []
+    /// Given twice, or already waiting in a notes-only job.
+    var alreadyQueued: [URL] = []
+
+    /// The notification for files that were not queued, nil when all were.
+    var skippedNotice: (title: String, body: String)? {
+        var parts: [String] = []
+        if !notesExist.isEmpty { parts.append("Notes already exist for \(Self.names(notesExist)).") }
+        if !unreadable.isEmpty { parts.append("Could not read \(Self.names(unreadable)).") }
+        if !alreadyQueued.isEmpty { parts.append("Already queued: \(Self.names(alreadyQueued)).") }
+        guard !parts.isEmpty else { return nil }
+        return ("Some Transcripts Were Skipped", parts.joined(separator: " "))
+    }
+
+    private static func names(_ urls: [URL]) -> String {
+        urls.map(\.lastPathComponent).joined(separator: ", ")
+    }
+}
+
+/// Meeting notes for a transcript the user picks, typically one from before
+/// the notes were generated or from before they failed and the job is gone.
+extension PipelineQueue {
+    /// Queues one notes-only job per transcript. They run one after another
+    /// with the rest of the queue.
+    ///
+    /// The transcript stays where it is, under its own name: the job keeps the
+    /// raw transcript whatever the setting, and never renames by the AI title,
+    /// since both would act on a file the user picked rather than one the run
+    /// wrote. The notes go next to it as `<name>.md`, and a transcript that
+    /// already has one is left out. A name that starts with the app's
+    /// `yyyyMMdd_HHmm` stamp gives the notes their meeting date.
+    ///
+    /// Nothing is read here, on the main actor: a file is checked by its name
+    /// and size, and read off the main actor when its job runs
+    /// (`generateNotesOnly`). The same transcript is queued once, whether it
+    /// is given twice or is already waiting in a notes-only job.
+    @discardableResult
+    func enqueueNotes(fromTranscripts urls: [URL]) -> NotesFromTranscriptOutcome {
+        var outcome = NotesFromTranscriptOutcome()
+        var queuedPaths = Set(jobs.filter { $0.generatesNotesOnly == true && !$0.state.isTerminal }
+            .compactMap { $0.transcriptPath?.standardizedFileURL.path })
+        for url in urls {
+            guard url.pathExtension.lowercased() == "txt", Self.isTranscriptSized(url) else {
+                outcome.unreadable.append(url)
+                continue
+            }
+            guard !FileManager.default.fileExists(atPath: Self.notesURL(forTranscript: url).path) else {
+                outcome.notesExist.append(url)
+                continue
+            }
+            guard queuedPaths.insert(url.standardizedFileURL.path).inserted else {
+                outcome.alreadyQueued.append(url)
+                continue
+            }
+            let stem = url.deletingPathExtension().lastPathComponent
+            var job = PipelineJob(
+                meetingTitle: stem, appName: "Transcript", mixPath: nil, appPath: nil, micPath: nil, micDelay: 0,
+                meetingStartTime: Self.meetingStart(fromStem: stem),
+                saveRawTranscriptSeparately: true, useAITitleForFilenames: false,
+            )
+            job.transcriptPath = url
+            job.notesBasename = stem
+            job.generatesNotesOnly = true
+            enqueue(job)
+            outcome.queued.append(job.id)
+        }
+        return outcome
+    }
+
+    /// Above it a file is not taken for a transcript. A guard, not a measured
+    /// bound: the app's own transcripts are text of one meeting.
+    nonisolated static let maxTranscriptBytes = 16 * 1024 * 1024
+
+    private static func isTranscriptSized(_ url: URL) -> Bool {
+        guard let size = fileSize(url) else { return false }
+        return size > 0 && size <= maxTranscriptBytes
+    }
+
+    /// The size of what a read would read: `attributesOfItem` describes a
+    /// symbolic link itself, while `String(contentsOf:)` follows it.
+    nonisolated static func fileSize(_ url: URL) -> Int? {
+        (try? FileManager.default.attributesOfItem(atPath: url.resolvingSymlinksInPath().path))?[.size] as? Int
+    }
+
+    private static func notesURL(forTranscript url: URL) -> URL {
+        url.deletingPathExtension().appendingPathExtension("md")
+    }
+
+    private static let stemStampFormatter = DateFormatter.filenameStamp("yyyyMMdd_HHmm")
+
+    /// The meeting start a name like `20261030_0900_standup` records, nil
+    /// for any other name.
+    static func meetingStart(fromStem stem: String) -> Date? {
+        guard stem.count >= 13 else { return nil }
+        return stemStampFormatter.date(from: String(stem.prefix(13)))
     }
 }

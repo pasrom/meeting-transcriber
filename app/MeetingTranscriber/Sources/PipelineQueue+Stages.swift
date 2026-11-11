@@ -1110,7 +1110,7 @@ extension PipelineQueue {
         // namingSlug), so the .md shares the .txt/audio stem exactly. This runs
         // only after a transcript exists, so namingSlug is set on every real
         // path; the fallback only keeps generation working without one.
-        let initialBasename = job.namingSlug
+        let initialBasename = job.notesBasename ?? job.namingSlug
             ?? Self.namingSlug(title: title, jobID: jobID, startTime: Date())
         let meetingStartTime = job.meetingStartTime
         updateJobState(id: jobID, to: .generatingProtocol)
