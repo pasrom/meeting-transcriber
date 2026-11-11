@@ -20,8 +20,8 @@ extension FluidDiarizer {
     /// This file is `.codecov.yml`-ignored: it is exercised end-to-end by
     /// `SortformerEmbeddingsE2ETests` under the `RUN_QUALITY_TESTS=1` lane,
     /// not by default xctest (which would need a 150 MB CoreML download).
-    /// The pure helpers — `buildOverlapExcludedMasks`, `resampleMask`,
-    /// `aggregateCentroids` — stay in `FluidDiarizer.swift` and are
+    /// The pure helpers — `buildOverlapExcludedMasks`,
+    /// `planEmbeddingChunks`, `aggregateCentroids` — stay in `FluidDiarizer.swift` and are
     /// covered by `FluidDiarizerSortformerTests`.
     func extractSortformerEmbeddings(
         audioPath: URL,
@@ -90,9 +90,8 @@ extension FluidDiarizer {
         return result
     }
 
-    /// Walk the audio in 10s chunks, run WeSpeaker on the top-3 active
-    /// speakers per chunk (the model's mask shape only fits 3), accumulate
-    /// running sums + counts per global Sortformer speaker slot. A speaker
+    /// Run WeSpeaker on each planned chunk (see `planEmbeddingChunks`) and
+    /// accumulate running sums + counts per global speaker slot. A speaker
     /// beyond the third (Sortformer's 4th, Nemotron 3's 4th to 8th) gets
     /// covered in chunks where they rank in the top-3 of that window.
     private func accumulateChunkEmbeddings(
@@ -102,35 +101,25 @@ extension FluidDiarizer {
         weSpeakerFrameCount: Int,
         extractor: EmbeddingExtractor,
     ) throws -> (sums: [String: [Float]], counts: [String: Int]) {
-        let chunkSamples = 160_000 // 10s @ 16 kHz — matches EmbeddingExtractor's waveform shape
-        let framesPerChunk = max(1, Int(10.0 / frameDuration))
-        let numSpeakers = masks.count
-        let maskFrameCount = masks.first?.count ?? 0
-
-        var sums = [String: [Float]](minimumCapacity: numSpeakers)
-        var counts = [String: Int](minimumCapacity: numSpeakers)
-
-        var sampleStart = 0
-        var frameStart = 0
-        while sampleStart < audio.count, frameStart < maskFrameCount {
-            let sampleEnd = min(sampleStart + chunkSamples, audio.count)
-            let frameEnd = min(frameStart + framesPerChunk, maskFrameCount)
-            let chunk = Array(audio[sampleStart ..< sampleEnd])
-            let chunkMasks: [[Float]] = (0 ..< numSpeakers).map { Array(masks[$0][frameStart ..< frameEnd]) }
-            let activity = (0 ..< numSpeakers).map { (slot: $0, sum: chunkMasks[$0].reduce(0, +)) }
-            let topSlots = activity.sorted { $0.sum > $1.sum }.prefix(3).map(\.slot)
-            let masksForCall = topSlots.map { Self.resampleMask(chunkMasks[$0], to: weSpeakerFrameCount) }
-
-            let embs = try extractor.getEmbeddings(audio: chunk, masks: masksForCall)
-            for (i, slot) in topSlots.enumerated() {
+        let plans = Self.planEmbeddingChunks(
+            audioSampleCount: audio.count,
+            masks: masks,
+            // 1280 samples for Sortformer's 80 ms frames, 160 for Nemotron 3's 10 ms.
+            samplesPerMaskFrame: Int((frameDuration * 16000).rounded()),
+            weSpeakerFrameCount: weSpeakerFrameCount,
+        )
+        var sums = [String: [Float]](minimumCapacity: masks.count)
+        var counts = [String: Int](minimumCapacity: masks.count)
+        for plan in plans {
+            let window = Self.weSpeakerWindow(audio, range: plan.sampleRange)
+            let embs = try extractor.getEmbeddings(audio: window, masks: plan.masks)
+            for (i, slot) in plan.slots.enumerated() {
                 let emb = embs[i]
                 guard !emb.allSatisfy({ $0 == 0 }) else { continue }
                 let label = "SPEAKER_\(slot)"
                 sums[label] = sums[label].map { zip($0, emb).map(+) } ?? emb
                 counts[label, default: 0] += 1
             }
-            sampleStart = sampleEnd
-            frameStart = frameEnd
         }
         return (sums, counts)
     }
