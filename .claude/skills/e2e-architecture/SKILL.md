@@ -376,7 +376,7 @@ PRs are excluded from the self-hosted runner.
   (best-effort, depends on a third-party public instance being up — an outage is
   not our regression). Chrome must be installed; `~/Applications` works for a
   runner user without `/Applications` write access, and `node`/`npm` are needed
-  (puppeteer-core is `npm i`-installed on demand into `scripts/fixtures`).
+  (puppeteer-core is installed on demand into `scripts/fixtures` with `npm ci` from the committed lockfile).
 
 **Why the live-recording variant exists** (history that's easy to lose):
 - An earlier attempt at xctest-framed live recording (PR #100,

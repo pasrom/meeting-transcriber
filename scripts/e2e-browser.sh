@@ -185,13 +185,29 @@ if [ "$MODE" = fixture ]; then
 else
     # --jitsi: drive Chrome via CDP with puppeteer-core (node). Install it on
     # demand into scripts/fixtures (node_modules is gitignored).
+    #
+    # `npm ci` from the committed lockfile, never `npm install`: this runs on
+    # the runner that holds the signing keychain, so what gets installed must
+    # be the reviewed, integrity-pinned tree and not whatever the registry
+    # resolves a version range to that day. `--ignore-scripts` because nothing
+    # in the tree needs an install script, and none should get to run there.
+    # The stamp records which lockfile node_modules was built from, so a
+    # lockfile change reinstalls instead of silently keeping the old tree.
     require_command node
     require_command npm
     [ -f "$KEEPER" ] || fail "jitsi keeper not found: $KEEPER"
-    if [ ! -d "$FIXTURES_DIR/node_modules/puppeteer-core" ]; then
+    KEEPER_LOCK="$FIXTURES_DIR/package-lock.json"
+    KEEPER_STAMP="$FIXTURES_DIR/node_modules/.lock-sha256"
+    [ -f "$KEEPER_LOCK" ] || fail "jitsi keeper lockfile not found: $KEEPER_LOCK"
+    KEEPER_LOCK_SUM="$(shasum -a 256 "$KEEPER_LOCK" | cut -d' ' -f1)"
+    if [ ! -d "$FIXTURES_DIR/node_modules/puppeteer-core" ] \
+        || [ "$(cat "$KEEPER_STAMP" 2>/dev/null)" != "$KEEPER_LOCK_SUM" ]; then
         log "Installing puppeteer-core for the jitsi keeper"
-        ( cd "$FIXTURES_DIR" && npm install --no-audit --no-fund >/dev/null 2>&1 ) \
-            || fail "npm install puppeteer-core failed"
+        # Quiet on success, but a refused package (integrity mismatch) has to
+        # be readable in the log, so npm's output is kept for the failure.
+        KEEPER_INSTALL_LOG="$(cd "$FIXTURES_DIR" && npm ci --ignore-scripts --no-audit --no-fund 2>&1)" \
+            || { printf '%s\n' "$KEEPER_INSTALL_LOG" >&2; fail "npm ci for the jitsi keeper failed"; }
+        printf '%s\n' "$KEEPER_LOCK_SUM" > "$KEEPER_STAMP"
     fi
 fi
 
