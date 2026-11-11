@@ -490,9 +490,13 @@ struct FluidOfflineProcessor: OfflineDiarizationProcessing {
     /// Neural Engine route retains hardware acceleration without invoking the
     /// crash-prone GPU path. FluidAudio 0.15.5+ reads only `computeUnits` from
     /// this configuration; older releases silently use `.all` instead.
+    /// `LiveSpeakerMatcher` loads the same embedding model and reads
+    /// `computeUnits` too, so the two paths cannot drift apart.
+    static let computeUnits: MLComputeUnits = .cpuAndNeuralEngine
+
     static func makeModelConfiguration() -> MLModelConfiguration {
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .cpuAndNeuralEngine
+        configuration.computeUnits = computeUnits
         return configuration
     }
 

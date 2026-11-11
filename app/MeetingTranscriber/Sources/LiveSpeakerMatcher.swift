@@ -55,6 +55,13 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
     private static let cachedFrameCountKey =
         "LiveSpeakerMatcher.weSpeakerFrameCount.\(ModelNames.Diarizer.segmentationFile)"
 
+    /// Compute units for the WeSpeaker embedding model. Shared with the
+    /// offline pipeline, which keeps this model off the GPU because Core ML's
+    /// `.all` routing can abort the process inside MPSGraph (see
+    /// `FluidOfflineProcessor.computeUnits`). Not conditional on CI, so the
+    /// test suite exercises the configuration that ships.
+    static let embeddingComputeUnits = FluidOfflineProcessor.computeUnits
+
     /// SpeakerMatcher is a class with internal NSLock-based DB
     /// serialization — safe to call from any thread. Held by reference so
     /// rename / delete operations made via the existing UI (KnownVoices)
@@ -68,6 +75,44 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
     /// cross the actor isolation boundary from any caller.
     private let readCachedFrameCount: @Sendable () -> Int?
     private let writeCachedFrameCount: @Sendable (Int) -> Void
+
+    /// The two FluidAudio load calls, one per launch path, each handed the
+    /// compute units to load with. Injectable so tests can see which units
+    /// each path asks for without loading a model.
+    struct ModelLoaders: Sendable {
+        /// Cache hit: the embedding model alone.
+        var embeddingModel: @Sendable (MLComputeUnits) async throws -> MLModel
+        /// Cache miss: segmentation + embedding, to derive the frame count.
+        var diarizerModels: @Sendable (MLComputeUnits) async throws -> DiarizerModels
+
+        static let fluidAudio = ModelLoaders(
+            embeddingModel: { computeUnits in
+                // `DiarizerModels.defaultModelsDirectory()` returns the
+                // model-bundle dir (`…/Models/diarizer-coreml`); `ModelHub`
+                // appends `repo.folderName` itself, so we strip the trailing
+                // component to give it the parent (`…/Models`).
+                let modelsByName = try await ModelHub.loadModels(
+                    .diarizer,
+                    modelNames: [ModelNames.Diarizer.embeddingFile],
+                    directory: DiarizerModels.defaultModelsDirectory().deletingLastPathComponent(),
+                    computeUnits: computeUnits,
+                )
+                guard let model = modelsByName[ModelNames.Diarizer.embeddingFile] else {
+                    throw LiveSpeakerMatcherError.modelLoadFailed
+                }
+                return model
+            },
+            diarizerModels: { computeUnits in
+                // Without an explicit configuration FluidAudio picks `.all`
+                // outside CI. It reads only `computeUnits` from it.
+                let configuration = MLModelConfiguration()
+                configuration.computeUnits = computeUnits
+                return try await DiarizerModels.load(configuration: configuration)
+            },
+        )
+    }
+
+    private let modelLoaders: ModelLoaders
 
     /// Loaded lazily on first `prepare()`. Subsequent calls await the same
     /// task. Cleared on failure so a transient model-download error doesn't
@@ -93,10 +138,12 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         speakerMatcher: SpeakerMatcher = SpeakerMatcher(),
         readCachedFrameCount: @escaping @Sendable () -> Int? = LiveSpeakerMatcher.defaultReadCachedFrameCount,
         writeCachedFrameCount: @escaping @Sendable (Int) -> Void = LiveSpeakerMatcher.defaultWriteCachedFrameCount,
+        modelLoaders: ModelLoaders = .fluidAudio,
     ) {
         self.speakerMatcher = speakerMatcher
         self.readCachedFrameCount = readCachedFrameCount
         self.writeCachedFrameCount = writeCachedFrameCount
+        self.modelLoaders = modelLoaders
     }
 
     /// Production reader: `UserDefaults.standard.integer(forKey:)` returns
@@ -181,32 +228,12 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
     }
 
     private func loadModels() async throws -> LoadedModels {
-        // `DiarizerModels.defaultModelsDirectory()` returns the model-bundle
-        // dir (`…/Models/diarizer-coreml`); `ModelHub` appends
-        // `repo.folderName` itself, so we strip the trailing component to
-        // give it the parent (`…/Models`).
-        let directory = DiarizerModels.defaultModelsDirectory()
-            .deletingLastPathComponent()
-        // Mirror `DiarizerModels.defaultConfiguration`'s CI vs. local
-        // compute-unit choice (that function is internal to FluidAudio
-        // so we can't call it directly) — keeps the live matcher's
-        // CoreML execution path identical to the batch loader on the
-        // same hardware.
-        let computeUnits: MLComputeUnits = ProcessInfo.processInfo
-            .environment["CI"] != nil ? .cpuAndNeuralEngine : .all
+        let computeUnits = Self.embeddingComputeUnits
 
         if let cachedFrameCount = readCachedFrameCount() {
             // Cache hit: load only the embedding model. The savings vs.
             // the first-launch path are documented in the type docstring.
-            let modelsByName = try await ModelHub.loadModels(
-                .diarizer,
-                modelNames: [ModelNames.Diarizer.embeddingFile],
-                directory: directory,
-                computeUnits: computeUnits,
-            )
-            guard let embeddingModel = modelsByName[ModelNames.Diarizer.embeddingFile] else {
-                throw LiveSpeakerMatcherError.modelLoadFailed
-            }
+            let embeddingModel = try await modelLoaders.embeddingModel(computeUnits)
             logger.info("WeSpeaker loaded for live matching (cached frameCount=\(cachedFrameCount, privacy: .public), segmentation skipped)")
             return makeLoadedModels(embeddingModel: embeddingModel, frameCount: cachedFrameCount)
         }
@@ -216,7 +243,7 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         // model's `segments` output shape — `segShape[1]` is the WeSpeaker
         // mask frame count. Persist it so future launches take the
         // embedding-only fast path above.
-        let full = try await DiarizerModels.load()
+        let full = try await modelLoaders.diarizerModels(computeUnits)
         guard
             let segShape = full.segmentationModel.modelDescription
                 .outputDescriptionsByName["segments"]?.multiArrayConstraint?.shape,
