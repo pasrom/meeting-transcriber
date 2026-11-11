@@ -1130,9 +1130,13 @@ extension PipelineQueue {
             // and OpenAIProtocolGenerator's connection/HTTP errors) already
             // only ever carried diagnostic text. Safe to log at .public —
             // restores the visibility traded away in PR #692's 4th commit.
+            // Content-free means no meeting content: an HTTP error still
+            // carries part of the server's response body, which is why only
+            // this line keeps the message and the job keeps the kind.
             logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .public)")
             // Matched by /v1 clients and persisted jobs; keep the text stable.
             addWarning(id: jobID, "Protocol generation failed — transcript saved")
+            recordNotesFailure(id: jobID, MeetingNotesFailure(error))
             resolveNotionExport(jobID: jobID)
             return
         }

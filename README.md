@@ -253,7 +253,7 @@ Open Settings via the menu bar item or ⌘,.
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
 | **Transcription** | ASR engine (WhisperKit / Parakeet) and per-engine options (model incl. a custom WhisperKit model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
 | **Speakers** | Diarization, whether the naming window opens by itself, how long unnamed meetings wait before they get the automatic names, mic speaker name, known voices, recognition stats |
-| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, notes language, output folder, custom prompt |
+| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, notes language, a notification when meeting notes fail (on by default), output folder, custom prompt |
 | **Advanced** | Permissions status, diagnostics, Local Automation API |
 | **About** | Version and build info, ffmpeg status, update checks |
 

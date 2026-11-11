@@ -511,6 +511,20 @@ class PipelineQueue {
         onUnusableVoices?(job, newlyUnusable)
     }
 
+    /// The notification for a finished job. With meeting notes that failed and
+    /// `announceNotesFailure` on (`AppSettings.notifyOnMeetingNotesFailure`),
+    /// it says so with the fixed sentence for the kind of failure; otherwise
+    /// "Meeting Notes Ready" or "Transcript Saved". Standard urgency: the
+    /// failure is over by the time it is announced, and a batch import with a
+    /// signed-out CLI posts one per job.
+    static func doneNotification(for job: PipelineJob, announceNotesFailure: Bool) -> (title: String, body: String) {
+        guard let failure = job.notesFailure, announceNotesFailure else {
+            return (job.hasSavedProtocol ? "Meeting Notes Ready" : "Transcript Saved", job.meetingTitle)
+        }
+        let body = "\"\(job.meetingTitle)\": \(failure.summary). The transcript is saved."
+        return ("Meeting Notes Failed", failure.hint.map { "\(body) \($0)" } ?? body)
+    }
+
     /// Notification text for `onUnusableVoices`.
     static func unusableVoicesMessage(_ names: [String], in job: PipelineJob) -> String {
         "No usable voice sample for \(names.joined(separator: ", ")) in \"\(job.meetingTitle)\": too short "
@@ -978,6 +992,13 @@ class PipelineQueue {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         guard !jobs[index].warnings.contains(message) else { return }
         jobs[index].warnings.append(message)
+    }
+
+    /// Record why this job's meeting notes could not be generated
+    /// (`PipelineJob.notesFailure`).
+    func recordNotesFailure(id: UUID, _ failure: MeetingNotesFailure) {
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        jobs[index].notesFailure = failure
     }
 
     /// Record which tracks of this job's recording had audio. Read back through
