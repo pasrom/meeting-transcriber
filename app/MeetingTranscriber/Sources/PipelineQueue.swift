@@ -517,7 +517,14 @@ class PipelineQueue {
     /// "Meeting Notes Ready" or "Transcript Saved". Standard urgency: the
     /// failure is over by the time it is announced, and a batch import with a
     /// signed-out CLI posts one per job.
+    ///
+    /// A notes-only run (`generatesNotesOnly`) that saved nothing saved no
+    /// transcript either, so it never reads "Transcript Saved".
     static func doneNotification(for job: PipelineJob, announceNotesFailure: Bool) -> (title: String, body: String) {
+        if job.generatesNotesOnly == true, !job.hasSavedProtocol, job.notesFailure == nil || !announceNotesFailure {
+            let reason = job.notesFailure?.summary ?? "Notes already exist next to the transcript, so nothing was written"
+            return ("Meeting Notes Not Saved", announceNotesFailure ? "\"\(job.meetingTitle)\": \(reason)." : job.meetingTitle)
+        }
         guard let failure = job.notesFailure, announceNotesFailure else {
             return (job.hasSavedProtocol ? "Meeting Notes Ready" : "Transcript Saved", job.meetingTitle)
         }
@@ -833,7 +840,7 @@ class PipelineQueue {
     }
 
     private func expireCompletedJob(id: UUID) {
-        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.hasPendingNotionExport }) else { return }
+        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.isHeldAfterCompletion }) else { return }
         // Native menus update in place. Removing a finished export's row while
         // the menu is open moves its actions underneath the pointer.
         if menuTrackingDepth > 0, jobs.contains(where: { $0.id == id && $0.notionExportStatus != nil }) {
@@ -889,6 +896,9 @@ class PipelineQueue {
             jobs[index].namingStartedAt = Date()
         }
         if newState == .done {
+            // Only now, with the notes saved, is a failure over: a retry that
+            // fails again, or finds no provider, keeps it and stays on offer.
+            if jobs[index].hasSavedProtocol { clearNotesFailure(at: index) }
             removeRawTranscriptArtifactsIfSafe(for: index)
         } else if newState == .error,
                   !transcriptOutputOptions(forJobID: id).saveRawTranscriptSeparately,
@@ -913,16 +923,17 @@ class PipelineQueue {
             if recordingRetention != nil {
                 Task { [weak self] in await self?.sweepRetainedRecordings() }
             }
-            // A held export retries from its Markdown, never from the audio
-            // sidecars, and it may be held for as long as the user leaves it.
-            if jobs[index].hasPendingNotionExport {
+            // A held export retries from its Markdown, and a notes retry from
+            // the transcript, never from the audio sidecars, and either may be
+            // held for as long as the user leaves it.
+            if jobs[index].isHeldAfterCompletion {
                 naming.removeNamingData(jobID: id, slug: jobs[index].namingSlug, in: allSidecarDirs(of: jobs[index]))
             }
         }
     }
 
     func scheduleCompletedJobRemoval(id: UUID) {
-        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.hasPendingNotionExport }) else { return }
+        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.isHeldAfterCompletion }) else { return }
         let token = UUID()
         completedJobRemovalTokens[id] = token
         expiredCompletedJobIDs.remove(id)
@@ -949,7 +960,7 @@ class PipelineQueue {
         guard jobs[index].hasSavedProtocol else {
             if jobs[index].transcriptPath != nil {
                 // Matched by /v1 clients and persisted jobs; keep the text stable.
-                let warning = "Raw transcript retained because no protocol was saved"
+                let warning = Self.rawTranscriptRetainedWithoutNotesWarning
                 if !jobs[index].warnings.contains(warning) {
                     jobs[index].warnings.append(warning)
                 }

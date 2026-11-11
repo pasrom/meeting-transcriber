@@ -175,6 +175,19 @@ struct PipelineJob: Identifiable, Codable {
         notionExportStatus == .inProgress || notionExportStatus == .failed
     }
 
+    /// A finished meeting whose notes failed, with a transcript recorded to
+    /// make them from. State only, never the file system, so a view body can
+    /// ask it; the retry checks the transcript itself.
+    var hasRetryableMeetingNotes: Bool {
+        state == .done && notesFailure != nil && transcriptPath != nil
+    }
+
+    /// A finished job that stays listed, and in the snapshot, until the user
+    /// acts on it: an export to retry or discard, or notes to retry or dismiss.
+    var isHeldAfterCompletion: Bool {
+        hasPendingNotionExport || hasRetryableMeetingNotes
+    }
+
     var artifactStartTime: Date {
         meetingStartTime ?? enqueuedAt
     }
@@ -204,6 +217,15 @@ struct PipelineJob: Identifiable, Codable {
     /// when they were generated, were not asked for, or for snapshots written
     /// before this field existed.
     var notesFailure: MeetingNotesFailure?
+    // A job whose meeting notes are made again from its transcript, and only
+    // those: `runPipeline` sends it to `generateNotesOnly`. On the job rather
+    // than in the queue's memory, so a retry still waiting at a quit does not
+    // become a full run after the relaunch. Optional like `autoSkipNaming`.
+    // swiftlint:disable:next discouraged_optional_boolean
+    var generatesNotesOnly: Bool?
+    /// The speaker names the failed notes were to be tagged with, for the
+    /// retry's Notion export. Nil when the notes did not fail.
+    var notesSpeakerNames: [String]? // swiftlint:disable:this discouraged_optional_collection
     /// The Notion page this job created, kept so a retry updates that page
     /// instead of creating a duplicate. Optional so snapshots written before
     /// this field existed still decode.
