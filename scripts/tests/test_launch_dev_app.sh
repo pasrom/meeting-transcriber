@@ -39,7 +39,7 @@ READY=0
 rpc_ready() { return "$READY"; }
 # What the app would report for its effective settings.
 SETTINGS='{"detection": {"autoWatch": true}, "recording": {"recordOnly": false, "liveTranscriptionEnabled": true},
-           "transcription": {"engine": "parakeet"}}'
+           "transcription": {"engine": "parakeet", "unloadModelsWhenIdle": false}}'
 # shellcheck disable=SC2034 # read by launch_dev_app's readback
 state_read() { STATE_BODY="{\"settings\": $SETTINGS}"; return 0; }
 # shellcheck disable=SC2034 # read by launch_dev_app
@@ -65,6 +65,10 @@ st="$LAUNCH_STATUS"
 [ "$st" = 0 ] && grep -qx -- '-recordOnly' "$TMP/open.args" && grep -qx NO "$TMP/open.args" \
     && ! grep -qx -- '--env' "$TMP/open.args" \
     && ok false_is_NO_and_no_env_is_fine || bad false_is_NO_and_no_env_is_fine "status $st"
+
+launch_status /x/App.app -- unloadModelsWhenIdle=false
+[ "$LAUNCH_STATUS" = 0 ] && grep -qx -- '-unloadModelsWhenIdle' "$TMP/open.args" && grep -qx NO "$TMP/open.args" \
+    && ok idle_unload_can_be_disabled || bad idle_unload_can_be_disabled "status $LAUNCH_STATUS"
 
 # The app resolved something else than what was passed: the argument did not
 # arrive, and the lane must not run on the stored value.

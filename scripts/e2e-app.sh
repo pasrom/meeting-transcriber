@@ -1153,12 +1153,14 @@ _UG_SANDBOX_PROFILE='(version 1)(allow default)(deny network-outbound (remote ip
 # is needed behind the closed network, protocol generation is off so no
 # transcript leaves the machine, and auto-watch is off so nothing asks for the
 # microphone: a binary started directly, as here, is not the bundle the
-# runner's grants were made for.
+# runner's grants were made for. Idle unloading is off so the launch preload,
+# which `_ug_await_model` waits for, still loads the model.
 _UG_APP_ARGS=(
     -transcriptionEngine whisperKit -whisperKitModel "$_UG_VARIANT"
     -whisperKitCustomModelEnabled NO -whisperLanguage de
     -diarize NO -vadEnabled NO -protocolProvider none -autoWatch NO
     -recordOnly NO -liveTranscriptionEnabled NO -echoCancellationEnabled NO
+    -unloadModelsWhenIdle NO
 )
 
 _ug_preflight() {
@@ -4244,11 +4246,12 @@ _ug_assert_settings() {
     snap="$(state_query .)" || _ug_fail "$(state_why $? "$label: whether the app took the lane's launch arguments")"
     jq -e --arg v "$_UG_VARIANT" '.settings.transcription.engine == "whisperKit"
         and .settings.transcription.whisperKitModel == $v
+        and .settings.transcription.unloadModelsWhenIdle == false
         and .settings.diarization.diarize == false and .settings.diarization.vadEnabled == false
         and .settings.protocolGeneration.provider == "none" and .settings.detection.autoWatch == false
         and .watchState == null' <<<"$snap" >/dev/null \
         || _ug_fail "$label: the app did not take the lane's launch arguments: $(jq -c '{t: .settings.transcription, d: .settings.diarization.diarize, v: .settings.diarization.vadEnabled, p: .settings.protocolGeneration.provider, w: .settings.detection.autoWatch, watchState}' <<<"$snap")"
-    log "$label: launch arguments in effect (WhisperKit $_UG_VARIANT, no diarization, no VAD, no protocol, not watching)"
+    log "$label: launch arguments in effect (WhisperKit $_UG_VARIANT, idle unloading off, no diarization, no VAD, no protocol, not watching)"
 }
 
 _ug_assert_model() {
@@ -4393,6 +4396,7 @@ _ug_relaunch_and_assert() {
     _ug_launch
     poll_until "$RPC_READY_TIMEOUT_S" 1 rpc_ready || _ug_fail "$label: RPC did not come back after the relaunch"
     _record_launched_app
+    _ug_assert_settings
     _ug_await_model "$label"
     _ug_expect_fingerprint "$label" "$_UG_VARIANT in the app's folder (the second launch must not move or rewrite it)" \
         "$new_repo/$_UG_VARIANT" "$_UG_LANE_DIR/variant.before-relaunch"

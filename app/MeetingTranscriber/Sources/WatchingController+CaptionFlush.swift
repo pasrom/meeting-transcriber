@@ -12,7 +12,18 @@ extension WatchingController {
         if let captionFlushOverride {
             captionFlushOverride()
         } else {
-            Task { @MainActor [weak self] in await self?.liveTranscription.flush() }
+            flushLiveTranscriptionAfterRecording()
+        }
+    }
+
+    /// ASR retention must cover the buffered caption tail after recording stops.
+    /// A count also covers overlapping stop/quick-restart flush tasks.
+    func flushLiveTranscriptionAfterRecording() {
+        captionFlushesInFlight += 1
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.captionFlushesInFlight -= 1 }
+            await self.liveTranscription.flush()
         }
     }
 }

@@ -10,9 +10,9 @@ import Observation
 /// and a self-rearming reactive observer for runtime changes).
 ///
 /// Extracted from `AppState` as the final concern-specific controller in the
-/// god-class split. Unlike the other controllers it is fully self-contained — it
-/// needs only `settings`, so it does its up-front sync + arms its observer in its
-/// own `init` (no post-init `activate` wiring). `AppState` exposes it as
+/// god-class split. It syncs settings and arms its observer in `init`;
+/// `AppState` then supplies queue and recording/flush probes for idle retention.
+/// `AppState` exposes it as
 /// `engines` and the pipeline / live-transcription coordinators read
 /// `engines.activeTranscriptionEngine`; the watch-start path calls
 /// `engines.syncEngineSettings()` for its belt-and-suspenders up-front sync.
@@ -31,6 +31,42 @@ final class EngineController {
     let legacyWhisperModels: LegacyWhisperModelsState?
 
     private let settings: AppSettings
+    private var queueProvider: () -> PipelineQueue? = { nil }
+    private var isRecording: () -> Bool = { false }
+    private var captionsUseEngine: () -> Bool = { false }
+    private var previousLifetimeState: LifetimeState?
+    private var pendingIdlePreferenceChange = false
+    private var pendingInactiveRelease = false
+    private var pendingDrain = false
+    private var observationGeneration = 0
+
+    private struct LifetimeState {
+        let unloadWhenIdle: Bool
+        let engine: TranscriptionEngineSetting
+        let busy: Bool
+        let captionsUseEngine: Bool
+        let drainID: UUID?
+        // Keep the previous queue until the next observation turn: a rebuild
+        // must not hide a drain that occurred just before the replacement.
+        let queue: PipelineQueue?
+    }
+
+    private var lifetimeState: LifetimeState {
+        let queue = queueProvider()
+        return LifetimeState(
+            unloadWhenIdle: settings.unloadModelsWhenIdle,
+            engine: settings.transcriptionEngine,
+            busy: isRecording() || Self.hasWork(queue),
+            captionsUseEngine: captionsUseEngine(),
+            drainID: queue?.lastDrainID,
+            queue: queue,
+        )
+    }
+
+    private static func hasWork(_ queue: PipelineQueue?) -> Bool {
+        guard let queue else { return false }
+        return queue.isProcessing || !queue.pendingJobs.isEmpty || !queue.activeJobs.isEmpty
+    }
 
     /// Shared serial warm-up queue. The launch model preload runs through it so
     /// it doesn't compile concurrently with the live-caption models (the
@@ -89,10 +125,29 @@ final class EngineController {
         }
     }
 
+    private var inactiveTranscriptionEngineState: EngineModelState {
+        switch settings.transcriptionEngine {
+        case .whisperKit: parakeetEngine.modelState
+        case .parakeet: whisperKit.modelState
+        }
+    }
+
     /// Pre-load the active engine's model (applying its settings-derived config
     /// first) so the first transcription doesn't pay the cold-load cost. Called
-    /// from the menu-bar `.task` at launch.
-    func preloadActiveModel() async {
+    /// from the menu-bar `.task` at launch. With idle unloading on, it only
+    /// downloads a model that is not on disk yet, so the first job need not.
+    func preloadActiveModel(whenIdle: Bool = false) async {
+        guard !settings.unloadModelsWhenIdle else {
+            guard !whenIdle else { return }
+            syncEngineSettings()
+            await warmupQueue.run { [self] in
+                switch settings.transcriptionEngine {
+                case .whisperKit: await fetchTokenizer(afterDownload: whisperKit.downloadModelIfMissing())
+                case .parakeet: await parakeetEngine.downloadModelIfMissing()
+                }
+            }
+            return
+        }
         // Push settings into the active engine through the one canonical sync
         // (idempotent — it already ran at init), then load it. Routing the
         // variant/language writes through `syncEngineSettings` keeps a single
@@ -101,7 +156,27 @@ final class EngineController {
         // Serialize against the live-caption model warm-up so the two big CoreML
         // loads don't compile at once. `run` awaits the load, so the caller still
         // returns only after the model is loaded.
-        await warmupQueue.run { [self] in await activeTranscriptionEngine.loadModel() }
+        await warmupQueue.run { [self] in
+            guard !settings.unloadModelsWhenIdle else { return }
+            guard !whenIdle || !lifetimeState.busy else {
+                pendingIdlePreferenceChange = true
+                return
+            }
+            // loadModel() rebuilds unconditionally; a toggle flip may find it loaded.
+            guard activeTranscriptionEngine.modelState != .loaded else { return }
+            await activeTranscriptionEngine.loadModel()
+        }
+    }
+
+    /// WhisperKit fetches its tokenizer only during a load, so a fresh download
+    /// is loaded once while the machine is online, then released if still idle.
+    private func fetchTokenizer(afterDownload downloaded: Bool) async {
+        guard downloaded else { return }
+        if whisperKit.modelState != .loaded { await whisperKit.loadModel() }
+        let state = lifetimeState
+        if state.unloadWhenIdle, state.engine == .whisperKit, !state.busy, !state.captionsUseEngine {
+            whisperKit.releaseModel()
+        }
     }
 
     /// Push current model / language / vocabulary settings into the active
@@ -109,6 +184,7 @@ final class EngineController {
     /// differs, so unchanged settings don't churn the engine's `@Observable`
     /// watchers (`applyModelVariant` self-guards the same way).
     func syncEngineSettings() {
+        defer { updateModelLifetime() }
         switch settings.transcriptionEngine {
         case .whisperKit:
             let model = settings.whisperKitModelSelection
@@ -135,11 +211,70 @@ final class EngineController {
         }
     }
 
+    func activateModelLifetime(
+        queue: @escaping () -> PipelineQueue?,
+        isRecording: @escaping () -> Bool,
+        captionsUseEngine: @escaping () -> Bool = { false },
+    ) {
+        queueProvider = queue
+        self.isRecording = isRecording
+        self.captionsUseEngine = captionsUseEngine
+        syncEngineSettings()
+        observeEngineSettings()
+    }
+
+    private func updateModelLifetime() {
+        let current = lifetimeState
+        let previous = previousLifetimeState
+        previousLifetimeState = current
+        guard let previous else { return }
+        pendingIdlePreferenceChange = pendingIdlePreferenceChange || previous.unloadWhenIdle != current.unloadWhenIdle
+        pendingInactiveRelease = pendingInactiveRelease || previous.engine != current.engine
+        let priorQueueDrained = previous.queue?.lastDrainID != nil && previous.queue?.lastDrainID != previous.drainID
+        pendingDrain = pendingDrain || priorQueueDrained || (current.drainID != nil && previous.drainID != current.drainID)
+        guard !current.busy else { return }
+
+        // A queue and a recording's captions can still use the previous engine.
+        // Retire it only after their work (including the caption tail) finishes.
+        // Off keeps it: the queue runs on its engine until it is rebuilt.
+        if current.unloadWhenIdle,
+           pendingInactiveRelease || previous.busy || pendingDrain || inactiveTranscriptionEngineState != .unloaded {
+            switch current.engine {
+            case .whisperKit: parakeetEngine.releaseModel()
+            case .parakeet: whisperKit.releaseModel()
+            }
+            pendingInactiveRelease = false
+        }
+        if current.unloadWhenIdle,
+           previous.busy || pendingDrain || pendingIdlePreferenceChange || (previous.captionsUseEngine && !current.captionsUseEngine) {
+            if !current.captionsUseEngine {
+                switch current.engine {
+                case .whisperKit: whisperKit.releaseModel()
+                case .parakeet: parakeetEngine.releaseModel()
+                }
+            }
+            queueProvider()?.vad = nil
+            if priorQueueDrained { previous.queue?.vad = nil }
+        } else if !current.unloadWhenIdle, pendingIdlePreferenceChange {
+            Task { [weak self] in await self?.preloadActiveModel(whenIdle: true) }
+        }
+        pendingIdlePreferenceChange = false
+        pendingDrain = false
+    }
+
     /// `withObservationTracking` is one-shot — re-arm after each fire so the
     /// controller reacts to every settings change, not just the first one.
     /// Same self-re-arming pattern the other concern controllers use.
     private func observeEngineSettings() {
+        observationGeneration += 1
+        let generation = observationGeneration
         withObservationTracking {
+            _ = lifetimeState
+            // A pre-switch caption warm-up may still be queued. If it loads the
+            // retired engine later, release it too; never observe the active
+            // model here, so an explicit Load Model remains effective.
+            // A stale warm-up on the active engine keeps its load until the next drain.
+            _ = inactiveTranscriptionEngineState
             _ = settings.transcriptionEngine
             _ = settings.whisperKitModel
             _ = settings.whisperKitCustomModelEnabled
@@ -154,7 +289,7 @@ final class EngineController {
             _ = settings.parakeetLanguage
         } onChange: { [weak self] in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, generation == self.observationGeneration else { return }
                 self.syncEngineSettings()
                 self.observeEngineSettings()
             }

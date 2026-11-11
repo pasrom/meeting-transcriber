@@ -22,9 +22,9 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
     /// (mock engine `loadModel`, fake matcher `prepare`), so no model loads.
     /// The EOU factory returns a mock manager that never loads real models, so
     /// the English-streaming branch is exercisable without CoreML downloads.
-    private func mockControllerFactory() -> LiveTranscriptionCoordinator.ControllerFactory {
+    private func mockControllerFactory(eouLoadError: (any Error)? = nil) -> LiveTranscriptionCoordinator.ControllerFactory {
         { engine, captions, engineLanguage, verboseDiagnostics in
-            let eouFactory: LiveTranscriptionController.EouSessionFactory = { MockEouManager() }
+            let eouFactory: LiveTranscriptionController.EouSessionFactory = { MockEouManager(loadError: eouLoadError) }
             let verbose: () -> Bool = { verboseDiagnostics() }
             return LiveTranscriptionController(
                 engine: engine,
@@ -319,6 +319,143 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         }
         XCTAssertEqual(buildCount(), 2, "an idle settings change rebuilds the controller immediately")
         _ = coordinator // retain through the observer fire above
+    }
+
+    // MARK: - Whether captions use the engine
+
+    func testReTranscribeCaptionsUseTheEngineBeforePrepareRuns() {
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: LiveCaptionsState(),
+            liveEnabled: { true },
+            engineSupportsLive: { true },
+            verboseDiagnostics: { false },
+            makeController: mockControllerFactory(),
+        )
+        coordinator.beginPrewarm { MockStreamingEngine() }
+
+        XCTAssertTrue(coordinator.captionsUseEngine)
+    }
+
+    func testStreamingCaptionsDoNotUseTheEngine() async {
+        let captions = LiveCaptionsState()
+        let queue = ModelWarmupQueue()
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: captions,
+            liveEnabled: { true },
+            engineSupportsLive: { true },
+            engineLanguage: { "en" },
+            verboseDiagnostics: { false },
+            makeController: mockControllerFactory(),
+            warmupQueue: queue,
+        )
+        coordinator.beginPrewarm { MockStreamingEngine() }
+        await waitFor(captions.activeBackend != nil, timeout: .seconds(2))
+        await queue.run {} // after prepare() and its flag update
+
+        XCTAssertEqual(captions.activeBackend, "Parakeet EOU · EN", "test premise: the EOU session was built")
+        XCTAssertFalse(coordinator.captionsUseEngine)
+    }
+
+    /// The fallback after a failed streaming load must hold the engine before its load runs.
+    func testTheStreamingFallbackUsesTheEngineWhileItsLoadIsInFlight() async {
+        let queue = ModelWarmupQueue()
+        let engine = GatedStreamingEngine()
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: LiveCaptionsState(),
+            liveEnabled: { true },
+            engineSupportsLive: { true },
+            engineLanguage: { "en" },
+            verboseDiagnostics: { false },
+            makeController: mockControllerFactory(eouLoadError: URLError(.notConnectedToInternet)),
+            warmupQueue: queue,
+        )
+        coordinator.beginPrewarm { engine }
+        XCTAssertFalse(coordinator.captionsUseEngine, "test premise: the streaming strategy starts off the engine")
+        await waitFor(engine.gate.hasWaiter)
+
+        XCTAssertTrue(coordinator.captionsUseEngine)
+        engine.gate.open()
+        await queue.run {}
+        XCTAssertTrue(coordinator.captionsUseEngine)
+    }
+
+    func testDisablingCaptionsClearsTheEngineFlag() async {
+        let suiteName = "LiveTxCoordTests-\(getpid())-\(UUID().uuidString)"
+        defer { DefaultsSuite.remove(suiteName) }
+        let (coordinator, settings, _) = makeEligibleCoordinator(suiteName) { false }
+        XCTAssertTrue(coordinator.captionsUseEngine, "test premise")
+
+        settings.liveTranscriptionEnabled = false
+        await waitFor(!coordinator.captionsUseEngine)
+
+        XCTAssertFalse(coordinator.captionsUseEngine)
+    }
+
+    func testTheDeferredRebuildAtFlushClearsTheEngineFlag() async {
+        let suiteName = "LiveTxCoordTests-\(getpid())-\(UUID().uuidString)"
+        defer { DefaultsSuite.remove(suiteName) }
+        var recording = true
+        let (coordinator, settings, _) = makeEligibleCoordinator(suiteName) { recording }
+        settings.liveTranscriptionEnabled = false
+        for _ in 0 ..< 50 {
+            await Task.yield()
+        }
+        XCTAssertTrue(coordinator.captionsUseEngine, "test premise: the change waits for the recording")
+
+        recording = false
+        await coordinator.flush()
+
+        XCTAssertFalse(coordinator.captionsUseEngine)
+    }
+
+    func testAPrepareFinishingAfterItsControllerWasDroppedLeavesTheFlagAlone() async throws {
+        let suiteName = "LiveTxCoordTests-\(getpid())-\(UUID().uuidString)"
+        defer { DefaultsSuite.remove(suiteName) }
+        let settings = try AppSettings(defaults: XCTUnwrap(DefaultsSuite.open(suiteName)))
+        settings.transcriptionEngine = .parakeet
+        settings.parakeetLanguage = ""
+        settings.liveTranscriptionEnabled = true
+        let queue = ModelWarmupQueue()
+        let engine = GatedStreamingEngine()
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: LiveCaptionsState(),
+            liveEnabled: { settings.liveTranscriptionEnabled },
+            engineSupportsLive: { settings.transcriptionEngine.supportsLiveTranscription },
+            engineLanguage: { settings.activeEngineLanguageOrNil },
+            verboseDiagnostics: { false },
+            makeController: mockControllerFactory(),
+            warmupQueue: queue,
+        )
+        coordinator.beginPrewarm { engine }
+        await waitFor(engine.gate.hasWaiter)
+        settings.liveTranscriptionEnabled = false
+        await waitFor(!coordinator.captionsUseEngine)
+
+        engine.gate.open()
+        await queue.run {} // after the old prepare() and its flag update
+
+        XCTAssertFalse(coordinator.captionsUseEngine)
+    }
+}
+
+/// A streaming engine whose model load waits for the test.
+@MainActor
+private final class GatedStreamingEngine: StreamingTranscribingEngine {
+    let gate = MainActorGate()
+    var modelState: EngineModelState = .unloaded
+    var downloadProgress: Double = 0
+    var transcriptionProgress: Double = 0
+
+    func loadModel() async {
+        await gate.wait()
+    }
+
+    func transcribeSegments(audioPath _: URL) -> [TimestampedSegment] {
+        []
+    }
+
+    func transcribeSamples(_: [Float]) -> String {
+        ""
     }
 }
 

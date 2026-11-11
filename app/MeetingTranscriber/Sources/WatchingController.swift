@@ -194,6 +194,10 @@ final class WatchingController {
         watchLoop?.state == .recording
     }
 
+    /// Caption flushes still running; ASR stays loaded while any is. Written only
+    /// by `flushLiveTranscriptionAfterRecording()` (WatchingController+CaptionFlush).
+    var captionFlushesInFlight = 0
+
     /// Whether a manual (app-picker) recording owns the loop, or is on its way
     /// to owning it. Exposed because `toggleWatching` silently refuses in that
     /// state, and a silent refusal is invisible to a remote caller — the

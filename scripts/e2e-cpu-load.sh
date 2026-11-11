@@ -321,17 +321,17 @@ SIM_PID=""
 quit_running_app
 
 # === session B: live-captions profile (heaviest realistic steady state) =====
-# Fresh session so the Parakeet preload happens at launch like it would for
-# a user with the feature enabled — and so session A's idle window stayed
+# Fresh session with idle unloading disabled so Parakeet preloads for this
+# measurement — and so session A's idle window stayed
 # free of preload memory/CPU.
 
-launch_app_and_wait liveTranscriptionEnabled=true recordOnly=false transcriptionEngine=parakeet autoWatch=true
+launch_app_and_wait liveTranscriptionEnabled=true recordOnly=false transcriptionEngine=parakeet autoWatch=true unloadModelsWhenIdle=false
 
 log "Session B settle: waiting up to ${SETTLE_TIMEOUT_S}s for pipeline drain + Parakeet preload"
 poll_state "$SETTLE_TIMEOUT_S" 5 state_is "$_PIPELINE_DRAINED" \
     || fail "$(state_why $? "pipeline still busy after ${SETTLE_TIMEOUT_S}s")"
 # Pipeline state tracks JOBS, not model loads — the Parakeet preload that
-# liveTranscriptionEnabled triggers at launch is only visible here.
+# unloadModelsWhenIdle=false triggers at launch is only visible here.
 poll_state "$SETTLE_TIMEOUT_S" 5 state_is '.engines.parakeet.modelState == "loaded"' \
     || fail "$(state_why $? "Parakeet preload didn't finish within ${SETTLE_TIMEOUT_S}s")"
 # Extra settle for what no RPC field can see: CoreML compile tail, page-ins.

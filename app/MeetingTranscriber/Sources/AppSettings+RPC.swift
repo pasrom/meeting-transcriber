@@ -62,6 +62,7 @@
                 parakeetLanguage: parakeetLanguage,
                 customVocabularyEnabled: customVocabularyEnabled,
                 customVocabularyPath: customVocabularyPath,
+                unloadModelsWhenIdle: unloadModelsWhenIdle,
             )
         }
 

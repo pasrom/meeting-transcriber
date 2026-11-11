@@ -58,6 +58,7 @@ enum A11yID {
 
     static let recordOnlyBanner = "recordOnlyBanner"
     static let transcriptionSection = "transcriptionSection"
+    static let unloadModelsWhenIdleToggle = "unloadModelsWhenIdleToggle"
     static let vocabularySection = "vocabularySection"
     /// Opens a confirmation dialog, so it stays off the `/ui/press` allowlist.
     static let legacyWhisperModelsTrashButton = "legacyWhisperModelsTrashButton"

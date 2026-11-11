@@ -84,6 +84,7 @@
             settings.verboseDiagnostics = true
             settings.includePreReleases = true
             settings.customVocabularyEnabled = true
+            settings.unloadModelsWhenIdle = false
 
             let s = settings.rpcSettingsSnapshot()
 
@@ -103,6 +104,7 @@
             XCTAssertTrue(s.diagnostics.verboseDiagnostics)
             XCTAssertTrue(s.updates.includePreReleases)
             XCTAssertTrue(s.transcription.customVocabularyEnabled)
+            XCTAssertFalse(s.transcription.unloadModelsWhenIdle)
         }
 
         // MARK: - Enum raw-value mapping is pinned
@@ -259,6 +261,7 @@
                 "transcription.engine", "transcription.whisperKitModel",
                 "transcription.whisperLanguage", "transcription.parakeetLanguage",
                 "transcription.customVocabularyEnabled", "transcription.customVocabularyPath",
+                "transcription.unloadModelsWhenIdle",
                 "diarization.diarize", "diarization.mode", "diarization.numSpeakers",
                 "diarization.vadEnabled", "diarization.vadThreshold",
                 "diarization.clusterThreshold", "diarization.warmStartFa",

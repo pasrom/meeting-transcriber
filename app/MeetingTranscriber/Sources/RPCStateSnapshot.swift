@@ -381,10 +381,12 @@
                 let parakeetLanguage: String
                 let customVocabularyEnabled: Bool
                 let customVocabularyPath: String
+                let unloadModelsWhenIdle: Bool
 
                 static let empty = Self(
                     engine: "", whisperKitModel: "", whisperLanguage: "",
                     parakeetLanguage: "", customVocabularyEnabled: false, customVocabularyPath: "",
+                    unloadModelsWhenIdle: true,
                 )
             }
 
