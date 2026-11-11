@@ -69,6 +69,7 @@ enum A11yID {
     }
 
     static let protocolSection = "protocolSection"
+    static let notifyOnMeetingNotesFailureToggle = "notifyOnMeetingNotesFailureToggle"
     static let includeFullTranscriptToggle = "includeFullTranscriptToggle"
     static let saveRawTranscriptToggle = "saveRawTranscriptToggle"
     static let useAITitleForFilenamesToggle = "useAITitleForFilenamesToggle"

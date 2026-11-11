@@ -808,6 +808,33 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertEqual(notifier.calls[1].body, "2 meetings are waiting for speaker names. Open Name Speakers... in the menu bar.")
     }
 
+    func testConfigureCallbacksFailedNotesFireTheFailedNotification() throws {
+        let tmpDir = try makeTempDirectory(prefix: "appstate_notes_failed")
+        let (state, notifier) = makeIsolatedState(logDir: tmpDir)
+        state.pipeline.configureCallbacks()
+        var job = makeJob(title: "Sprint Review")
+        job.protocolFailure = "Claude CLI took too long (>10 min)"
+
+        state.pipeline.queue.onJobStateChange?(job, .generatingProtocol, .done)
+
+        XCTAssertEqual(notifier.calls.map(\.title), ["Meeting Notes Failed"])
+    }
+
+    /// Off, the value other than the default: with the default this would pass
+    /// even if the callback ignored the setting.
+    func testConfigureCallbacksFailedNotesWithTheSettingOffFireTranscriptSaved() throws {
+        let tmpDir = try makeTempDirectory(prefix: "appstate_notes_failed_off")
+        let (state, notifier) = makeIsolatedState(logDir: tmpDir)
+        state.settings.notifyOnMeetingNotesFailure = false
+        state.pipeline.configureCallbacks()
+        var job = makeJob(title: "Sprint Review")
+        job.protocolFailure = "Claude CLI took too long (>10 min)"
+
+        state.pipeline.queue.onJobStateChange?(job, .generatingProtocol, .done)
+
+        XCTAssertEqual(notifier.calls.map(\.title), ["Transcript Saved"])
+    }
+
     func testConfigureCallbacksNotionOnlyProtocolFiresProtocolNotification() throws {
         let tmpDir = try makeTempDirectory(prefix: "appstate_notion_callbacks")
         let (state, notifier) = makeIsolatedState(logDir: tmpDir)
