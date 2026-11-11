@@ -15,8 +15,8 @@
 # Bumping is a deliberate act: land the new version, its checksum, and whatever
 # the new release wants changed in the same commit.
 
-SWIFTFORMAT_VERSION="0.64.5"
-SWIFTFORMAT_SHA256="ec017c91fdd46233e5a22dc43ff9564a3cc4b37023d3b4681b6c7d7b781de113"
+SWIFTFORMAT_VERSION="0.64.6"
+SWIFTFORMAT_SHA256="70e6b2057647fb1c54d620ebbb6649274de56534c57f91f67461a129ebaaba3e"
 SWIFTFORMAT_REPO="nicklockwood/SwiftFormat"
 SWIFTFORMAT_ASSET="swiftformat.zip"
 
