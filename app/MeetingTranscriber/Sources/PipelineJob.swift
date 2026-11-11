@@ -217,8 +217,9 @@ struct PipelineJob: Identifiable, Codable {
     /// when they were generated, were not asked for, or for snapshots written
     /// before this field existed.
     var notesFailure: MeetingNotesFailure?
-    // A job whose meeting notes are made again from its transcript, and only
-    // those: `runPipeline` sends it to `generateNotesOnly`. On the job rather
+    // A job whose meeting notes are made from its transcript, and only those
+    // (a notes retry, or Generate Meeting Notes from Transcript): `runPipeline`
+    // sends it to `generateNotesOnly`. On the job rather
     // than in the queue's memory, so a retry still waiting at a quit does not
     // become a full run after the relaunch. Optional like `autoSkipNaming`.
     // swiftlint:disable:next discouraged_optional_boolean
@@ -226,6 +227,11 @@ struct PipelineJob: Identifiable, Codable {
     /// The speaker names the failed notes were to be tagged with, for the
     /// retry's Notion export. Nil when the notes did not fail.
     var notesSpeakerNames: [String]? // swiftlint:disable:this discouraged_optional_collection
+    /// The name notes from a picked transcript are saved under: the file's own.
+    /// Kept apart from `namingSlug`, which names the speaker-naming sidecars
+    /// and is what removing a job deletes by, so a picked transcript that
+    /// shares a waiting meeting's name cannot take that meeting's data along.
+    var notesBasename: String?
     /// The Notion page this job created, kept so a retry updates that page
     /// instead of creating a duplicate. Optional so snapshots written before
     /// this field existed still decode.
