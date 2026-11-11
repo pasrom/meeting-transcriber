@@ -71,7 +71,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     private(set) var modelState: EngineModelState = .unloaded
     /// Why the last load attempt failed, worded for the user
     /// (`WhisperKitLoadFailureReason`), or nil while nothing has failed. Set only
-    /// where a load gives up with no model loaded, cleared when the next attempt
+    /// where a load or the launch download gives up with no model loaded, cleared when the next attempt
     /// starts, when a load succeeds, and when the requested model changes, so it
     /// never describes a model other than the one the state is about and never
     /// sits next to a working one.
@@ -91,6 +91,9 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Test-only loader override used to count content reads on cache hits.
     private var vocabularyTermsLoaderOverride: ((String, WhisperVocabularyPrompt.FileRevision) -> WhisperVocabularyPrompt.VocabularyTermsLoadResult)?
     let modelLoad = SingleFlight<LoadAttempt>()
+    private(set) var modelGeneration = 0
+    /// True while `downloadModelIfMissing` fetches files; there is no model to release then.
+    private var downloadOnlyInFlight = false
     /// The model-resolution boundary, per origin. Tests replace it wholesale; nothing
     /// needs to tell an override from the default, so this is a value rather than an
     /// optional beside a computed accessor.
@@ -169,7 +172,15 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// asked for from one that was superseded while it ran. `SingleFlight` hands the
     /// same outcome to callers that joined this run rather than starting their own,
     /// which is what they would otherwise have no way to learn (issue #738).
-    func performLoad() async -> LoadAttempt {
+    func performLoad(generation: Int) async -> LoadAttempt {
+        // CoreML loads cannot be cancelled. A release invalidates their result,
+        // including loads whose task had not started when the release arrived.
+        defer {
+            if generation != modelGeneration {
+                unloadModel()
+                loadFailureReason = nil
+            }
+        }
         // Snapshot the requested variant once. `modelVariant` is `@MainActor`
         // mutable (the reactive settings sync calls `applyModelVariant`), so
         // reading it separately for the download and the init could tear
@@ -182,19 +193,25 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         loadFailureReason = nil
 
         if await loadFromLocalSnapshot(variant: variant, origin: origin, source: source) {
-            return LoadAttempt(variant: variant, origin: origin, builtPipe: true)
+            return LoadAttempt(variant: variant, origin: origin, builtPipe: true, generation: generation)
+        }
+
+        guard generation == modelGeneration else {
+            return LoadAttempt(variant: variant, origin: origin, builtPipe: false, generation: generation)
         }
 
         modelState = .downloading
         downloadProgress = 0
         do {
             let modelFolder = try await source.download(variant) { progress in
-                Task { @MainActor in
-                    self.downloadProgress = progress.fractionCompleted
-                }
+                Task { @MainActor in self.reportDownloadProgress(progress.fractionCompleted, generation: generation) }
+            }
+            // Released mid-download: skip the CoreML init, the `defer` resets the state.
+            guard generation == modelGeneration else {
+                return LoadAttempt(variant: variant, origin: origin, builtPipe: false, generation: generation)
             }
             try await adoptPipe(variant: variant, origin: origin, from: modelFolder, source: source)
-            return LoadAttempt(variant: variant, origin: origin, builtPipe: true)
+            return LoadAttempt(variant: variant, origin: origin, builtPipe: true, generation: generation)
         } catch {
             // Same reason as the local branch above: since the download path now
             // also ends in `adoptPipe`, this can carry WhisperKit's path-bearing
@@ -226,7 +243,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             }
         }
 
-        return LoadAttempt(variant: variant, origin: origin, builtPipe: false)
+        return LoadAttempt(variant: variant, origin: origin, builtPipe: false, generation: generation)
     }
 
     /// Apply a model change coming from settings. Updates `modelVariant` and
@@ -256,6 +273,14 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         pipe = nil
         modelState = .unloaded
         downloadProgress = 0
+    }
+
+    func releaseModel() {
+        modelGeneration += 1
+        // A launch download holds no model; its status, progress and reason stay.
+        if !downloadOnlyInFlight { unloadModel() }
+        vocabularyPromptCache.invalidate()
+        vocabularyPromptTokenCount = 0
     }
 
     /// Ensure model is loaded, loading it if necessary. A cancelled caller stops
@@ -491,35 +516,55 @@ enum TranscriptionError: LocalizedError {
     }
 }
 
-/// What one load attempt did, as much as a caller needs to decide whether to run
-/// another one.
-///
-/// `builtPipe` is the part the variant name cannot carry: an attempt that built a
-/// pipe and had it dropped again by the mid-load reconcile is superseded, and it
-/// has to be told apart from one that simply failed. Since the variant can change
-/// away and back while a caller is suspended, comparing names alone reads the
-/// first case as the second and leaves nothing loaded (issue #738).
-struct LoadAttempt: Sendable {
-    let variant: String
-    /// Compared along with `variant`, since two origins can carry a variant of the
-    /// same name.
-    let origin: WhisperKitModelOrigin
-    /// True when `adoptPipe` ran through, whether or not the reconcile then
-    /// discarded what it installed.
-    let builtPipe: Bool
+// MARK: - Download without load
 
-    /// Whether the caller has to run another attempt after observing this one.
-    ///
-    /// A pure decision so it can be tested directly. The case that motivates the
-    /// `builtPipe` flag needs the variant to change away and back inside the window
-    /// between a flight ending and its caller resuming, which no test can place
-    /// reliably, so the timing is not what is pinned here: the rule is.
-    func needsAnotherAttempt(
-        pipeInstalled: Bool,
-        requestedVariant: String,
-        requestedOrigin: WhisperKitModelOrigin,
-    ) -> Bool {
-        guard !pipeInstalled else { return false }
-        return builtPipe || variant != requestedVariant || origin != requestedOrigin
+extension WhisperKitEngine {
+    /// A `modelLoad` flight, so a job's load joins it instead of downloading twice.
+    /// True when this call downloaded the files; a release does not stop or hide it.
+    @discardableResult
+    func downloadModelIfMissing() async -> Bool {
+        await modelLoad.run { [self] in await performDownload() }.downloadedOnly
+    }
+
+    private func performDownload() async -> LoadAttempt {
+        let variant = modelVariant
+        let origin = modelOrigin
+        let source = modelSource(origin)
+        // Matches no caller's generation, so a load that joined runs its own pass.
+        var attempt = LoadAttempt(variant: variant, origin: origin, builtPipe: false, generation: -1)
+        guard pipe == nil, case .hub = origin, await source.prepareAndLocate(variant) == nil else { return attempt }
+
+        loadFailureReason = nil
+        modelState = .downloading
+        downloadProgress = 0
+        downloadOnlyInFlight = true
+        defer { downloadOnlyInFlight = false }
+        do {
+            _ = try await source.download(variant) { progress in
+                Task { @MainActor in self.reportDownloadProgress(progress.fractionCompleted, generation: nil) }
+            }
+            attempt.downloadedOnly = true
+        } catch {
+            // Reported to joiners as their own failure, so it is not repeated.
+            attempt.generation = modelGeneration
+            logger.error(
+                "WhisperKit model download failed (\(String(describing: type(of: error)), privacy: .public): \(error.localizedDescription, privacy: .private))",
+            )
+            // Shown in Settings like a failed launch preload's reason.
+            if variant == modelVariant, origin == modelOrigin {
+                loadFailureReason = WhisperKitLoadFailureReason.describe(error, variant: variant, origin: origin)
+            }
+        }
+        if pipe == nil {
+            modelState = .unloaded
+            downloadProgress = 0
+        }
+        return attempt
+    }
+
+    /// `generation` is nil for the launch download, which a release leaves running.
+    private func reportDownloadProgress(_ fraction: Double, generation: Int?) {
+        guard generation.map({ $0 == modelGeneration }) ?? downloadOnlyInFlight else { return }
+        downloadProgress = fraction
     }
 }

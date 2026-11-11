@@ -18,12 +18,16 @@ import Observation
 /// never holds an AppState back-reference. `liveEnabled` / `engineSupportsLive` /
 /// `engineLanguage` / `verboseDiagnostics` are settings-backed closures.
 ///
-/// Not `@Observable` — it exposes no observable state (it drives the controller
-/// + captions imperatively). It still uses `withObservationTracking` internally
-/// to watch the settings keys, which works regardless of this type's annotation.
+/// `@Observable` for `captionsUseEngine`, which the engine lifetime observer
+/// reads. It also uses `withObservationTracking` internally to watch the
+/// settings keys.
 @MainActor
+@Observable
 final class LiveTranscriptionCoordinator {
     private var controller: LiveTranscriptionController?
+
+    /// Whether the prepared controller's captions run on the active engine.
+    private(set) var captionsUseEngine = false
 
     /// Source of the currently-active engine. Set by `beginPrewarm`; nil before
     /// then (so `ensureController` safely no-ops if called early). Captures the
@@ -180,6 +184,7 @@ final class LiveTranscriptionCoordinator {
         if needsRewarmWhenIdle, !isRecording(), !attachInFlight {
             needsRewarmWhenIdle = false
             controller = nil
+            captionsUseEngine = false
             prewarmIfEligible()
         }
     }
@@ -222,6 +227,7 @@ final class LiveTranscriptionCoordinator {
             return
         }
         controller = nil
+        captionsUseEngine = false
         prewarmAndObserve()
     }
 
@@ -255,10 +261,21 @@ final class LiveTranscriptionCoordinator {
         guard strategy != .reTranscribe || streamingEngine != nil else { return nil }
         let controller = makeController(streamingEngine, captions, language, verboseDiagnostics)
         self.controller = controller
+        // Before prepare(), so a release cannot land while its engine load runs.
+        captionsUseEngine = strategy == .reTranscribe
+        // The fallback after a failed streaming load reaches the engine load later.
+        controller.willLoadEngine = { [weak self, weak controller] in
+            if let self, self.controller === controller { self.captionsUseEngine = true }
+        }
         // Route `prepare()` through the shared warm-up queue (see `warmupQueue`).
-        // Bind it locally so the fire-and-forget Task doesn't capture `self`.
+        // Bind it locally; the fire-and-forget Task holds `self` only weakly.
         let queue = warmupQueue
-        Task { @MainActor in await queue.run { await controller.prepare() } }
+        Task { @MainActor [weak self] in
+            await queue.run {
+                await controller.prepare()
+                if let self, self.controller === controller { self.captionsUseEngine = controller.usesTranscriptionEngine }
+            }
+        }
         return controller
     }
 }

@@ -932,6 +932,7 @@ _e2e_launch_setting() {
         recordOnly) echo "bool .settings.recording.recordOnly" ;;
         liveTranscriptionEnabled) echo "bool .settings.recording.liveTranscriptionEnabled" ;;
         transcriptionEngine) echo "string .settings.transcription.engine" ;;
+        unloadModelsWhenIdle) echo "bool .settings.transcription.unloadModelsWhenIdle" ;;
         *) return 1 ;;
     esac
 }

@@ -162,6 +162,9 @@ extension PipelineQueue {
     /// `processNext` is awaited directly while `processTask` runs.
     private func releaseProcessingFlag() {
         if pipelineRuns.isEmpty { isProcessing = false }
+        if !isProcessing, pendingJobs.isEmpty, activeJobs.isEmpty {
+            lastDrainID = UUID()
+        }
     }
 
     /// Thin orchestrator: take the next waiting job and run it through the

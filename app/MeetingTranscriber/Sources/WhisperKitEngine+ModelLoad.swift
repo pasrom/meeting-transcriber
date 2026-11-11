@@ -18,6 +18,7 @@ extension WhisperKitEngine {
     /// running is shared and runs to its end in `SingleFlight`, but the retry
     /// is this caller's own; any other caller still waiting runs its own.
     func loadModel(untilCancelled: Bool) async throws {
+        let generation = modelGeneration
         // Two decisions recorded here so they are not re-derived. The general form
         // would be a named `loadedVariant`, with readiness defined as
         // `loadedVariant == modelVariant`, which states the invariant directly and
@@ -47,10 +48,15 @@ extension WhisperKitEngine {
             passes += 1
 
             let attempt = if untilCancelled {
-                try await modelLoad.runUnlessCancelled { [self] in await performLoad() }
+                try await modelLoad.runUnlessCancelled { [self] in await performLoad(generation: generation) }
             } else {
-                await modelLoad.run { [self] in await performLoad() }
+                await modelLoad.run { [self] in await performLoad(generation: generation) }
             }
+
+            // Idle release supersedes this caller, unlike a variant change,
+            // which still needs the retry below. A later load may retry normally.
+            guard generation == modelGeneration else { return }
+            if attempt.generation != generation { continue }
 
             // Nothing is loaded. Run again in two cases. Either the attempt built a
             // pipe that is now gone, which means the reconcile dropped it because the
@@ -82,5 +88,41 @@ extension WhisperKitEngine {
                 return
             }
         }
+    }
+}
+
+/// What one load attempt did, as much as a caller needs to decide whether to run
+/// another one.
+///
+/// `builtPipe` is the part the variant name cannot carry: an attempt that built a
+/// pipe and had it dropped again by the mid-load reconcile is superseded, and it
+/// has to be told apart from one that simply failed. Since the variant can change
+/// away and back while a caller is suspended, comparing names alone reads the
+/// first case as the second and leaves nothing loaded (issue #738).
+struct LoadAttempt: Sendable {
+    let variant: String
+    /// Compared along with `variant`, since two origins can carry a variant of the
+    /// same name.
+    let origin: WhisperKitModelOrigin
+    /// True when `adoptPipe` ran through, whether or not the reconcile then
+    /// discarded what it installed.
+    let builtPipe: Bool
+    var generation = 0
+    /// True for a launch download that fetched the files and loaded nothing.
+    var downloadedOnly = false
+
+    /// Whether the caller has to run another attempt after observing this one.
+    ///
+    /// A pure decision so it can be tested directly. The case that motivates the
+    /// `builtPipe` flag needs the variant to change away and back inside the window
+    /// between a flight ending and its caller resuming, which no test can place
+    /// reliably, so the timing is not what is pinned here: the rule is.
+    func needsAnotherAttempt(
+        pipeInstalled: Bool,
+        requestedVariant: String,
+        requestedOrigin: WhisperKitModelOrigin,
+    ) -> Bool {
+        guard !pipeInstalled else { return false }
+        return builtPipe || variant != requestedVariant || origin != requestedOrigin
     }
 }

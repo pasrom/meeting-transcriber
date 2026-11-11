@@ -56,7 +56,10 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
     }
 
     private var asrManager: AsrManager?
-    private let modelLoad = SingleFlight<Void>()
+    private let modelLoad = SingleFlight<Int>()
+    private var modelGeneration = 0
+    /// True while `downloadModelIfMissing` fetches files; there is no model to release then.
+    private var downloadOnlyInFlight = false
 
     // CTC vocabulary boosting state
     private struct VocabularyBooster {
@@ -73,7 +76,8 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
         private var vocabularyPreparationOverride: (([String]) async throws -> Void)?
         private var fileTranscriptionOverride: ((URL) async throws -> ASRResult)?
         private var sampleTranscriptionOverride: (([Float]) async throws -> ASRResult)?
-        private var modelLoadOverride: (@MainActor () async -> Void)?
+        private var modelLoadOverride: (@MainActor () async -> AsrManager?)?
+        private var modelDownloadOverride: (onDisk: Bool, download: @MainActor (@escaping @MainActor (Double) -> Void) async throws -> Void)?
     #endif
 
     /// The exact vocabulary revision currently being prepared or already
@@ -91,23 +95,56 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
     }
 
     func loadModel() async {
-        await modelLoad.run { [self] in await performLoad() }
+        try? await loadModel(untilCancelled: false)
     }
 
-    private func performLoad() async {
+    func releaseModel() {
+        modelGeneration += 1
+        clearModel()
+    }
+
+    private func clearModel() {
+        asrManager = nil
+        invalidateVocabularyConfiguration()
+        // A launch download holds no model; its status and progress stay.
+        guard !downloadOnlyInFlight else { return }
+        modelState = .unloaded
+        downloadProgress = 0
+    }
+
+    private func loadModel(untilCancelled: Bool) async throws {
+        let generation = modelGeneration
+        while true {
+            let attempt = if untilCancelled {
+                try await modelLoad.runUnlessCancelled { [self] in await performLoad(generation: generation) }
+            } else {
+                await modelLoad.run { [self] in await performLoad(generation: generation) }
+            }
+            guard generation == modelGeneration, attempt != generation else { return }
+            // A new caller joined a load invalidated by an earlier release.
+            // The old caller returns; this one still needs its own model.
+        }
+    }
+
+    private func performLoad(generation: Int) async -> Int {
+        defer {
+            if generation != modelGeneration { clearModel() }
+        }
         #if DEBUG
             if let modelLoadOverride {
-                await modelLoadOverride()
-                return
+                asrManager = await modelLoadOverride()
+                if asrManager != nil {
+                    modelState = .loaded
+                    downloadProgress = 1
+                }
+                return generation
             }
         #endif
         modelState = .downloading
         downloadProgress = 0
         do {
             let models = try await AsrModels.downloadAndLoad { [weak self] progress in
-                Task { @MainActor in
-                    self?.downloadProgress = progress.fractionCompleted
-                }
+                Task { @MainActor in self?.reportDownloadProgress(progress.fractionCompleted, generation: generation) }
             }
             modelState = .loading
             downloadProgress = 1.0
@@ -120,6 +157,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
             modelState = .unloaded
             downloadProgress = 0
         }
+        return generation
     }
 
     /// Ensure model is loaded, loading it if necessary. The load is started
@@ -131,7 +169,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
             if fileTranscriptionOverride != nil, sampleTranscriptionOverride != nil { return }
         #endif
         logger.info("Parakeet: model not loaded, loading…")
-        try await modelLoad.runUnlessCancelled { [self] in await performLoad() }
+        try await loadModel(untilCancelled: true)
         guard asrManager != nil else {
             logger.error("Parakeet: model load FAILED, state=\(String(describing: self.modelState), privacy: .public)")
             throw TranscriptionError.modelNotLoaded()
@@ -254,7 +292,21 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
         /// Replaces the whole model load, so a test can park it without
         /// downloading or compiling a model.
         func installModelLoadForTesting(_ load: @escaping @MainActor () async -> Void) {
+            modelLoadOverride = {
+                await load()
+                return nil
+            }
+        }
+
+        func installModelManagerForTesting(_ load: @escaping @MainActor () async -> AsrManager?) {
             modelLoadOverride = load
+        }
+
+        /// Replaces the on-disk check and the download-only step.
+        func installModelDownloadForTesting(
+            onDisk: Bool, download: @escaping @MainActor (@escaping @MainActor (Double) -> Void) async throws -> Void,
+        ) {
+            modelDownloadOverride = (onDisk, download)
         }
 
         /// Installs the final ASR decode boundary for focused lifecycle tests. It
@@ -444,5 +496,62 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
             && configuration == vocabularyConfiguration(
                 for: customVocabularyPath, bookmark: customVocabularyBookmark,
             )
+    }
+}
+
+// MARK: - Download without load
+
+extension ParakeetEngine {
+    /// `generation` is nil for the launch download, which a release leaves running.
+    private func reportDownloadProgress(_ fraction: Double, generation: Int?) {
+        guard generation.map({ $0 == modelGeneration }) ?? downloadOnlyInFlight else { return }
+        downloadProgress = fraction
+    }
+
+    /// A `modelLoad` flight, so a job's load joins it instead of downloading twice.
+    func downloadModelIfMissing() async {
+        _ = await modelLoad.run { [self] in await performDownload() }
+    }
+
+    private func performDownload() async -> Int {
+        // Matches no caller's generation, so a load that joined runs its own pass.
+        let joinersRetry = -1
+        guard asrManager == nil, !modelsOnDisk else { return joinersRetry }
+        modelState = .downloading
+        downloadProgress = 0
+        downloadOnlyInFlight = true
+        defer { downloadOnlyInFlight = false }
+        do {
+            let report: @MainActor (Double) -> Void = { [weak self] fraction in
+                self?.reportDownloadProgress(fraction, generation: nil)
+            }
+            try await downloadModels(report)
+        } catch {
+            logger.error("Parakeet model download failed: \(error.localizedDescription, privacy: .public)")
+        }
+        if asrManager == nil {
+            modelState = .unloaded
+            downloadProgress = 0
+        }
+        return joinersRetry
+    }
+
+    private var modelsOnDisk: Bool {
+        #if DEBUG
+            if let modelDownloadOverride { return modelDownloadOverride.onDisk }
+        #endif
+        return AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(), version: .v3)
+    }
+
+    private func downloadModels(_ report: @escaping @MainActor (Double) -> Void) async throws {
+        #if DEBUG
+            if let modelDownloadOverride {
+                try await modelDownloadOverride.download(report)
+                return
+            }
+        #endif
+        _ = try await AsrModels.download { progress in
+            Task { @MainActor in report(progress.fractionCompleted) }
+        }
     }
 }

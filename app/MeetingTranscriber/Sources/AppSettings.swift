@@ -360,6 +360,10 @@ final class AppSettings { // swiftlint:disable:this type_body_length
 
     // MARK: - Transcription
 
+    var unloadModelsWhenIdle: Bool {
+        didSet { defaults.set(unloadModelsWhenIdle, forKey: "unloadModelsWhenIdle") }
+    }
+
     var transcriptionEngine: TranscriptionEngineSetting {
         didSet { defaults.set(transcriptionEngine.rawValue, forKey: "transcriptionEngine") }
     }
@@ -883,6 +887,7 @@ final class AppSettings { // swiftlint:disable:this type_body_length
             .flatMap(LiveCaptionsSize.init(rawValue:)) ?? .medium
         asymmetricSilenceWarningSeconds = max(30, min(300, defaults.object(forKey: "asymmetricSilenceWarningSeconds") as? Double ?? 90))
 
+        unloadModelsWhenIdle = defaults.bool(forKey: "unloadModelsWhenIdle", default: true)
         transcriptionEngine = (defaults.string(forKey: "transcriptionEngine")
             .flatMap(TranscriptionEngineSetting.init(rawValue:))) ?? .whisperKit
         whisperKitModel = defaults.object(forKey: "whisperKitModel") as? String

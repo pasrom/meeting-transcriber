@@ -201,7 +201,8 @@ class PipelineQueue {
     /// The production `moveArtifact`.
     static let liveMoveArtifact: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) }
 
-    /// Cached FluidVAD instance — reused across jobs to avoid model reload.
+    /// Cached batch FluidVAD — reused across queued jobs. EngineController
+    /// releases it at idle when `unloadModelsWhenIdle` is enabled.
     /// Internal (not private) because `preprocessWithVAD` in
     /// PipelineQueue+Stages.swift reads and writes it.
     var vad: FluidVAD?
@@ -209,6 +210,10 @@ class PipelineQueue {
     /// Internal setter (not `private(set)`) because `processNext` in
     /// PipelineQueue+Stages.swift clears this flag across the file boundary.
     var isProcessing = false
+
+    /// Durable drain signal: an observer may miss a busy→idle transition that
+    /// fits in one actor turn. Internal setter for PipelineQueue+Stages.
+    var lastDrainID: UUID?
 
     /// Historical average wall-clock seconds per (stage, engine, diarizer-mode)
     /// config (last 30 days), used by the menu to show "live vs. typical".

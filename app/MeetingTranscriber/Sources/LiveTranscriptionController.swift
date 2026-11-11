@@ -104,6 +104,14 @@ final class LiveTranscriptionController {
     /// (pipelines nil → let `prepare()` build) from "resolved to re-transcribe
     /// fallback" (refresh actors), since both have `usingStreamingSession == false`.
     private var strategyResolved = false
+    /// Re-transcribe pipelines, including a streaming fallback, run on the shared engine.
+    var usesTranscriptionEngine: Bool {
+        !usingStreamingSession && micPipeline != nil
+    }
+
+    /// Called before `prepare()` loads the shared engine, so the owner can hold its model.
+    var willLoadEngine: (() -> Void)?
+
     /// The most recent stop-time flush, kept so the NEXT recording's reset can
     /// await it before reusing a kept EOU session. `flush()` is dispatched
     /// fire-and-forget from `WatchingController`, and a slow `asr.finish()` can
@@ -227,6 +235,7 @@ final class LiveTranscriptionController {
         // Re-transcribe path (default or streaming fallback). With no streaming
         // engine (failed streaming backend on a non-streaming engine) captions stay off.
         guard let engine else { return }
+        willLoadEngine?()
         await engine.loadModel()
         micPipeline = makeReTranscribePipeline(channel: .mic, engine: engine)
         appPipeline = makeReTranscribePipeline(channel: .app, engine: engine)
