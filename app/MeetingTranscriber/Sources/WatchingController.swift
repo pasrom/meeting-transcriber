@@ -59,6 +59,9 @@ final class WatchingController {
     private let permissions: PermissionsController
     let liveTranscription: LiveTranscriptionCoordinator
 
+    /// Test seam for `startCaptionFlush()`; nil flushes `liveTranscription`.
+    let captionFlushOverride: (@MainActor () -> Void)?
+
     /// Microphone-access gate. Injectable so tests skip the real TCC prompt; the
     /// return value is intentionally ignored (the loop is created regardless, and
     /// surfaces a permission problem through its own `permissionChecker`).
@@ -147,6 +150,7 @@ final class WatchingController {
         joinClock: any Clock<Duration> = ContinuousClock(),
         makeDetector: (() -> any MeetingDetecting)? = nil,
         makeRecorder: @escaping @MainActor () -> any RecordingProvider = { DualSourceRecorder() },
+        captionFlushOverride: (@MainActor () -> Void)? = nil,
     ) {
         self.settings = settings
         self.notifier = notifier
@@ -154,6 +158,7 @@ final class WatchingController {
         self.channelHealth = channelHealth
         self.permissions = permissions
         self.liveTranscription = liveTranscription
+        self.captionFlushOverride = captionFlushOverride
         self.ensureMicAccess = ensureMicAccess
         self.requestScreenRecording = requestScreenRecording
         self.requestAccessibility = requestAccessibility
@@ -548,7 +553,7 @@ final class WatchingController {
     /// `notifyOnRecording` only fires "Meeting Detected" notifications for the
     /// auto-detect path; manual recording emits its own start notification.
     private func attachStateChangeHandler(to loop: WatchLoop, notifyOnRecording: Bool) {
-        loop.onStateChange = { [weak self, weak loop, notifier] oldState, newState in
+        loop.onStateChange = { [weak self, weak loop, notifier] oldState, newState, cause in
             // Leaving `.recording` (natural meeting end, manual stop, or
             // mid-recording cancel — all route through this transition) is the
             // unified stop signal for both the auto-detect and manual paths.
@@ -557,8 +562,8 @@ final class WatchingController {
             // flush runs after `recorder.stop()` (WatchLoop stops the recorder
             // before this transition fires); the buffered tail lives in the
             // streaming actors, not the recorder, so it survives the stop.
-            if oldState == .recording {
-                Task { @MainActor in await self?.liveTranscription.flush() }
+            if oldState == .recording, cause != .callSplit {
+                self?.startCaptionFlush()
             }
             switch newState {
             case .recording:

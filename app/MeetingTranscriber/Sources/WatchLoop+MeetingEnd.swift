@@ -11,6 +11,14 @@ enum MeetingEndReason: Equatable {
     case replacedByNewCall
 }
 
+/// Why `WatchLoop.onStateChange` fired.
+enum PhaseChangeCause: Equatable {
+    case regular
+    /// Leaving `.recording` for a call split: the next call's recording starts
+    /// in the same main-actor stretch, so this is not a real stop.
+    case callSplit
+}
+
 /// Meeting-end detection for auto-detected meetings, split out of `WatchLoop`
 /// to keep its body under the length cap. The decisions themselves live in
 /// `WatchLoopEndPolicy`; this is the poll loop around them.

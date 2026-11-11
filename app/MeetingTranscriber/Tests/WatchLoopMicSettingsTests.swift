@@ -99,7 +99,7 @@ final class WatchLoopMicSettingsTests: XCTestCase {
         let (loop, _) = makeLoop(settings, detector: ImmediatelyInactiveDetector())
 
         var sourceWhileRecording: RecordingSource?
-        loop.onStateChange = { [weak loop] _, new in
+        loop.onStateChange = { [weak loop] _, new, _ in
             guard new == .recording else { return }
             settings.noMic = false
             sourceWhileRecording = loop?.activeRecordingSource

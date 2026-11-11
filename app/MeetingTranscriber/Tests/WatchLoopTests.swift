@@ -59,7 +59,7 @@ final class WatchLoopTests: XCTestCase {
     func testOnStateChangeCallback() {
         let loop = makeLoop()
         var transitions: [(WatchLoop.State, WatchLoop.State)] = []
-        loop.onStateChange = { old, new in
+        loop.onStateChange = { old, new, _ in
             transitions.append((old, new))
         }
 

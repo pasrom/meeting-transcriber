@@ -36,6 +36,8 @@ extension XCTestCase {
     /// - Parameter channelFaultWindow: the channel-health window. Zero (the
     ///   default) lets the first tick decide; see
     ///   `WatchingControllerChannelFaultTests` for when that is not enough.
+    /// - Parameter captionFlushOverride: replaces starting the live-caption flush
+    ///   on leaving `.recording`; nil keeps the production flush.
     func makeWatchingController(
         logDir: URL,
         notifier: any AppNotifying = RecordingNotifier(),
@@ -50,6 +52,7 @@ extension XCTestCase {
         channelFaultWindow: TimeInterval = 0,
         makeDetector: @escaping () -> any MeetingDetecting = { makeSilentDetector() },
         makeRecorder: @escaping @MainActor () -> any RecordingProvider = { makeMockRecorder() },
+        captionFlushOverride: (@MainActor () -> Void)? = nil,
     ) -> WatchingController {
         // Own defaults suite, like `makeRPCTestState`: `AppSettings()` on
         // `.standard` writes into the test host's real preferences, and
@@ -114,6 +117,7 @@ extension XCTestCase {
             joinClock: joinClock,
             makeDetector: makeDetector,
             makeRecorder: makeRecorder,
+            captionFlushOverride: captionFlushOverride,
         )
     }
 }

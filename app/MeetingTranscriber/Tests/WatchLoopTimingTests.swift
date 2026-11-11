@@ -200,7 +200,11 @@ final class WatchLoopTimingTests: XCTestCase {
         }
         loop.permissionChecker = { .allHealthy }
         var transitions: [WatchLoop.State] = []
-        loop.onStateChange = { _, new in transitions.append(new) }
+        var splitTransitions: [WatchLoop.State] = []
+        loop.onStateChange = { _, new, cause in
+            transitions.append(new)
+            if cause == .callSplit { splitTransitions.append(new) }
+        }
 
         loop.start()
         // Wall-clock bail-out: a watch task that exits or parks outside
@@ -220,6 +224,8 @@ final class WatchLoopTimingTests: XCTestCase {
             transitions.count { $0 == .recording }, 2,
             "each recording must be entered by its own transition, got \(transitions)",
         )
+        // Only the step out of the first call is the split; the final stop is not.
+        XCTAssertEqual(splitTransitions, [.watching], "got \(transitions)")
         if recordingStarts.count == 2 {
             XCTAssertGreaterThan(recordingStarts[1], 1.2)
             // The end poll sees the switch within one poll; re-confirming the

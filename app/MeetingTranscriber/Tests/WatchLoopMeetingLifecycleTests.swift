@@ -29,7 +29,7 @@ final class WatchLoopMeetingLifecycleTests: XCTestCase {
         let returnedToWatching = expectation(description: "finished meeting returned to watching")
         var recordingMeeting: DetectedMeeting?
         var watchingSnapshot: WatchLoopState?
-        loop.onStateChange = { [weak loop] old, new in
+        loop.onStateChange = { [weak loop] old, new, _ in
             if new == .recording {
                 recordingMeeting = loop?.currentMeeting
             }

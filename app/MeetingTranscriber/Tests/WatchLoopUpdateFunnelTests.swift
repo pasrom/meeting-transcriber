@@ -14,7 +14,7 @@ final class WatchLoopUpdateFunnelTests: XCTestCase {
     func testStartEmitsCoherentSnapshotTransition() {
         let (loop, _) = makeTestWatchLoop()
         var observed: [WatchLoopState] = []
-        loop.onStateChange = { [weak loop] _, _ in
+        loop.onStateChange = { [weak loop] _, _, _ in
             if let loop { observed.append(loop.snapshot) }
         }
 
@@ -34,7 +34,7 @@ final class WatchLoopUpdateFunnelTests: XCTestCase {
         loop.start()
         defer { loop.stop() }
         var phaseTransitions = 0
-        loop.onStateChange = { _, _ in phaseTransitions += 1 }
+        loop.onStateChange = { _, _, _ in phaseTransitions += 1 }
 
         loop.update { $0.detail = "Still polling" }
 
@@ -49,7 +49,7 @@ final class WatchLoopUpdateFunnelTests: XCTestCase {
         let (loop, _) = makeTestWatchLoop()
         loop.start()
         var lastPair: (WatchLoop.State, WatchLoop.State)?
-        loop.onStateChange = { old, new in lastPair = (old, new) }
+        loop.onStateChange = { old, new, _ in lastPair = (old, new) }
 
         loop.stop()
 
