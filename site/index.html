@@ -105,7 +105,7 @@ brew install --cask meeting-transcriber</code></pre>
   <p class="note">Requires macOS 14.2 or later on Apple Silicon (M1 or newer). The transcription runs on the Neural Engine, which Intel Macs do not have.</p>
 
   <h2>Privacy</h2>
-  <p>There is no account, no analytics, and no server behind this, because there is no server. Audio, transcripts and summaries stay on your Mac. The only network traffic is the model download on first run, an optional check for updates against GitHub, and the summary step if you deliberately point it at a cloud model instead of a local one. The full version is on the <a href="privacy.html">privacy page</a>.</p>
+  <p>There is no account, no analytics, and no server behind this, because there is no server. Audio stays on your Mac. Transcripts and summaries stay there too, unless the summary step uses a cloud model (in the Homebrew version the default is your own Claude Code CLI) or you turn on the Notion export. Apart from that, the only network traffic is downloading each speech model the first time it is needed and a daily check for updates against GitHub, which you can turn off. The full version is on the <a href="privacy.html">privacy page</a>.</p>
 
   <h2>Honest about the rough edges</h2>
   <ul class="caveats">

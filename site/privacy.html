@@ -27,7 +27,7 @@
 <div class="wrap legal">
 
   <h1>Privacy Policy</h1>
-  <p class="updated">Last updated: June 3, 2026</p>
+  <p class="updated">Last updated: November 11, 2026</p>
 
   <p>Meeting Transcriber is a macOS app that runs on your own computer. The short version: it does not collect your data, and there is no server in the picture to send it to. This page spells out exactly what that means.</p>
 
@@ -35,25 +35,35 @@
   <p>Nothing. There is no account, no sign-up, no analytics, no telemetry, and no usage tracking. The developer has no way to see who uses the app or what they record.</p>
 
   <h2>Where your recordings and transcripts live</h2>
-  <p>Your recordings, transcripts, summaries and saved voice profiles are stored as files on your Mac, in your user folder. They are never uploaded anywhere by the app. If you delete them, they are gone. You can move or back them up like any other file.</p>
+  <p>Your recordings, transcripts, summaries and saved voice profiles are stored as files on your Mac, in your user folder: by default in Downloads/MeetingTranscriber and in Library/Application Support/MeetingTranscriber, or in the output folder you choose. Your audio is never uploaded anywhere by the app. Text only leaves your Mac through the summary step and the Notion export described below, and only as you set them up. If you delete the files, they are gone. You can move or back them up like any other file.</p>
+  <p>Next to them the app keeps a few working files of its own: a log of speaker recognition results (meeting titles and the names you assigned), and in the Homebrew version a diagnostic log in Library/Logs/MeetingTranscriber that is deleted after 30 days. API keys you enter (for a summary provider or Notion) are stored in your macOS Keychain.</p>
+
+  <h2>Voice profiles</h2>
+  <p>When you name a speaker, the app saves a voice profile so it can recognise the same voice in later meetings. A profile is the name you gave and a numeric description of that person's voice (a speaker embedding), stored in speakers.json in Library/Application Support/MeetingTranscriber. It stays on your Mac and is never sent anywhere. You can rename or delete profiles in Settings &rarr; Speakers &rarr; Known Voices.</p>
 
   <h2>When the app uses the network</h2>
-  <p>The app works offline once it is set up. There are only three times it talks to the network, and you control all of them:</p>
+  <p>The app works offline once it is set up. There are only four reasons it talks to the network:</p>
   <ul class="plain">
-    <li><b>Model download, once.</b> On first run it downloads the speech models it needs (for example WhisperKit, Parakeet or the diarization model). This is a normal file download. Your audio is not involved and nothing about you is sent.</li>
-    <li><b>Update check, optional.</b> The app can check GitHub for a newer release so it can tell you one is available. This is a request to GitHub for the public release list. You can ignore or disable it.</li>
-    <li><b>The summary step, your choice.</b> Writing the summary is the only step that can involve an outside service, and only if you set it up that way. If you point it at a cloud model (such as Anthropic Claude or an OpenAI-compatible API), the transcript text is sent to that provider and handled under their privacy terms. If you point it at a local model (Ollama, LM Studio, llama.cpp) or turn the summary off, nothing leaves your Mac.</li>
+    <li><b>Model download, once per model.</b> The first time a speech model is needed, the app downloads it from Hugging Face (for example WhisperKit, Parakeet, the diarization model, or the live captions model when you turn live captions on). That happens on first run and again when you switch to a model you have not used before. This is a normal file download. Your audio is not involved and nothing about you is sent.</li>
+    <li><b>Update check, on by default.</b> About 30 seconds after launch and then once a day, the app asks GitHub for the public release list so it can tell you a newer version is available. Nothing about your recordings is sent. You can turn it off in Settings &rarr; About.</li>
+    <li><b>The summary step, your choice.</b> Writing the summary sends the transcript, including the speaker names in it, and the meeting date and time to the model you configure. In the Homebrew version the default is the Claude Code CLI installed on your Mac: if it is installed and signed in, the transcript goes to Anthropic (or wherever your Claude CLI is set up to send it) and is handled under their privacy terms. The same applies to a cloud OpenAI-compatible API. If you point it at a local model (Ollama, LM Studio, llama.cpp) or set the summary to None, nothing leaves your Mac.</li>
+    <li><b>Notion export, off by default.</b> If you turn it on and enter a Notion API key, each finished summary is sent to your Notion database: its title, the meeting date and the summary text, plus the full transcript while "Include full transcript in meeting notes" is on (it is by default) and the speaker names if you turn on speaker tags. It is handled under Notion's privacy terms.</li>
   </ul>
+  <p>The Homebrew version can also offer a Local Automation API for scripts on your own Mac. It is off by default and only accepts connections from the same computer.</p>
 
   <h2>System permissions the app asks for</h2>
   <ul class="plain">
     <li><b>Microphone.</b> To record your side of the call.</li>
-    <li><b>Screen and System Audio Recording.</b> To capture the call audio, and to detect a meeting by reading the window title of apps like Teams, Zoom or Webex. Window titles are read on your Mac and are not sent anywhere.</li>
+    <li><b>Audio Recording.</b> To capture the call audio of the meeting app, which is the other participants.</li>
+    <li><b>Screen Recording, optional.</b> To read the meeting's window title so the recording gets a proper name, and as a fallback if Audio Recording is not granted. Meetings are detected without it. Window titles are read on your Mac; a title only leaves it as the page title of a Notion export you turned on.</li>
+    <li><b>Accessibility, optional.</b> Homebrew version only. To read the participant names of a Microsoft Teams meeting, which are offered as suggestions when you name the speakers. The suggestions stay on your Mac; a name you assign to a speaker is part of the transcript like any other speaker name.</li>
+    <li><b>Notifications.</b> To tell you when notes are ready or something failed, and to ask before a browser meeting is recorded.</li>
+    <li><b>Files and folders.</b> macOS may ask for access to your Downloads folder, the default output location, or to a folder you pick. The app uses it to save recordings, transcripts and notes.</li>
   </ul>
   <p>You grant these in System Settings and can revoke them at any time.</p>
 
   <h2>Third parties</h2>
-  <p>There are no ads, no third-party trackers, and no analytics SDKs in the app. The only third parties that can ever receive anything are the model host you download from, GitHub for the optional update check, and the summary provider you choose, as described above.</p>
+  <p>There are no ads, no third-party trackers, and no analytics SDKs in the app. The only third parties that can ever receive anything are Hugging Face for the model downloads, GitHub for the update check, the summary provider you choose, and Notion if you turn on the export, as described above.</p>
 
   <h2>Children</h2>
   <p>The app is a general productivity tool and is not directed at children.</p>
