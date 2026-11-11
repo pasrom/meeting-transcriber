@@ -48,6 +48,11 @@ enum MicConfigurationChangeAction: Equatable, Sendable {
 /// The progress watchdog is the net for a change ignored wrongly, but only for
 /// an engine that stops delivering buffers: it is rebuilt at its next
 /// deadline. One that keeps delivering after a change this cannot see is not.
+///
+/// A change of the system default input is judged the same way while
+/// capturing: a pinned engine is not on the default, so the same reading
+/// decides whether it still stands as it started (see
+/// `handleDefaultInputDeviceChanged`).
 enum MicConfigurationChangePolicy {
     static func decide(_ reading: MicConfigurationChangeReading?) -> MicConfigurationChangeAction {
         guard let reading, reading.isRunning, reading.pinnedDevicePresent,

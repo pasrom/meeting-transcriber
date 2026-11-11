@@ -435,11 +435,6 @@ public class MicCaptureHandler: @unchecked Sendable {
         logger.info("Mic: listening for engine configuration changes")
     }
 
-    private func handleDefaultInputDeviceChanged() {
-        logger.info("Mic: default input device changed")
-        handleDeviceChange()
-    }
-
     public func stop() {
         // Seal first, so any in-flight tap closure short-circuits before touching
         // the soon-released AVAudioFile. The arbiter also answers the question

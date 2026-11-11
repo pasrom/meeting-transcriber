@@ -237,6 +237,27 @@ extension MicCaptureHandler {
         handleDeviceChange(fromConfigurationChange: true)
     }
 
+    /// The system's default input changed. Main queue, where the listener is
+    /// delivered.
+    ///
+    /// A running engine on a pinned microphone is not on the default input,
+    /// so a headset connecting or going away elsewhere does not concern it:
+    /// restarting it anyway cut a gap into the track for nothing, and every
+    /// needless bring-up is one more chance at the wedge of issue #588. It is
+    /// kept when the same reading a configuration change takes still shows it
+    /// as it started, which also covers the pinned device itself vanishing.
+    /// Only while capturing: a stalled capture or a pending attempt has no
+    /// engine left to judge, and a change of the input is what they wait for.
+    func handleDefaultInputDeviceChanged() {
+        if isRecording,
+           MicConfigurationChangePolicy.decide(session.configurationChangeReading()) == .ignore {
+            logger.info("Mic: default input device changed; the pinned engine is not on it, keeping it")
+            return
+        }
+        logger.info("Mic: default input device changed")
+        handleDeviceChange()
+    }
+
     func removeConfigChangeObserver() {
         guard let observer = configChangeObserver else { return }
         NotificationCenter.default.removeObserver(observer)
