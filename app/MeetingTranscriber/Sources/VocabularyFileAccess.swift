@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "VocabularyFileAccess")
 
 /// Resolves persisted sandbox access for terminology files and brackets each
 /// read with the matching security scope. Plain paths remain supported for
@@ -38,12 +41,25 @@ enum VocabularyFileAccess {
         return URL(fileURLWithPath: path)
     }
 
+    /// Nil when macOS refuses the bookmark. Callers then store the selection
+    /// without one, which in the sandbox loses access after a restart, so the
+    /// refusal is logged rather than swallowed.
     static func makeBookmark(for url: URL) -> Data? {
-        try? url.bookmarkData(
-            options: .withSecurityScope,
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil,
-        )
+        do {
+            return try url.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil,
+            )
+        } catch {
+            // Domain and code only: a localized description can name the file,
+            // and os_log output can leave the machine.
+            let nsError = error as NSError
+            logger.error(
+                "Could not create a security-scoped bookmark: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)",
+            )
+            return nil
+        }
     }
 
     /// For a bookmark macOS reports stale (its target moved or was renamed): the
