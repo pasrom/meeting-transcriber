@@ -8,7 +8,8 @@ import XCTest
 /// `WatchLoopTimingTests` proves the loop enters `.recording` once per call.
 /// What it cannot show is what hangs on that transition in the controller: the
 /// "Meeting Detected" notification and channel-health monitoring with fresh
-/// fault latches.
+/// fault latches, and that the split, unlike a real stop, starts no
+/// live-caption flush.
 ///
 /// Real time, because the controller builds its loop from `AppSettings`. The
 /// poll interval is set to its one-second floor, so a split takes about one
@@ -73,6 +74,58 @@ final class WatchingControllerCallSplitTests: XCTestCase {
     private func waitUntilRecording(_ controller: WatchingController) async {
         await waitFor({ controller.watchLoop?.state == .recording }, timeout: splitTimeout)
         XCTAssertEqual(controller.watchLoop?.state, .recording, "precondition: the first call is recording")
+    }
+
+    /// The split gives the second call what entering `.recording` brings (it
+    /// is announced, and channel health restarts with fresh latches) but starts
+    /// no live-caption flush. The second call starts in the same main-actor
+    /// stretch that ended the first, so a flush started by the split would run
+    /// after the second call's caption feeds were bound and retire them.
+    ///
+    /// This pins today's live-caption behaviour on a split, which leaves the
+    /// first call's last pending caption unflushed. It is expected to change if
+    /// the flush is later ordered before the next call's caption rebind.
+    ///
+    /// The flush is counted synchronously when it is started and read when each
+    /// recorder is built, so the order is pinned without timing. The stop at the
+    /// end must still flush, which proves the count is wired.
+    func testASplitRestartsMonitoringButStartsNoCaptionFlush() async {
+        let detector = SwitchingCallDetector()
+        let notifier = RecordingNotifier()
+        var flushes = 0
+        var flushesAtRecorderBuild: [Int] = []
+        var announcementsAtRecorderBuild: [Int] = []
+        let controller = makeWatchingController(
+            logDir: tmpDir, notifier: notifier, permissionHealth: .allHealthy,
+            makeDetector: { detector },
+            makeRecorder: {
+                flushesAtRecorderBuild.append(flushes)
+                announcementsAtRecorderBuild.append(self.count(notifier, "Meeting Detected"))
+                return self.makeRecorderWithDeadMic()
+            },
+            captionFlushOverride: { flushes += 1 },
+        )
+        controller.settings.pollInterval = 1
+        let started = await controller.startWatching()
+        addTeardownBlock { _ = await controller.stopWatching() }
+        XCTAssertEqual(started, .changed, "precondition")
+        await waitUntilRecording(controller)
+        await waitFor({ self.count(notifier, "Capture Channel Silent", body: self.deadMicBody) == 1 }, timeout: splitTimeout)
+        XCTAssertEqual(count(notifier, "Capture Channel Silent", body: deadMicBody), 1, "precondition: the first call's dead mic")
+
+        detector.callID = "call-B"
+        await waitFor({ flushesAtRecorderBuild.count == 2 }, timeout: splitTimeout)
+        XCTAssertEqual(announcementsAtRecorderBuild, [1, 2], "the second call must be announced before it records")
+        XCTAssertEqual(flushesAtRecorderBuild, [0, 0], "the split must not start a caption flush")
+        await waitFor({ self.count(notifier, "Capture Channel Silent", body: self.deadMicBody) == 2 }, timeout: splitTimeout)
+        XCTAssertEqual(
+            count(notifier, "Capture Channel Silent", body: deadMicBody), 2,
+            "the second call's monitoring must restart with fresh latches",
+        )
+        XCTAssertEqual(flushes, 0, "nor at any point while the second call records")
+
+        _ = await controller.stopWatching()
+        XCTAssertEqual(flushes, 1, "stopping the second call flushes its captions")
     }
 
     /// Everything that hangs on entering `.recording` runs again for the second

@@ -65,7 +65,7 @@ final class WatchLoopActiveRecorderTests: XCTestCase {
         }
 
         var sourceAtTransition: RecordingSource?
-        loop.onStateChange = { [weak loop] _, new in
+        loop.onStateChange = { [weak loop] _, new, _ in
             guard new == .recording else { return }
             sourceAtTransition = loop?.activeRecordingSource
         }

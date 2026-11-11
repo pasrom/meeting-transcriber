@@ -115,7 +115,7 @@ class WatchLoop {
     private var watchTask: Task<Void, Never>?
 
     /// Hook called when state changes (for UI updates, notifications, etc.)
-    var onStateChange: ((State, State) -> Void)?
+    var onStateChange: ((State, State, PhaseChangeCause) -> Void)?
 
     init(
         detector: any MeetingDetecting = WatchLoop.defaultDetector(),
@@ -412,8 +412,9 @@ class WatchLoop {
                 // Leave `.recording` first, as every other recording start
                 // does, so `onStateChange` fires for the next call. Both
                 // transitions run in one main-actor stretch, so no UI
-                // renders the gap.
-                returnToWatching()
+                // renders the gap. Marked as a split so the handler skips
+                // what only a real stop does (see `PhaseChangeCause`).
+                returnToWatching(cause: .callSplit)
                 return await runMeeting(next)
             }
             detector.reset()
@@ -425,8 +426,8 @@ class WatchLoop {
         return false
     }
 
-    private func returnToWatching() {
-        update { next in
+    private func returnToWatching(cause: PhaseChangeCause = .regular) {
+        update(cause: cause) { next in
             next.phase = .watching
             next.currentMeeting = nil
             next.detail = "Polling for meetings..."
@@ -542,16 +543,16 @@ class WatchLoop {
     /// (a phase-change-plus-detail-update is one funnel call, not two
     /// separate property writes that consumers could observe mid-flight).
     /// Internal so the extensions in `WatchLoop+*.swift` write through it too.
-    func update(_ transform: (inout WatchLoopState) -> Void) {
+    func update(cause: PhaseChangeCause = .regular, _ transform: (inout WatchLoopState) -> Void) {
         var next = snapshot
         transform(&next)
-        apply(next)
+        apply(next, cause: cause)
     }
 
     /// Commit a new snapshot field-wise. Each `if old != new { old = new }`
     /// guard avoids gratuitous `@Observable` invalidations for fields the
     /// transform left alone; emit `onStateChange` if the phase moved.
-    private func apply(_ next: WatchLoopState) {
+    private func apply(_ next: WatchLoopState, cause: PhaseChangeCause) {
         let oldPhase = state
         if state != next.phase { state = next.phase }
         if currentMeeting != next.currentMeeting { currentMeeting = next.currentMeeting }
@@ -562,7 +563,7 @@ class WatchLoop {
         }
         if oldPhase == .recording, next.phase != .recording { recordingSource = nil }
         if oldPhase != next.phase {
-            onStateChange?(oldPhase, next.phase)
+            onStateChange?(oldPhase, next.phase, cause)
         }
     }
 

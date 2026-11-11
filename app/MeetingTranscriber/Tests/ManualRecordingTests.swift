@@ -121,7 +121,7 @@ final class ManualRecordingTests: XCTestCase {
     func testManualRecordingTriggersStateChangeCallback() async throws {
         let (loop, _) = makeLoop()
         var transitions: [(WatchLoop.State, WatchLoop.State)] = []
-        loop.onStateChange = { old, new in
+        loop.onStateChange = { old, new, _ in
             transitions.append((old, new))
         }
 

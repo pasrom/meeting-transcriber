@@ -107,7 +107,7 @@ final class QuitStartRefusalTests: XCTestCase {
         )
         loop.permissionChecker = { .allHealthy }
         var phases: [WatchLoop.State] = []
-        loop.onStateChange = { _, new in phases.append(new) }
+        loop.onStateChange = { _, new, _ in phases.append(new) }
         loop.start()
         await waitFor(loop.state == .recording, timeout: .seconds(3))
         XCTAssertEqual(loop.state, .recording, "precondition: the loop never started recording")
