@@ -71,9 +71,9 @@ extension PipelineQueue {
     /// decision, not two. It used to be written out at both call sites, held
     /// together only by a comment saying they had to agree.
     private func discardFinishedJobs(from list: inout [PipelineJob]) {
-        let finished = list.filter { $0.state == .done && !$0.hasPendingNotionExport }
+        let finished = list.filter { $0.state == .done && !$0.isHeldAfterCompletion }
         guard !finished.isEmpty else { return }
-        list.removeAll { $0.state == .done && !$0.hasPendingNotionExport }
+        list.removeAll { $0.state == .done && !$0.isHeldAfterCompletion }
         removeNamingDataOfDiscardedJobs(finished)
     }
 
@@ -315,8 +315,9 @@ extension PipelineQueue {
         _ loaded: inout [PipelineJob], interruptedIn: [UUID: JobState],
     ) {
         let missing = loaded.filter { job in
-            // Export-only retries read the complete Markdown backup, not audio.
-            if job.state == .done, job.hasPendingNotionExport { return false }
+            // Export-only retries read the complete Markdown backup, and notes
+            // retries the transcript, not audio.
+            if job.state == .done, job.isHeldAfterCompletion { return false }
             guard let mixPath = job.mixPath else { return false }
             // Exempt, like `.speakerNamingPending`: a job the resume can finish
             // reads its transcript and nothing else, so discarding it for a

@@ -834,7 +834,7 @@ class PipelineQueue {
     }
 
     private func expireCompletedJob(id: UUID) {
-        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.hasPendingNotionExport }) else { return }
+        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.isHeldAfterCompletion }) else { return }
         // Native menus update in place. Removing a finished export's row while
         // the menu is open moves its actions underneath the pointer.
         if menuTrackingDepth > 0, jobs.contains(where: { $0.id == id && $0.notionExportStatus != nil }) {
@@ -923,7 +923,7 @@ class PipelineQueue {
     }
 
     func scheduleCompletedJobRemoval(id: UUID) {
-        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.hasPendingNotionExport }) else { return }
+        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.isHeldAfterCompletion }) else { return }
         let token = UUID()
         completedJobRemovalTokens[id] = token
         expiredCompletedJobIDs.remove(id)

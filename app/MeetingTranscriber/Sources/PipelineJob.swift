@@ -171,6 +171,19 @@ struct PipelineJob: Identifiable, Codable {
         notionExportStatus == .inProgress || notionExportStatus == .failed
     }
 
+    /// A finished meeting whose notes failed, with a transcript recorded to
+    /// make them from. State only, never the file system, so a view body can
+    /// ask it; the retry checks the transcript itself.
+    var hasRetryableMeetingNotes: Bool {
+        state == .done && protocolFailure != nil && transcriptPath != nil
+    }
+
+    /// A finished job that stays listed, and in the snapshot, until the user
+    /// acts on it: an export to retry or discard, or notes to retry or dismiss.
+    var isHeldAfterCompletion: Bool {
+        hasPendingNotionExport || hasRetryableMeetingNotes
+    }
+
     var artifactStartTime: Date {
         meetingStartTime ?? enqueuedAt
     }
