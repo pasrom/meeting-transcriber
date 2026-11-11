@@ -9,9 +9,9 @@ import XCTest
 /// **Master toggle (`liveEnabled`) gates everything.** When on, the streaming
 /// backend is chosen from the active engine's EXPLICITLY configured language:
 ///   * `en` → `.englishStreaming` (Parakeet EOU streaming, English-optimized)
-///   * any other explicit language → `.nemotronStreaming` (Nemotron multilingual;
+///   * any other trained explicit language → `.nemotronStreaming` (Nemotron multilingual;
 ///     FluidAudio auto-selects the Latin or full multilingual model variant)
-///   * auto-detect (nil) → `.reTranscribe` if the engine supports the in-memory
+///   * auto-detect (nil) or an untrained language → `.reTranscribe` if the engine supports the in-memory
 ///     path, else `.none`.
 ///
 /// The two streaming backends bypass the active engine entirely, so they are
@@ -20,7 +20,7 @@ import XCTest
 /// known) — it falls back to the engine-driven re-transcribe path.
 final class LiveCaptionsGateTests: XCTestCase {
     func testLiveDisabledYieldsNoneRegardlessOfLanguage() {
-        for lang in ["de", "en", "ru", nil, "zh"] {
+        for lang in ["de", "en", "ru", "id", nil, "zh"] {
             XCTAssertEqual(
                 LiveCaptionsGate.strategy(liveEnabled: false, engineLanguage: lang, engineSupportsLive: true),
                 .none, "live disabled must be .none (lang=\(lang ?? "nil"))",
@@ -31,7 +31,7 @@ final class LiveCaptionsGateTests: XCTestCase {
     func testExplicitNonEnglishLanguagesYieldNemotronStreaming() {
         // Latin-script (latin model) and non-Latin (multilingual model) both
         // route to Nemotron; FluidAudio picks the variant from the language code.
-        for lang in ["de", "es", "fr", "it", "pt", "nl", "ru", "zh", "ja"] {
+        for lang in ["de", "es", "fr", "it", "pt", "pt-PT", "nl", "ru", "zh", "ja", "no", "PT_br"] {
             XCTAssertEqual(
                 LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: true),
                 .nemotronStreaming, "\(lang) must route to Nemotron",
@@ -40,10 +40,25 @@ final class LiveCaptionsGateTests: XCTestCase {
     }
 
     func testEnglishLanguageYieldsEnglishStreaming() {
-        XCTAssertEqual(
-            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "en", engineSupportsLive: true),
-            .englishStreaming, "English uses the English-optimized EOU path, not Nemotron",
-        )
+        for lang in ["en", "en-US", "en-GB", "EN_us"] {
+            XCTAssertEqual(
+                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: false),
+                .englishStreaming, "\(lang) uses the English-optimized EOU path",
+            )
+        }
+    }
+
+    func testUntrainedExplicitLanguageFallsBackOnlyWhenEngineSupportsLive() {
+        for lang in ["id", "id-ID", "ms", "pt-AO"] {
+            XCTAssertEqual(
+                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: true),
+                .reTranscribe, lang,
+            )
+            XCTAssertEqual(
+                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: false),
+                .none, lang,
+            )
+        }
     }
 
     func testAutoDetectLanguageFallsBackToReTranscribe() {
@@ -78,6 +93,12 @@ final class LiveCaptionsGateTests: XCTestCase {
         XCTAssertFalse(LiveCaptionsGate.captionsAvailable(
             liveEnabled: true, engineLanguage: nil, engineSupportsLive: false,
         ))
+        XCTAssertTrue(LiveCaptionsGate.captionsAvailable(
+            liveEnabled: true, engineLanguage: "id-ID", engineSupportsLive: true,
+        ))
+        XCTAssertFalse(LiveCaptionsGate.captionsAvailable(
+            liveEnabled: true, engineLanguage: "id-ID", engineSupportsLive: false,
+        ))
     }
 
     func testCaptionsUnavailableWhenLiveDisabled() {
@@ -106,6 +127,13 @@ final class LiveCaptionsGateTests: XCTestCase {
         XCTAssertFalse(LiveCaptionsGate.overlayVisible(
             liveEnabled: true, engineLanguage: "en", engineSupportsLive: true,
             isRecording: false, overlayEnabled: true,
+        ))
+    }
+
+    func testOverlayHiddenWhenUntrainedLanguageCannotReTranscribe() {
+        XCTAssertFalse(LiveCaptionsGate.overlayVisible(
+            liveEnabled: true, engineLanguage: "id", engineSupportsLive: false,
+            isRecording: true, overlayEnabled: true,
         ))
     }
 }

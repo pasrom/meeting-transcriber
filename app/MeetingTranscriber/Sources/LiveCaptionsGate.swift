@@ -11,18 +11,17 @@
 /// overlay window (`overlayVisible`); it is not a strategy input.
 ///
 /// **The backend follows the active engine's EXPLICITLY configured language**
-/// (not auto-detect): `de` → German Nemotron streaming, `en` → English Parakeet
+/// (not auto-detect): trained non-English languages → Nemotron, English → Parakeet
 /// EOU streaming. Both streaming sessions drive their FluidAudio models directly
 /// and never touch the active `TranscribingEngine`, so they are available even
-/// for engines without the re-transcribe hook. Auto-detect (nil language) or any
-/// other language deliberately does NOT route to a streaming model — the spoken
-/// language isn't statically known, and a wrong-language model is worse than the
-/// engine-driven `.reTranscribe` fallback.
+/// for engines without the re-transcribe hook. Auto-detect (nil language) and
+/// languages outside `LiveCaptionLanguages` use the engine-driven `.reTranscribe`
+/// fallback when supported, otherwise captions are off.
 enum LiveCaptionsGate {
     /// Which per-channel pipeline strategy to build, or none.
     enum Strategy: Equatable {
-        /// Low-latency streaming session via Nemotron multilingual (any explicitly
-        /// configured non-English language). FluidAudio auto-selects the Latin or
+        /// Low-latency streaming session via Nemotron multilingual (an explicitly
+        /// configured, trained non-English language). FluidAudio auto-selects the Latin or
         /// full multilingual model variant from the language. Engine-independent.
         case nemotronStreaming
         /// Low-latency English streaming session (Parakeet EOU). Engine-independent.
@@ -35,11 +34,9 @@ enum LiveCaptionsGate {
 
     /// Resolve the active strategy from the gate inputs.
     ///
-    /// English routes to the English-optimized EOU path; any other explicitly
-    /// configured language routes to Nemotron multilingual (the manager + its
-    /// `downloadVariant` pick the right model + prompt). Auto-detect (nil) does
-    /// NOT pick a language-specific streaming model — it falls back to the
-    /// engine-driven re-transcribe path.
+    /// English routes to the English-optimized EOU path; table-covered non-English
+    /// languages route to Nemotron multilingual. Auto-detect (nil) and unsupported
+    /// explicit languages fall back to engine-driven re-transcription when available.
     ///
     /// - Parameters:
     ///   - liveEnabled: master live-captions toggle.
@@ -54,7 +51,8 @@ enum LiveCaptionsGate {
     ) -> Strategy {
         guard liveEnabled else { return .none }
         guard let engineLanguage else { return engineSupportsLive ? .reTranscribe : .none }
-        return engineLanguage == "en" ? .englishStreaming : .nemotronStreaming
+        guard let tag = LiveCaptionLanguages.canonicalTag(for: engineLanguage) else { return engineSupportsLive ? .reTranscribe : .none }
+        return tag.hasPrefix("en-") ? .englishStreaming : .nemotronStreaming
     }
 
     /// Whether live captions are available at all (any non-`none` strategy).

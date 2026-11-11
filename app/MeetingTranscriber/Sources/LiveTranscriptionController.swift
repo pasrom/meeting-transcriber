@@ -54,8 +54,8 @@ final class LiveTranscriptionController {
     private let captions: LiveCaptionsState
     private let speakerMatcher: any LiveSpeakerMatching
     /// The active engine's EXPLICITLY-configured language (`de`/`en`/nil), which
-    /// picks the streaming backend via `LiveCaptionsGate` (`de` → Nemotron, `en`
-    /// → EOU, else → re-transcribe). On a streaming-model load failure
+    /// picks the streaming backend via `LiveCaptionsGate` (`en` → EOU, a Nemotron-trained
+    /// language such as `de` → Nemotron, else → re-transcribe). On a streaming-model load failure
     /// `prepare()` degrades to re-transcribe (if supported) or to no captions.
     private let engineLanguage: String?
 
