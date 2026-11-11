@@ -16,6 +16,10 @@ enum MeetingNotesFailure: String, Codable, Equatable {
     case truncated
     case providerRejected
     case providerUnreachable
+    /// A notes-only run found no provider: switched to None while it waited.
+    case noProvider
+    /// A notes-only run could not read its transcript.
+    case transcriptUnreadable
     case other
     // swiftlint:enable raw_value_for_camel_cased_codable_enum
 
@@ -59,6 +63,8 @@ enum MeetingNotesFailure: String, Codable, Equatable {
         case .truncated: "The notes were cut off before they were finished"
         case .providerRejected: "The notes provider refused the request"
         case .providerUnreachable: "The notes provider could not be reached"
+        case .noProvider: "No meeting notes provider is chosen in Settings → Output"
+        case .transcriptUnreadable: "The saved transcript could not be read"
         case .other: "Generating them failed"
         }
     }
