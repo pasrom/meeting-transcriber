@@ -267,21 +267,119 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
         return result
     }
 
-    /// Nearest-neighbour resample a per-frame activity mask onto a target
-    /// frame grid. Used to bridge Sortformer's 12.5 Hz output (~125 frames/10s)
-    /// to WeSpeaker's expected segmentation-frame count (typically 589/10s).
-    /// Pure so the unit tests can pin it without loading any model.
-    static func resampleMask(_ mask: [Float], to targetCount: Int) -> [Float] {
-        guard !mask.isEmpty, targetCount > 0 else {
-            return Array(repeating: Float(0.0), count: max(0, targetCount))
+    /// WeSpeaker's waveform input: 10 s at 16 kHz, the shape
+    /// `EmbeddingExtractor.getEmbeddings` feeds the model.
+    static let weSpeakerWindowSamples = 160_000
+
+    /// Hop between post-hoc embedding chunks. Non-overlapping windows today,
+    /// so equal to the model window, but a separate choice from it.
+    static let embeddingChunkStrideSamples = weSpeakerWindowSamples
+
+    /// Minimum active WeSpeaker frames (about 0.17 s) for a slot to be
+    /// embedded in a chunk: `EmbeddingExtractor.getEmbeddings`' default
+    /// `minActivityThreshold`, so full chunks are gated exactly as the
+    /// extractor gates them.
+    static let minActiveWeSpeakerFrames: Float = 10
+
+    /// One WeSpeaker call of the post-hoc embedding walk: which audio it
+    /// covers, which global speaker slots it embeds, and their masks on
+    /// WeSpeaker's frame grid over the full 10 s window.
+    struct EmbeddingChunkPlan: Equatable {
+        let sampleRange: Range<Int>
+        let slots: [Int]
+        let masks: [[Float]]
+    }
+
+    /// Plan the post-hoc embedding walk: 10 s chunks, top-3 active speaker
+    /// slots per chunk (WeSpeaker's mask shape only fits 3), each slot's
+    /// mask mapped by `weSpeakerWindowMask`. Pure so the geometry is pinned
+    /// without loading a model.
+    ///
+    /// A slot is embedded only with at least `minActiveWeSpeakerFrames`
+    /// active frames inside the chunk's own audio; counting the loop-padded
+    /// copies would lower the bar for a short tail by the repeat factor. A
+    /// chunk with no such slot is skipped without a model call; that covers
+    /// a tail too short for one frame, which could otherwise run the model
+    /// on an empty mask.
+    static func planEmbeddingChunks(
+        audioSampleCount: Int,
+        masks: [[Float]],
+        samplesPerMaskFrame: Int,
+        weSpeakerFrameCount: Int,
+    ) -> [EmbeddingChunkPlan] {
+        let maskFrameCount = masks.first?.count ?? 0
+        guard samplesPerMaskFrame > 0, maskFrameCount > 0, weSpeakerFrameCount > 0 else { return [] }
+        var plans: [EmbeddingChunkPlan] = []
+        for sampleStart in stride(from: 0, to: audioSampleCount, by: embeddingChunkStrideSamples) {
+            let sampleEnd = min(sampleStart + weSpeakerWindowSamples, audioSampleCount)
+            let chunkSampleCount = sampleEnd - sampleStart
+            let frameStart = sampleStart / samplesPerMaskFrame
+            // Past the mask's end there is nothing to embed (and nothing to slice).
+            guard frameStart < maskFrameCount else { break }
+            let frameEnd = min(
+                frameStart + (chunkSampleCount + samplesPerMaskFrame - 1) / samplesPerMaskFrame,
+                maskFrameCount,
+            )
+            // WeSpeaker frames starting inside the chunk's audio; the rest
+            // of the window is loop padding.
+            let framesInAudio = (chunkSampleCount * weSpeakerFrameCount + weSpeakerWindowSamples - 1)
+                / weSpeakerWindowSamples
+            let chunkMasks: [[Float]] = masks.map { Array($0[frameStart ..< frameEnd]) }
+            let activity: [(slot: Int, sum: Float)] = chunkMasks.indices.map { ($0, chunkMasks[$0].reduce(0, +)) }
+            var slots: [Int] = []
+            var windowMasks: [[Float]] = []
+            for candidate in activity.sorted(by: { $0.sum > $1.sum }).prefix(3) {
+                let windowMask = weSpeakerWindowMask(
+                    chunkMasks[candidate.slot],
+                    samplesPerMaskFrame: samplesPerMaskFrame,
+                    chunkSampleCount: chunkSampleCount,
+                    frameCount: weSpeakerFrameCount,
+                )
+                let activeInAudio: Float = windowMask[0 ..< framesInAudio].reduce(0, +)
+                guard activeInAudio >= minActiveWeSpeakerFrames else { continue }
+                slots.append(candidate.slot)
+                windowMasks.append(windowMask)
+            }
+            guard !slots.isEmpty else { continue }
+            plans.append(EmbeddingChunkPlan(sampleRange: sampleStart ..< sampleEnd, slots: slots, masks: windowMasks))
         }
-        var out = Array(repeating: Float(0.0), count: targetCount)
-        let srcCount = mask.count
-        for i in 0 ..< targetCount {
-            let srcIdx = min(i * srcCount / targetCount, srcCount - 1)
-            out[i] = mask[srcIdx]
+        return plans
+    }
+
+    /// Map one chunk's diarizer-rate mask onto WeSpeaker's `frameCount`
+    /// frames spanning the full 10 s window, in phase with
+    /// `weSpeakerWindow`'s loop-padded audio: each WeSpeaker frame takes the
+    /// diarizer frame under the audio sample it starts on, after the loop.
+    /// Zero where that frame is missing (the diarizer's frame count need not
+    /// match the audio length exactly).
+    ///
+    /// Stretching a short chunk's mask over the whole window instead put the
+    /// activity of the chunk's first fraction under all of its audio, since
+    /// the extractor reads only the frames its unpadded audio fills.
+    static func weSpeakerWindowMask(
+        _ mask: [Float],
+        samplesPerMaskFrame: Int,
+        chunkSampleCount: Int,
+        frameCount: Int,
+    ) -> [Float] {
+        guard samplesPerMaskFrame > 0, chunkSampleCount > 0, frameCount > 0 else { return [] }
+        return (0 ..< frameCount).map { frame in
+            let sample = (frame * weSpeakerWindowSamples / frameCount) % chunkSampleCount
+            let src = sample / samplesPerMaskFrame
+            return src < mask.count ? mask[src] : 0
         }
-        return out
+    }
+
+    /// The chunk's audio, loop-padded to the full WeSpeaker window, as
+    /// `EmbeddingExtractor` itself pads short audio. Padding here instead
+    /// keeps the mask in phase sample by sample (`weSpeakerWindowMask`)
+    /// and lets the extractor read every frame. Zero padding measurably
+    /// degrades short-tail embeddings: a window that is mostly digital
+    /// silence pulled tail embeddings far from the same speaker's full
+    /// chunks on every fixture tried.
+    static func weSpeakerWindow(_ audio: [Float], range: Range<Int>) -> [Float] {
+        guard !range.isEmpty else { return [Float](repeating: 0, count: weSpeakerWindowSamples) }
+        return (0 ..< weSpeakerWindowSamples).map { audio[range.lowerBound + $0 % range.count] }
     }
 
     /// Pure helper exposed for testability — build per-speaker activity

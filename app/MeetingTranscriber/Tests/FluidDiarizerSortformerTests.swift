@@ -113,41 +113,163 @@ final class FluidDiarizerSortformerTests: XCTestCase {
         XCTAssertEqual(masks, [[0.0], [0.0], [0.0]])
     }
 
-    func testResampleMaskUpsamplesPreservingActivePattern() {
-        // 4 frames → 8 frames via nearest-neighbour: each src frame maps to
-        // two adjacent target frames.
-        let src: [Float] = [1, 0, 1, 0]
-        let out = FluidDiarizer.resampleMask(src, to: 8)
-        XCTAssertEqual(out, [1, 1, 0, 0, 1, 1, 0, 0])
+    // MARK: - Post-hoc embedding window geometry
+
+    // WeSpeaker sees a 10 s window as 589 frames; frame j starts at sample
+    // floor(j * 160 000 / 589). A short chunk's audio is loop-padded to the
+    // window, so frame j reads the audio (and the mask) at that sample
+    // modulo the chunk length. Sortformer frames are 1280 samples (80 ms):
+    // a 2 s tail (32 000 samples) is covered by WeSpeaker frames 0...117
+    // (117 -> 31 782, 118 -> 32 054), and in that span frame j reads
+    // Sortformer frame floor(j * 125 / 589). The expected numbers below
+    // are worked out by hand from that, not from the helpers.
+
+    private static func mask(count: Int, active: Range<Int>) -> [Float] {
+        (0 ..< count).map { active.contains($0) ? 1 : 0 }
     }
 
-    func testResampleMaskDownsamplesByStriding() {
-        // 8 → 4: every other frame survives.
-        let src: [Float] = [1, 1, 0, 0, 1, 1, 0, 0]
-        let out = FluidDiarizer.resampleMask(src, to: 4)
-        XCTAssertEqual(out, [1, 0, 1, 0])
+    func testWindowMaskFullChunkKeepsTheWholeWindow() {
+        // Full 10 s: 125 -> 589; src 62/63 boundary between targets 296/297.
+        let sortformer = FluidDiarizer.weSpeakerWindowMask(
+            Self.mask(count: 125, active: 0 ..< 63),
+            samplesPerMaskFrame: 1280, chunkSampleCount: 160_000, frameCount: 589,
+        )
+        XCTAssertEqual(sortformer.count, 589)
+        XCTAssertEqual(sortformer.reduce(0, +), 297)
+        XCTAssertEqual(sortformer[296], 1)
+        XCTAssertEqual(sortformer[297], 0)
+        // Nemotron 3: 1000 frames of 160 samples; j * 1000 / 589 < 500 up to j = 294.
+        let nemotron = FluidDiarizer.weSpeakerWindowMask(
+            Self.mask(count: 1000, active: 0 ..< 500),
+            samplesPerMaskFrame: 160, chunkSampleCount: 160_000, frameCount: 589,
+        )
+        XCTAssertEqual(nemotron.reduce(0, +), 295)
+        XCTAssertEqual(nemotron[294], 1)
+        XCTAssertEqual(nemotron[295], 0)
     }
 
-    func testResampleMaskHandlesPyannoteRatio() {
-        // Production case: 125-frame Sortformer mask → 589-frame WeSpeaker mask.
-        // Ones at positions 0..62 → out should be ones from 0..295 roughly.
-        var src = [Float](repeating: 0.0, count: 125)
-        for i in 0 ..< 63 {
-            src[i] = 1.0
-        } // first half active
-        let out = FluidDiarizer.resampleMask(src, to: 589)
-        XCTAssertEqual(out.count, 589)
-        // First and last should reflect original pattern at the boundaries.
-        XCTAssertEqual(out[0], 1.0)
-        XCTAssertEqual(out[588], 0.0)
-        // The transition occurs roughly at out[i] where i*125/589 == 63, i.e. i ≈ 297.
-        XCTAssertEqual(out[296], 1.0, "frame 296 maps to src 62 (active)")
-        XCTAssertEqual(out[297], 0.0, "frame 297 maps to src 63 (silence)")
+    func testWindowMaskTailFollowsTheLoopedAudio() {
+        // Speaker active in the tail's second half only (frames 13...24,
+        // 1.04 s to 2.0 s). Target 61 reads src 12, target 62 reads src 13.
+        let out = FluidDiarizer.weSpeakerWindowMask(
+            Self.mask(count: 25, active: 13 ..< 25),
+            samplesPerMaskFrame: 1280, chunkSampleCount: 32000, frameCount: 589,
+        )
+        XCTAssertEqual(out.count, 589, "the model input shape stays [3, 589]")
+        // Masks are 0/1, so a range sum counts its active frames.
+        XCTAssertEqual(out[0 ..< 62].reduce(0, +), 0)
+        XCTAssertEqual(out[62 ..< 118].reduce(0, +), 56, "activity must sit under the tail's own audio")
+        // In the padding the mask repeats with the audio: 118 -> sample
+        // 32 054 = 54 into the loop (src 0); 180 -> 48 896 = 16 896 (src 13);
+        // 235 -> 63 837 = 31 837 (src 24); 236 -> 64 108 = 108 (src 0).
+        XCTAssertEqual(out[118], 0)
+        XCTAssertEqual(out[180], 1)
+        XCTAssertEqual(out[235], 1)
+        XCTAssertEqual(out[236], 0)
     }
 
-    func testResampleMaskEmptyInputProducesZeros() {
-        let out = FluidDiarizer.resampleMask([], to: 100)
-        XCTAssertEqual(out, [Float](repeating: 0.0, count: 100))
+    func testWindowMaskClampsToAMaskShorterThanTheAudio() {
+        // The diarizer's frame count need not match the audio length. With
+        // 24 tail frames for 2 s of audio, targets reading src 24 (j >= 114)
+        // have no mask frame and stay zero: ones at 62...113.
+        let out = FluidDiarizer.weSpeakerWindowMask(
+            Self.mask(count: 24, active: 13 ..< 24),
+            samplesPerMaskFrame: 1280, chunkSampleCount: 32000, frameCount: 589,
+        )
+        XCTAssertEqual(out[0 ..< 118].reduce(0, +), 52)
+        XCTAssertEqual(out[113], 1)
+        XCTAssertEqual(out[114], 0)
+    }
+
+    func testWindowMaskLoopsAtTheLastAudioSample() {
+        // A 32 600-sample tail spans 26 frames, the last (25) only partly.
+        // Targets 118...120 start on samples 32 054, 32 325, 32 597, inside
+        // frame 25; target 121 starts on 32 869, which loops to 269 (src 0),
+        // not into the part of frame 25 past the audio.
+        let out = FluidDiarizer.weSpeakerWindowMask(
+            Self.mask(count: 26, active: 25 ..< 26),
+            samplesPerMaskFrame: 1280, chunkSampleCount: 32600, frameCount: 589,
+        )
+        XCTAssertEqual(out[117], 0)
+        XCTAssertEqual(out[118 ..< 121].reduce(0, +), 3)
+        XCTAssertEqual(out[121], 0)
+    }
+
+    func testWindowLoopPadsTheChunkAudio() {
+        let window = FluidDiarizer.weSpeakerWindow([9, 8, 7, 6, 5], range: 2 ..< 5)
+        XCTAssertEqual(window.count, 160_000)
+        XCTAssertEqual(Array(window[0 ..< 6]), [7, 6, 5, 7, 6, 5])
+        XCTAssertEqual(window[159_999], 7, "159 999 = 3 * 53 333, back at the chunk's first sample")
+    }
+
+    // 12 s clip, 150 Sortformer frames: one full chunk, then a 2 s tail
+    // (frames 125...149, tail frames 0...24).
+    private static func planTwelveSeconds(_ masks: [[Float]]) -> [FluidDiarizer.EmbeddingChunkPlan] {
+        FluidDiarizer.planEmbeddingChunks(
+            audioSampleCount: 192_000, masks: masks, samplesPerMaskFrame: 1280, weSpeakerFrameCount: 589,
+        )
+    }
+
+    func testPlanTwelveSecondClipEmbedsTheTailFromItsOwnActivity() throws {
+        // Speaker 1 talks in the first 5 s, speaker 0 only in the last
+        // second (frames 138...149, tail frames 13...24). This pins what the
+        // call site hands the extractor: a mask stretched over the whole
+        // window put no activity under the tail's audio for speaker 0.
+        let plans = Self.planTwelveSeconds([
+            Self.mask(count: 150, active: 138 ..< 150),
+            Self.mask(count: 150, active: 0 ..< 63),
+        ])
+        XCTAssertEqual(plans.map(\.sampleRange), [0 ..< 160_000, 160_000 ..< 192_000])
+        guard plans.count == 2 else { return }
+        XCTAssertEqual(plans[0].slots, [1])
+        XCTAssertEqual(plans[0].masks.first?.reduce(0, +), 297)
+        XCTAssertEqual(plans[1].slots, [0])
+        let tail = try XCTUnwrap(plans[1].masks.first)
+        XCTAssertEqual(tail.count, 589)
+        XCTAssertEqual(tail[0 ..< 118].reduce(0, +), 56)
+        XCTAssertEqual(tail[62 ..< 118].reduce(0, +), 56)
+    }
+
+    func testPlanGatesTailSlotsOnActivityInsideTheAudio() {
+        // In the tail, speaker 0 has one 80 ms frame (WeSpeaker targets
+        // 0...4, five frames) and speaker 1 three frames (targets 0...14,
+        // fifteen). The bar is ten frames inside the audio. Counted over
+        // the loop-padded window, or over a stretched mask (24 frames), the
+        // blip would pass.
+        let plans = Self.planTwelveSeconds([
+            Self.mask(count: 150, active: 125 ..< 126),
+            Self.mask(count: 150, active: 0 ..< 63).enumerated().map { $0 >= 125 && $0 < 128 ? 1 : $1 },
+        ])
+        XCTAssertEqual(plans.map(\.slots), [[1], [1]])
+    }
+
+    func testPlanSkipsAChunkWithNoSlotActiveEnough() {
+        let plans = Self.planTwelveSeconds([Self.mask(count: 150, active: 0 ..< 63)])
+        XCTAssertEqual(plans.map(\.sampleRange), [0 ..< 160_000])
+    }
+
+    func testPlanSkipsATailShorterThanOneDiarizerFrame() {
+        // 100 samples past 10 s are less than one 1280-sample frame, and
+        // only one WeSpeaker frame: below the activity bar, so no model call.
+        let plans = FluidDiarizer.planEmbeddingChunks(
+            audioSampleCount: 160_100,
+            masks: [Self.mask(count: 126, active: 0 ..< 126)],
+            samplesPerMaskFrame: 1280,
+            weSpeakerFrameCount: 589,
+        )
+        XCTAssertEqual(plans.map(\.sampleRange), [0 ..< 160_000])
+    }
+
+    func testPlanStopsWhereTheMaskEnds() {
+        // Audio runs 14 s past the last mask frame: no chunk without a
+        // mask, and no slice starting past the mask's end.
+        let plans = FluidDiarizer.planEmbeddingChunks(
+            audioSampleCount: 384_000,
+            masks: [Self.mask(count: 125, active: 0 ..< 125)],
+            samplesPerMaskFrame: 1280,
+            weSpeakerFrameCount: 589,
+        )
+        XCTAssertEqual(plans.count, 1)
     }
 
     func testAggregateCentroidsL2NormalisesMean() {
