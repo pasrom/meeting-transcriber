@@ -13,6 +13,8 @@ enum LiveCaptionLanguages {
         "fr-CA", "he", "hi", "ja", "ko", "nb", "nn", "th", "tr", "zh-CN", "vi",
     ]
 
+    /// Decides coverage and the English split only. Which prompt a bare code sends is
+    /// `NemotronAsrManager.resolvedLanguageCode`, which prefers the model's own key.
     private static let aliases = ["en": "en-US", "es": "es-ES", "pt": "pt-BR", "zh": "zh-CN", "no": "nb"]
 
     static func normalized(_ code: String) -> String {
