@@ -30,8 +30,9 @@ final class PipelineController {
     /// by `installQueueForTesting`.
     private(set) var queue: PipelineQueue
 
-    private let settings: AppSettings
-    private let notifier: any AppNotifying
+    // Internal, not private: the `+MeetingNotes` extension reads both.
+    let settings: AppSettings
+    let notifier: any AppNotifying
 
     /// Decides the folder a new queue writes into, and tells the user when it is
     /// not the one they chose (see `OutputDirectoryResolver`). Built from the

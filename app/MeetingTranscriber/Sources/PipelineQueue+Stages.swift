@@ -225,6 +225,12 @@ extension PipelineQueue {
         // a job that only wants one LLM call until the marking dies with the
         // session.
         if await resumeProtocolOnly(job) { return true }
+        // A job made from a picked transcript has no audio to run on, and the
+        // same reason holds: it needs neither the engine nor the output folder.
+        if job.generatesNotesOnly == true {
+            await generateNotesOnly(job)
+            return true
+        }
 
         guard let engine, let outputDir else {
             logger.warning("Processing dependencies not configured — skipping")

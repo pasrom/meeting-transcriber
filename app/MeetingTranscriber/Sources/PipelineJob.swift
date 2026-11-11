@@ -264,6 +264,12 @@ struct PipelineJob: Identifiable, Codable {
     // swiftlint:disable:next discouraged_optional_boolean
     var autoSkipNaming: Bool?
 
+    // A job made from a transcript the user picked (Generate Meeting Notes
+    // from Transcript): it runs only the notes step, from `transcriptPath`.
+    // Optional like `autoSkipNaming`, so callers read `== true`.
+    // swiftlint:disable:next discouraged_optional_boolean
+    var generatesNotesOnly: Bool?
+
     /// The output directory this job's naming sidecars were written under last,
     /// captured when they were written.
     ///

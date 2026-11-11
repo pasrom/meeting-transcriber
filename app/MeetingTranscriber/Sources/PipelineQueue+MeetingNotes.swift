@@ -79,3 +79,112 @@ extension PipelineQueue {
         return stems.contains { FileManager.default.fileExists(atPath: folder.appendingPathComponent("\($0).md").path) }
     }
 }
+
+/// What `enqueueNotes(fromTranscripts:)` did with each file it was given.
+struct NotesFromTranscriptOutcome: Equatable {
+    /// One job per transcript, in the order given.
+    var queued: [UUID] = []
+    /// Transcripts with a `.md` of the same name next to them. Never overwritten.
+    var notesExist: [URL] = []
+    /// Not a `.txt`, missing, empty or unreadable.
+    var unreadable: [URL] = []
+
+    /// The notification for files that were not queued, nil when all were.
+    var skippedNotice: (title: String, body: String)? {
+        var parts: [String] = []
+        if !notesExist.isEmpty { parts.append("Notes already exist for \(Self.names(notesExist)).") }
+        if !unreadable.isEmpty { parts.append("Could not read \(Self.names(unreadable)).") }
+        guard !parts.isEmpty else { return nil }
+        return ("Some Transcripts Were Skipped", parts.joined(separator: " "))
+    }
+
+    private static func names(_ urls: [URL]) -> String {
+        urls.map(\.lastPathComponent).joined(separator: ", ")
+    }
+}
+
+/// Meeting notes for a transcript the user picks, typically one from before
+/// the notes were generated or from before they failed and the job is gone.
+extension PipelineQueue {
+    static let notesOnlyTranscriptUnreadableError = "The transcript could not be read"
+    static let notesOnlyNotesExistError = "Meeting notes already exist next to the transcript"
+
+    /// Queues one notes-only job per transcript. They run one after another
+    /// with the rest of the queue.
+    ///
+    /// The transcript stays where it is, under its own name: the job keeps the
+    /// raw transcript whatever the setting, and never renames by the AI title,
+    /// since both would act on a file the user picked rather than one the run
+    /// wrote. The notes go next to it as `<name>.md`, and a transcript that
+    /// already has one is left out. A name that starts with the app's
+    /// `yyyyMMdd_HHmm` stamp gives the notes their meeting date.
+    @discardableResult
+    func enqueueNotes(fromTranscripts urls: [URL]) -> NotesFromTranscriptOutcome {
+        var outcome = NotesFromTranscriptOutcome()
+        for url in urls {
+            guard url.pathExtension.lowercased() == "txt", Self.readTranscript(at: url) != nil else {
+                outcome.unreadable.append(url)
+                continue
+            }
+            guard !FileManager.default.fileExists(atPath: Self.notesURL(forTranscript: url).path) else {
+                outcome.notesExist.append(url)
+                continue
+            }
+            let stem = url.deletingPathExtension().lastPathComponent
+            var job = PipelineJob(
+                meetingTitle: stem, appName: "Transcript", mixPath: nil, appPath: nil, micPath: nil, micDelay: 0,
+                meetingStartTime: Self.meetingStart(fromStem: stem),
+                saveRawTranscriptSeparately: true, useAITitleForFilenames: false,
+            )
+            job.transcriptPath = url
+            job.namingSlug = stem
+            job.generatesNotesOnly = true
+            enqueue(job)
+            outcome.queued.append(job.id)
+        }
+        return outcome
+    }
+
+    /// The notes step of a notes-only job. Checked again here, since the job
+    /// may have waited behind others: a transcript gone or notes written in
+    /// the meantime end the job in an error rather than in a full run or an
+    /// overwrite.
+    func generateNotesOnly(_ job: PipelineJob) async {
+        guard let transcriptPath = job.transcriptPath, let transcript = Self.readTranscript(at: transcriptPath) else {
+            updateJobState(id: job.id, to: .error, error: Self.notesOnlyTranscriptUnreadableError)
+            return
+        }
+        guard !FileManager.default.fileExists(atPath: Self.notesURL(forTranscript: transcriptPath).path) else {
+            updateJobState(id: job.id, to: .error, error: Self.notesOnlyNotesExistError)
+            return
+        }
+        do {
+            try await generateProtocol(
+                jobID: job.id, transcript: transcript, title: job.meetingTitle,
+                protocolsDir: transcriptPath.deletingLastPathComponent(),
+            )
+            updateJobState(id: job.id, to: .done)
+        } catch {
+            // Cancelled with its job: nothing is left to finish.
+        }
+    }
+
+    private static func readTranscript(at url: URL) -> String? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return text
+    }
+
+    private static func notesURL(forTranscript url: URL) -> URL {
+        url.deletingPathExtension().appendingPathExtension("md")
+    }
+
+    private static let stemStampFormatter = DateFormatter.filenameStamp("yyyyMMdd_HHmm")
+
+    /// The meeting start a name like `20261030_0900_standup` records, nil
+    /// for any other name.
+    static func meetingStart(fromStem stem: String) -> Date? {
+        guard stem.count >= 13 else { return nil }
+        return stemStampFormatter.date(from: String(stem.prefix(13)))
+    }
+}

@@ -247,6 +247,7 @@
             MeetingNotesActions(
                 retry: { [weak self] id in self?.pipeline.queue.retryMeetingNotes(id: id) ?? false },
                 retryAll: { [weak self] in self?.pipeline.queue.retryAllMeetingNotes() ?? [] },
+                generate: { [weak self] urls in self?.pipeline.generateNotes(fromTranscripts: urls) },
             )
         }
 

@@ -9,6 +9,22 @@
         var retry: (UUID) -> Bool = { _ in false }
         /// `POST /v1/jobs/notes/retry`: the jobs whose retry started.
         var retryAll: () -> [UUID] = { [] }
+        /// `POST /v1/jobs/notes/generate`: what was queued and left out, nil
+        /// when nothing could be (no notes provider).
+        var generate: ([URL]) -> NotesFromTranscriptOutcome? = { _ in nil }
+    }
+
+    /// Response of `POST /v1/jobs/notes/generate`.
+    struct NotesFromTranscriptResponse: Codable, Equatable {
+        let jobIDs: [String]
+        let notesExist: [String]
+        let unreadable: [String]
+
+        init(_ outcome: NotesFromTranscriptOutcome) {
+            jobIDs = outcome.queued.map(\.uuidString)
+            notesExist = outcome.notesExist.map(\.path)
+            unreadable = outcome.unreadable.map(\.path)
+        }
     }
 
     /// `/v1` routes for meeting notes that could not be generated, kept apart
@@ -18,6 +34,7 @@
         /// `routeV1`, which asks here before reading the third component as a
         /// job id.
         static let retryAllMeetingNotesPath = "/v1/jobs/notes/retry"
+        static let generateMeetingNotesPath = "/v1/jobs/notes/generate"
 
         /// - `POST /v1/jobs/<id>/notes/retry` — generate the job's notes again
         ///   from its saved transcript. 200 with the job's status once it is
@@ -26,11 +43,19 @@
         ///   job's warnings say which); 404 for an unknown id.
         /// - `POST /v1/jobs/notes/retry` — the same for every such job, 200 with
         ///   `{"jobIDs": [...]}` of the ones queued (empty when there were none).
+        /// - `POST /v1/jobs/notes/generate` `{"paths": [...]}` — one notes-only
+        ///   job per transcript (`PipelineQueue.enqueueNotes(fromTranscripts:)`).
+        ///   200 with `NotesFromTranscriptResponse`; 400 for a body without
+        ///   paths; 409 while the notes provider is None.
         ///
         /// Nil for any other path, so `routeV1` carries on. No
         /// `Idempotency-Key`: a second call finds the job queued, not failed,
         /// and starts nothing.
         func meetingNotesResponse(_ request: HTTPRequest, path: String) -> HTTPResponse? {
+            if path == Self.generateMeetingNotesPath {
+                guard request.method == "POST" else { return HTTPResponse.notFound() }
+                return generateMeetingNotesResponse(body: request.body)
+            }
             if path == Self.retryAllMeetingNotesPath {
                 guard request.method == "POST" else { return HTTPResponse.notFound() }
                 return Self.json(["jobIDs": meetingNotes.retryAll().map(\.uuidString)])
@@ -42,6 +67,15 @@
             guard jobStatus(jobID) != nil else { return HTTPResponse.notFound() }
             guard meetingNotes.retry(jobID), let dto = jobStatus(jobID) else { return HTTPResponse.conflict() }
             return Self.json(dto)
+        }
+
+        private func generateMeetingNotesResponse(body: Data) -> HTTPResponse {
+            guard let payload = try? JSONDecoder().decode(EnqueueFilesPayload.self, from: body),
+                  !payload.paths.isEmpty else { return HTTPResponse.badRequest() }
+            guard let outcome = meetingNotes.generate(payload.paths.map { URL(fileURLWithPath: $0) }) else {
+                return HTTPResponse.conflict()
+            }
+            return Self.json(NotesFromTranscriptResponse(outcome))
         }
 
         private static func json(_ payload: some Encodable) -> HTTPResponse {

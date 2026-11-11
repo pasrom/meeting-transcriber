@@ -35,6 +35,8 @@ struct MenuBarView: View {
     /// before the setting was turned off still falls back to it when no local
     /// file exists; `JobOpenTarget` owns that rule.
     var notionExportEnabled: Bool = false
+    /// Picks transcripts and queues meeting notes for each.
+    var onGenerateNotesFromTranscripts: () -> Void = {}
 
     private var state: TranscriberState {
         status?.state ?? .idle
@@ -204,6 +206,13 @@ struct MenuBarView: View {
             Label("Process Audio/Video Files...", systemImage: "doc.badge.plus")
         }
         .keyboardShortcut("p")
+
+        Button {
+            onGenerateNotesFromTranscripts()
+        } label: {
+            Label("Generate Meeting Notes from Transcript...", systemImage: "doc.text")
+        }
+        .accessibilityIdentifier(A11yID.generateNotesFromTranscriptButton)
     }
 
     private var queueHeader: QueueHeader {

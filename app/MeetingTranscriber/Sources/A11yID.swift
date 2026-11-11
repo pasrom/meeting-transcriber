@@ -57,6 +57,7 @@ enum A11yID {
     }
 
     static let retryAllMeetingNotesButton = "retryAllMeetingNotesButton"
+    static let generateNotesFromTranscriptButton = "generateNotesFromTranscriptButton"
 
     /// Menu bar items that answer an open browser consent prompt.
     static let menuRecordPendingConsent = "menuRecordPendingConsent"

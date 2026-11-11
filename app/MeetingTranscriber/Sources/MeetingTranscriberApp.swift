@@ -207,6 +207,7 @@ struct MeetingTranscriberApp: App {
             pendingConsentApp: appState.pendingConsentApp,
             onAnswerPendingConsent: appState.answerPendingConsent,
             notionExportEnabled: appState.settings.notionExportEnabled,
+            onGenerateNotesFromTranscripts: generateNotesFromTranscripts,
         )
     }
 
@@ -449,6 +450,19 @@ struct MeetingTranscriberApp: App {
 
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         appState.pipeline.enqueueFiles(panel.urls)
+    }
+
+    /// Starts in the notes folder, where the app's transcripts are.
+    private func generateNotesFromTranscripts() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Transcripts"
+        panel.message = "Meeting notes are saved next to each transcript. Transcripts that already have notes are skipped."
+        panel.allowedContentTypes = [.plainText]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.directoryURL = appState.settings.effectiveOutputDir
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        appState.pipeline.generateNotes(fromTranscripts: panel.urls)
     }
 
     private func bringWindowToFront(id: String) {
