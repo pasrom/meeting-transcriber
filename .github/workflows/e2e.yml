@@ -65,8 +65,9 @@ jobs:
     # Cold-cache runs download multi-GB models (WhisperKit ~1 GB,
     # Parakeet ~50 MB); hot runs <10 min. The runner-home pre-warm (20 min)
     # and the `Run E2E tests` step (25 min) each carry a step-timeout so a
-    # hang surfaces as `timed_out`; the job budget holds both.
-    timeout-minutes: 50
+    # hang surfaces as `timed_out`; the job budget holds both plus the
+    # fault-injection parser tests (10 min).
+    timeout-minutes: 60
     env:
       E2E_ENABLED: "1"
 
@@ -117,3 +118,19 @@ jobs:
         run: |
           cd app/MeetingTranscriber
           swift test --filter '${{ steps.filter.outputs.filter }}|RunnerHomeIsolationTests'
+
+      # E2EMicFaultTests exists only in a -DE2E_FAULT_INJECTION build, like the
+      # type it tests, so no other `swift test` in CI ever compiled it: the
+      # parser that picks the fault for the mic-device-change and mic-stall
+      # lanes had tests that ran nowhere. Its own scratch path, because the
+      # flag changes every object file and must not turn the build the step
+      # above just made into a different one. That costs one more build of the
+      # package (about half a minute on this runner) for five parser tests.
+      - name: Run fault-injection parser tests
+        timeout-minutes: 10
+        env:
+          CFFIXED_USER_HOME: ${{ steps.home.outputs.home }}
+        run: |
+          cd app/MeetingTranscriber
+          swift test -Xswiftc -DE2E_FAULT_INJECTION --scratch-path .build-fault \
+            --filter 'E2EMicFaultTests|RunnerHomeIsolationTests'
