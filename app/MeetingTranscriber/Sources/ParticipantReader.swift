@@ -29,25 +29,99 @@ enum ParticipantReader {
         pid: pid_t,
         isTrusted: () -> Bool = { AXIsProcessTrusted() },
         makeRoot: (pid_t) -> AXUIElement = AXUIElementCreateApplication,
+        access: RosterAccess = .live,
     ) -> [String]? { // swiftlint:disable:this discouraged_optional_collection
         guard isTrusted() else {
             logger.info("Accessibility not granted, skipping the Teams participant roster")
             return nil
         }
-        return readRoster(makeRoot(pid))
+        return readRoster(makeRoot(pid), walk: RosterWalk(access: access))
+    }
+
+    // MARK: - Bounds
+
+    /// How long a single AX call into Teams may block before it gives up.
+    static let callTimeout: Float = 1
+    /// How long one whole roster read may take.
+    static let readBudget: TimeInterval = 2
+
+    /// The AX calls one roster read makes, and its clock. A seam for tests,
+    /// so the bounds can be checked against a fake tree.
+    struct RosterAccess {
+        var copyAttribute: (AXUIElement, String) -> (value: AnyObject?, error: AXError)
+        var setTimeout: (AXUIElement, Float) -> Void
+        var now: () -> TimeInterval
+
+        static var live: Self {
+            Self(
+                copyAttribute: { AXHelper.copyAttribute($0, attribute: $1) },
+                setTimeout: { _ = AXUIElementSetMessagingTimeout($0, $1) },
+                now: { ProcessInfo.processInfo.systemUptime },
+            )
+        }
+    }
+
+    /// One roster read: every attribute read of every walk goes through here,
+    /// and once the read is over each further one answers nil without a call,
+    /// so the walks still to come unwind at once.
+    ///
+    /// The read runs on the main actor, and each AX call is a synchronous
+    /// message to Teams that, left alone, blocks for the system's messaging
+    /// timeout, seconds rather than milliseconds, when Teams does not answer.
+    /// Unbounded, a hung Teams cost about sixteen of those, one per walk
+    /// entry, and a large tree thousands of calls per walk, with the menu bar
+    /// frozen meanwhile. The names are only suggestions, so giving up early
+    /// costs little. The timeout is set per element because one set on an
+    /// element does not carry over to the elements read from it, and not
+    /// process-wide, which would also shorten the app's other AX calls.
+    private final class RosterWalk {
+        private let access: RosterAccess
+        private let deadline: TimeInterval
+        /// True once the read was cut short. What a walk gathered up to then
+        /// is a part of the tree, not the roster.
+        private(set) var over = false
+
+        init(access: RosterAccess) {
+            self.access = access
+            deadline = access.now() + ParticipantReader.readBudget
+        }
+
+        func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
+            guard !over else { return nil }
+            guard access.now() < deadline else {
+                logger.info("Teams participant roster read ran out of time, giving up")
+                over = true
+                return nil
+            }
+            access.setTimeout(element, ParticipantReader.callTimeout)
+            let (value, error) = access.copyAttribute(element, name)
+            if error == .cannotComplete {
+                logger.info("Teams did not answer an accessibility call, giving up on the participant roster")
+                over = true
+            }
+            return value
+        }
     }
 
     /// Tries 3 strategies since Teams' AX structure varies between versions:
     /// 1. Look for known panel identifiers (roster-list, people-pane, etc.)
     /// 2. Find AXList/AXTable containers with multiple text rows
     /// 3. Parse window title for "Name1, Name2 | Microsoft Teams" pattern
-    private static func readRoster(_ appElement: AXUIElement) -> [String]? { // swiftlint:disable:this discouraged_optional_collection
+    ///
+    /// The title is the last choice but is read first: it costs a handful of
+    /// calls, while 1 and 2 walk the whole tree and, with the roster panel
+    /// closed, find nothing. On a large tree they would spend the read's
+    /// budget doing so and leave none for the title. A roster the read was cut
+    /// off in is dropped for the same reason: its first rows are not everyone.
+    private static func readRoster(_ appElement: AXUIElement, walk: RosterWalk) -> [String]? { // swiftlint:disable:this discouraged_optional_collection
+        let titleNames = windowTitleNames(appElement, walk: walk)
+
         // Strategy 1: Known panel identifiers
         for panelID in ["roster-list", "people-pane", "participant-list", "roster-container"] {
-            if let panel = findElementByIdentifier(appElement, identifier: panelID) {
-                let texts = extractTextValues(panel)
+            if let panel = findElementByIdentifier(appElement, identifier: panelID, walk: walk) {
+                let texts = extractTextValues(panel, walk: walk)
                 let names = filterParticipantNames(texts)
-                if !names.isEmpty {
+                if !names.isEmpty, !walk.over {
                     logger.info("Found \(names.count) participants via identifier '\(panelID)'")
                     return names
                 }
@@ -56,30 +130,39 @@ enum ParticipantReader {
 
         // Strategy 2: List/Table containers
         for containerRole in ["AXList", "AXTable", "AXOutline"] {
-            let containers = findElementsByRole(appElement, role: containerRole)
+            let containers = findElementsByRole(appElement, role: containerRole, walk: walk)
             for container in containers {
-                guard let children = AXHelper.getAttribute(container, attribute: kAXChildrenAttribute) as? [AXUIElement],
+                guard let children = walk.attribute(container, kAXChildrenAttribute) as? [AXUIElement],
                       children.count >= 2 else { continue }
 
                 var rowTexts: [String] = []
                 for child in children {
-                    let texts = extractTextValues(child, maxDepth: 5)
+                    let texts = extractTextValues(child, walk: walk, maxDepth: 5)
                     if let first = texts.first {
                         rowTexts.append(first)
                     }
                 }
                 let names = filterParticipantNames(rowTexts)
-                if names.count >= 2 {
+                if names.count >= 2, !walk.over {
                     logger.info("Found \(names.count) participants via \(containerRole) container")
                     return names
                 }
             }
         }
 
-        // Strategy 3: Window title parsing
-        let windows = findElementsByRole(appElement, role: kAXWindowRole as String, maxDepth: 1)
+        if let titleNames {
+            logger.info("Found \(titleNames.count) participants from window title")
+            return titleNames
+        }
+        logger.debug("No participant roster found in AX tree")
+        return nil
+    }
+
+    /// Strategy 3: names from a "Name1, Name2 | Microsoft Teams" window title.
+    private static func windowTitleNames(_ appElement: AXUIElement, walk: RosterWalk) -> [String]? { // swiftlint:disable:this discouraged_optional_collection
+        let windows = findElementsByRole(appElement, role: kAXWindowRole as String, walk: walk, maxDepth: 1)
         for window in windows {
-            guard let title = AXHelper.getAttribute(window, attribute: kAXTitleAttribute) as? String else {
+            guard let title = walk.attribute(window, kAXTitleAttribute) as? String else {
                 continue
             }
             if title.hasPrefix("Chat |") || title == "Microsoft Teams" { continue }
@@ -88,15 +171,10 @@ enum ParticipantReader {
                 if meetingPart.contains(",") {
                     let parts = meetingPart.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                     let names = filterParticipantNames(parts)
-                    if names.count >= 2 {
-                        logger.info("Found \(names.count) participants from window title")
-                        return names
-                    }
+                    if names.count >= 2 { return names }
                 }
             }
         }
-
-        logger.debug("No participant roster found in AX tree")
         return nil
     }
 
@@ -161,59 +239,63 @@ enum ParticipantReader {
 
     // MARK: - AX Helpers
 
-    private static func findElementByIdentifier(_ element: AXUIElement, identifier: String, depth: Int = 0, maxDepth: Int = 25) -> AXUIElement? {
+    private static func findElementByIdentifier(
+        _ element: AXUIElement, identifier: String, walk: RosterWalk, depth: Int = 0, maxDepth: Int = 25,
+    ) -> AXUIElement? {
         if depth > maxDepth { return nil }
 
-        if let eid = AXHelper.getAttribute(element, attribute: "AXIdentifier") as? String, eid == identifier {
+        if let eid = walk.attribute(element, "AXIdentifier") as? String, eid == identifier {
             return element
         }
 
-        guard let children = AXHelper.getAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] else {
+        guard let children = walk.attribute(element, kAXChildrenAttribute) as? [AXUIElement] else {
             return nil
         }
         for child in children {
-            if let found = findElementByIdentifier(child, identifier: identifier, depth: depth + 1, maxDepth: maxDepth) {
+            if let found = findElementByIdentifier(child, identifier: identifier, walk: walk, depth: depth + 1, maxDepth: maxDepth) {
                 return found
             }
         }
         return nil
     }
 
-    private static func findElementsByRole(_ element: AXUIElement, role: String, depth: Int = 0, maxDepth: Int = 25) -> [AXUIElement] {
+    private static func findElementsByRole(
+        _ element: AXUIElement, role: String, walk: RosterWalk, depth: Int = 0, maxDepth: Int = 25,
+    ) -> [AXUIElement] {
         if depth > maxDepth { return [] }
 
         var results: [AXUIElement] = []
 
-        if let elRole = AXHelper.getAttribute(element, attribute: kAXRoleAttribute) as? String, elRole == role {
+        if let elRole = walk.attribute(element, kAXRoleAttribute) as? String, elRole == role {
             results.append(element)
         }
 
-        if let children = AXHelper.getAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] {
+        if let children = walk.attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
             for child in children {
-                results.append(contentsOf: findElementsByRole(child, role: role, depth: depth + 1, maxDepth: maxDepth))
+                results.append(contentsOf: findElementsByRole(child, role: role, walk: walk, depth: depth + 1, maxDepth: maxDepth))
             }
         }
         return results
     }
 
-    private static func extractTextValues(_ element: AXUIElement, depth: Int = 0, maxDepth: Int = 10) -> [String] {
+    private static func extractTextValues(_ element: AXUIElement, walk: RosterWalk, depth: Int = 0, maxDepth: Int = 10) -> [String] {
         if depth > maxDepth { return [] }
 
         var texts: [String] = []
 
-        if let role = AXHelper.getAttribute(element, attribute: kAXRoleAttribute) as? String,
+        if let role = walk.attribute(element, kAXRoleAttribute) as? String,
            role == kAXStaticTextRole as String {
             for attr in [kAXValueAttribute, kAXTitleAttribute] as [String] {
-                if let val = AXHelper.getAttribute(element, attribute: attr) as? String {
+                if let val = walk.attribute(element, attr) as? String {
                     let trimmed = val.trimmingCharacters(in: .whitespaces)
                     if !trimmed.isEmpty { texts.append(trimmed) }
                 }
             }
         }
 
-        if let children = AXHelper.getAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] {
+        if let children = walk.attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
             for child in children {
-                texts.append(contentsOf: extractTextValues(child, depth: depth + 1, maxDepth: maxDepth))
+                texts.append(contentsOf: extractTextValues(child, walk: walk, depth: depth + 1, maxDepth: maxDepth))
             }
         }
         return texts
