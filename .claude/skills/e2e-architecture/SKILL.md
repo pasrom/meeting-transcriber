@@ -46,6 +46,16 @@ PRs are excluded from the self-hosted runner.
 - Exercises the production code path end-to-end including TCC, audio
   routing, CATapDescription tap, and the dual-track recorder/diarizer
   handoff.
+- Every lane that goes through `run_one_meeting` also asserts that the
+  relocated `recordings/<stem>_mix.wav` is still there 5 s after `done` while
+  recording retention is off (issue #723). In CI the app is launched with a
+  retention period of 0 days (a launch argument), so the switch is all that
+  keeps the recording and a pass that ignores it turns the lane red; outside
+  CI the period stays the host's, since a broken switch would then delete the
+  developer's own listed recordings, and the check only catches a delete that
+  ignores the period too. A host with retention switched on skips the check
+  and logs that it did. Not covered: the `--mic-stall` lane, and a pass that
+  starts more than 5 s after `done`.
 - The `--naming-escape` lane is the only automated cover for "the user pressed
   Escape on the naming dialog" (issue #577, where Escape used to commit the
   auto-matched names). It parks a job at naming, fronts the app, posts a real

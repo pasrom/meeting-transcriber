@@ -886,8 +886,9 @@ delete_dev_default() {
 # container copy is only a fallback for a host where the standard plist has not
 # been created yet; a plain `defaults read <bundle> <key>` cannot stand in for
 # either, because cfprefsd redirects it into the container whenever one exists.
-# Empty when unset. Only e2e-app.sh calls this, for a diagnostic log line rather
-# than an assertion; it exists so a reader does not re-derive the container
+# Empty when unset. Only e2e-app.sh calls this: for diagnostic log lines, and to
+# skip the retention default check on a host that switched retention on (see
+# `retention_default_verdict`). It exists so a reader does not re-derive the container
 # redirect by hand. Mutating a dev default needs `write_dev_default`; this is
 # for verification and readback only.
 read_dev_default_effective() {
@@ -2363,4 +2364,42 @@ e2e_write_diagnostics() {
         done < <(find "$crash_dir" -maxdepth 1 -type f -name 'MeetingTranscriber*.ips' -newer "$marker" 2>/dev/null)
     fi
     return 0
+}
+
+# --- recording retention default ---------------------------------------------
+#
+# Recording retention (issue #723) is off unless the user switches it on, and a
+# finished job then keeps its relocated audio. Unit tests pin the default and
+# the policy; the meeting lanes of e2e-app.sh pin the production chain with
+# this: the retention pass that runs when a job reaches done, against the app's
+# real settings and output folder. In CI the lane runs with a period of 0 days,
+# so the switch is all that keeps the recording (see where e2e-app.sh launches
+# the app). The pass runs on its own right after done and, switched off, logs
+# nothing to wait for, so the file is looked at again after `grace_s`; a pass
+# that starts later than that goes unseen.
+
+# Whether `defaults read` printed a value the app reads as on
+# (`UserDefaults.flag`): any integer but 0, or yes/true in any case. A string
+# "2" reads as unset in the app but prints like the integer 2; it counts as on
+# here, so the doubt goes to skipping rather than to a false red.
+retention_reads_as_on() {
+    case "$1" in
+        [Yy][Ee][Ss] | [Tt][Rr][Uu][Ee]) return 0 ;;
+        '' | *[!0-9-]* | -) return 1 ;;
+    esac
+    [ "$1" -ne 0 ] 2>/dev/null
+}
+
+# Prints one verdict and returns 0, so the caller decides what fails:
+#   skip     retention is on for this host (`retention_reads_as_on`):
+#            deleting is what the user asked for
+#   missing  the recording was not there when the job finished
+#   deleted  it was there, and gone `grace_s` later
+#   kept     it was there both times
+retention_default_verdict() {
+    local enabled="$1" mix="$2" grace_s="$3"
+    if retention_reads_as_on "$enabled"; then echo skip; return 0; fi
+    if [ ! -f "$mix" ]; then echo missing; return 0; fi
+    sleep "$grace_s"
+    if [ -f "$mix" ]; then echo kept; else echo deleted; fi
 }
