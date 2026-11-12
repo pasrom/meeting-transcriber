@@ -768,6 +768,17 @@ jobs:
           RUN_QUALITY_TESTS: "1"
           QUALITY_RESULTS_PATH: ${{ github.workspace }}/quality-results.json
         run: cd app/MeetingTranscriber && swift test --filter QualityBaselineGateTests
+      # The post-hoc WeSpeaker embeddings in Sortformer and Nemotron mode are
+      # what lets those modes recognise known voices. Their only end-to-end
+      # test is gated on RUN_QUALITY_TESTS like the suite above but was in no
+      # filter, so it ran nowhere. A separate invocation, without
+      # QUALITY_RESULTS_PATH and after the gate: it measures nothing, and it
+      # must not be able to add rows to or reorder the run the gate reads.
+      - name: Check Sortformer and Nemotron speaker embeddings
+        timeout-minutes: 10
+        env:
+          RUN_QUALITY_TESTS: "1"
+        run: cd app/MeetingTranscriber && swift test --filter SortformerEmbeddingsE2ETests
       # No cancel-on-failure in this job: it would cancel the sanitizer legs,
       # and sanitizer-gate counts a cancelled leg as a sanitizer failure, so a
       # quality regression or a transport error here read as a red sanitizer
