@@ -23,8 +23,7 @@ struct AdvancedSettingsView: View {
     @State private var micPermission: AVAuthorizationStatus = .notDetermined
     @State private var screenRecordingOK = false
     @State private var accessibilityOK = false
-    @State private var lastExportFile: String?
-    @State private var lastExportError: String?
+    @State private var lastExportStatus: DiagnosticExportStatus?
     /// True while a `DiagnosticExporter.export` call is running off-main.
     /// Used to dim the button and surface a spinner so a 50-200 MB persistent
     /// log doesn't look like the app froze.
@@ -87,15 +86,8 @@ struct AdvancedSettingsView: View {
                             .controlSize(.small)
                     }
                 }
-                if let file = lastExportFile {
-                    Text("Exported to: \(file)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if let err = lastExportError {
-                    Text("Export failed: \(err)")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                if let lastExportStatus {
+                    DiagnosticExportStatusText(status: lastExportStatus)
                 }
 
                 #if !APPSTORE
@@ -160,18 +152,17 @@ struct AdvancedSettingsView: View {
         )
 
         isExportingDiagnostics = true
-        // The persistent-log file source can be 50-200 MB and reads via
-        // `String(contentsOf:)` + `split(separator:)` — and the OSLogStore
-        // fallback's `getEntries` is famously slow on the main actor. Detach
+        // The persistent-log file source can be 50-200 MB and is decoded and
+        // split into lines in one go, and the OSLogStore fallback's
+        // `getEntries` is famously slow on the main actor. Detach
         // so the Settings UI stays responsive while the export runs.
         Task.detached(priority: .userInitiated) {
             let result = Result { try DiagnosticExporter.export(to: outURL, info: info) }
             await MainActor.run {
                 isExportingDiagnostics = false
+                lastExportStatus = DiagnosticExportStatus(fileName: outURL.lastPathComponent, outcome: result)
                 switch result {
                 case let .success(count):
-                    lastExportFile = outURL.lastPathComponent
-                    lastExportError = nil
                     NSWorkspace.shared.activateFileViewerSelecting([outURL])
                     let exportedFile = outURL.lastPathComponent
                     logger.info(
@@ -179,8 +170,6 @@ struct AdvancedSettingsView: View {
                     )
 
                 case let .failure(error):
-                    lastExportFile = nil
-                    lastExportError = error.localizedDescription
                     logger.error(
                         "diagnostics_export_failed error=\(error.localizedDescription, privacy: .public)",
                     )
