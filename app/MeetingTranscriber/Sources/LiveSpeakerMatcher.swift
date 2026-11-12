@@ -30,7 +30,8 @@ protocol LiveSpeakerMatching: Sendable {
 ///
 /// **Vector-space note:** Both the batch path
 /// (`FluidDiarizer.extractSortformerEmbeddings`) and this live path load
-/// the same `wespeaker_v2` CoreML model via `DiarizerModels.load()`. The
+/// the same `wespeaker_v2` CoreML model via
+/// `FluidOfflineProcessor.loadDiarizerModels(computeUnits:)`. The
 /// embeddings are byte-for-byte compatible with anything already in
 /// `speakers.json` — no re-enrollment needed when this ships.
 ///
@@ -103,11 +104,7 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
                 return model
             },
             diarizerModels: { computeUnits in
-                // Without an explicit configuration FluidAudio picks `.all`
-                // outside CI. It reads only `computeUnits` from it.
-                let configuration = MLModelConfiguration()
-                configuration.computeUnits = computeUnits
-                return try await DiarizerModels.load(configuration: configuration)
+                try await FluidOfflineProcessor.loadDiarizerModels(computeUnits: computeUnits)
             },
         )
     }
