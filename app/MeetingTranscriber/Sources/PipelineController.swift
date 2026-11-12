@@ -178,6 +178,8 @@ final class PipelineController {
         // says what reading the identity afterwards would cost.
         let replaced = queueWasBuiltHere ? queue : nil
         guard let built = makeQueue() else { return }
+        // Before the restore, which at once announces a job waiting for names and reports one it finishes.
+        configureCallbacks(on: built)
         if let replaced {
             built.adoptJobs(of: replaced)
             replaced.retire()
@@ -192,7 +194,6 @@ final class PipelineController {
         // `testAQueueBuiltWithoutBeingInstalledDoesNotDisarmTheFolderChange`.
         queueBuiltFromBookmark = settings.customOutputDirBookmark
         builtQueue = built
-        configureCallbacks()
         onQueueReplaced?(queue)
     }
 
@@ -379,7 +380,8 @@ final class PipelineController {
         }
     }
 
-    func configureCallbacks() {
+    func configureCallbacks(on target: PipelineQueue? = nil) {
+        let queue = target ?? queue
         queue.onNotionExportFinished = { [notifier] in notifier.notifyNotionExport(job: $0, failureReason: $1) }
         queue.onJobStateChange = { [notifier] job, _, newState in
             switch newState {
