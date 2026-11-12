@@ -171,7 +171,7 @@ cd meeting-transcriber
 |------------|-------------|-------|
 | Screen Recording | Optional — sharpens the meeting *title* and acts as a fallback for the audio tap. Detection itself works without it | System Settings → Privacy & Security |
 | Microphone | Mic recording | Prompted on first use |
-| Accessibility | Optional — reads Teams participant names | System Settings → Privacy & Security |
+| Accessibility | Optional — reads Teams participant names. Not used by the App Store build | System Settings → Privacy & Security |
 | Audio Recording | App audio capture (the meeting app's own audio). Screen Recording is accepted as a fallback; with neither, the app track is silent | System Settings → Privacy & Security |
 
 ---
@@ -200,7 +200,7 @@ A red exclamation mark in the bottom-right corner is overlaid on top of the curr
 
 - **Microphone** — denied, or granted but the capture engine can't open the device
 - **Screen Recording** — denied, or granted but `CGWindowListCopyWindowInfo` returns no window titles (TCC state out of sync)
-- **Accessibility** — denied, or granted but the AX API refuses to read Teams participant info
+- **Accessibility** — denied, or granted but the AX API refuses to read Teams participant info (not checked in the App Store build, which does not use it)
 
 The health check distinguishes *denied* from *broken*. "Broken" usually means the permission is toggled on in System Settings but macOS hasn't actually wired it through — the fix is to toggle the permission off and on again for Meeting Transcriber under **System Settings → Privacy & Security**. Open the menu bar dropdown to see which specific permission is affected; a notification is also posted when the state changes.
 
