@@ -99,6 +99,7 @@ flowchart TD
 - **Update checker** — Notifies when a new version is available
 - **Background processing** — PipelineQueue runs transcription and meeting notes generation independently from recording
 - **Record-only mode** — Skip the entire post-recording pipeline and drop dual-source recordings + a metadata sidecar into the output folder, for external/fleet processing (e.g. a separate GPU host)
+- **Notion export** — Optionally sends the generated meeting notes to a Notion database in the background once a job finishes, so a slow export never holds up the next recording; the local Markdown file is kept by default, speaker names can be sent as tags, and a failed export can be retried from the menu
 - **Local automation API** (Homebrew build): drive the pipeline headlessly over localhost HTTP. POST an audio file, get a diarized transcript back. See [`docs/automation-api.md`](docs/automation-api.md)
 - **Stream Deck and hotkey control** (Homebrew build): start/stop watching from a Stream Deck key, Shortcut, Raycast or any launcher. See [`docs/stream-deck.md`](docs/stream-deck.md)
 - **Distribution** — Install via Homebrew Cask or build from source
@@ -253,7 +254,7 @@ Open Settings via the menu bar item or ⌘,.
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
 | **Transcription** | ASR engine (WhisperKit / Parakeet) and per-engine options (model incl. a custom WhisperKit model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
 | **Speakers** | Diarization, whether the naming window opens by itself, how long unnamed meetings wait before they get the automatic names, mic speaker name, known voices, recognition stats |
-| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, notes language, output folder, custom prompt |
+| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, notes language, output folder, custom prompt, Notion export |
 | **Advanced** | Permissions status, diagnostics, Local Automation API |
 | **About** | Version and build info, ffmpeg status, update checks |
 

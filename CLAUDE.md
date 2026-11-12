@@ -13,7 +13,8 @@ app/MeetingTranscriber/    # Swift macOS menu-bar app (SPM)
                            #   (99+ langs) + ParakeetEngine (25 EU langs, via FluidAudio).
                            #   Diarization + VAD: FluidDiarizer (offline, Sortformer, Nemotron 3), FluidVAD,
                            #   SpeakerMatcher. Recording: DualSourceRecorder (app audio + mic).
-                           #   Post-processing: PipelineQueue (transcribe -> diarize -> protocol).
+                           #   Post-processing: PipelineQueue (transcribe -> diarize -> protocol,
+                           #   optional Notion export).
                            #   Live captions overlay + StreamingTranscriber. Settings UI
                            #   (SettingsView + Settings/). Protocol generation:
                            #   ClaudeCLIProtocolGenerator (#if !APPSTORE) / OpenAIProtocolGenerator.
@@ -40,8 +41,8 @@ speakers.json / .env       # Runtime voice profiles + env vars (gitignored)
 ## Pipeline
 
 ```
-Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → [WhisperKit | Parakeet] per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
-Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → [WhisperKit | Parakeet] → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
+Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → [WhisperKit | Parakeet] per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol (+ optional Notion export)
+Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → [WhisperKit | Parakeet] → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol (+ optional Notion export)
 ```
 
 ## Setup

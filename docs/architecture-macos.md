@@ -493,6 +493,7 @@ Full design rationale (why the two remedies can't compose, the model provisionin
 - **Model:** `openai_whisper-large-v3-v20240930_turbo` (CoreML/ANE)
 - **Pre-loading:** Model downloaded and loaded at app launch (when selected)
 - **Lazy fallback:** `ensureModel()` loads on-demand if not ready
+- **Custom models:** Settings → Transcription → Model → Custom model… loads a fine-tune instead of a stock variant, either from another Hugging Face repository (`WhisperKitModelOrigin.hub`, fetched into WhisperKit's download cache on first use) or from a folder picked on disk (`.localFolder`, never downloaded; `bookmark` keeps sandboxed access across relaunches). `WhisperKitModelSource`/`WhisperKitModelMigration`/`WhisperKitLocalSnapshot` resolve the variant identity and local snapshot; `WhisperKitLoadFailureReason` surfaces why a load failed under the model status
 
 ### Parakeet Engine
 
