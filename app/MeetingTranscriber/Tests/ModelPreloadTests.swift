@@ -63,8 +63,9 @@ final class ModelPreloadTests: XCTestCase {
     /// `--parallel` can run those in separate worker processes, so a cold cache
     /// (a fresh per-runner test home on the self-hosted Mini) would otherwise
     /// race on the download.
-    /// Mirrors `LiveSpeakerMatcher`'s own load.
+    /// Mirrors `LiveSpeakerMatcher`'s own load, with the compute units every
+    /// production path uses, so the warm-up compiles the routing that ships.
     func testPreloadDiarizerModels() async throws {
-        _ = try await DiarizerModels.load()
+        _ = try await FluidOfflineProcessor.loadDiarizerModels(computeUnits: FluidOfflineProcessor.computeUnits)
     }
 }
