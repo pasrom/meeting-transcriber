@@ -600,10 +600,10 @@ jobs:
       # launch recovery re-mixes the orphan into the pipeline and a job reaches
       # done. Reverting the recovery wiring in DualSourceRecorder/PipelineController
       # makes this fail (the orphan is deleted by launch cleanup, no job lands).
-      # Same dispatch-only driver as e2e-crash-recovery.yml, wired here as an
-      # always-run regression guard. Kept LAST among the test lanes: it
-      # SIGKILLs + relaunches the shared bundle, so running it after every
-      # other lane means that teardown can't disrupt them. `--no-build` reuses
+      # Same driver as e2e-crash-recovery.yml, which has no schedule, so this
+      # step is the lane's nightly and main-push coverage. Kept LAST among the
+      # test lanes: it SIGKILLs + relaunches the shared bundle, so running it
+      # after every other lane means that teardown can't disrupt them. `--no-build` reuses
       # the bundle the build step built + signed.
       - name: "Run crash-recovery E2E (issue #379 part 3)"
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
