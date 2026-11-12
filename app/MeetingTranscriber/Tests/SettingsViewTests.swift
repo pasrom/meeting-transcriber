@@ -512,7 +512,8 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         let body = try makeAdvanced().inspect()
         XCTAssertNoThrow(try body.find(text: "Screen Recording"))
         XCTAssertNoThrow(try body.find(text: "Microphone"))
-        XCTAssertNoThrow(try body.find(text: "Accessibility"))
+        // The Accessibility row depends on the build variant; see
+        // `AdvancedSettingsAccessibilityRowTests`.
     }
 
     #if !APPSTORE

@@ -59,6 +59,7 @@ enum A11yID {
     static let recordOnlyBanner = "recordOnlyBanner"
     /// Settings → Advanced: the line saying where the diagnostics export went.
     static let diagnosticExportStatus = "diagnosticExportStatus"
+    static let accessibilityPermissionRow = "accessibilityPermissionRow"
     static let transcriptionSection = "transcriptionSection"
     static let unloadModelsWhenIdleToggle = "unloadModelsWhenIdleToggle"
     static let vocabularySection = "vocabularySection"

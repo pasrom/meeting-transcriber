@@ -22,12 +22,15 @@
 
     extension PermissionStatus {
         /// Stable wire string for the RPC `/state.permissionHealth` snapshot.
+        /// `"notApplicable"` is never emitted: only the APPSTORE build produces
+        /// that status, and this file is `#if !APPSTORE`.
         var rpcValue: String {
             switch self {
             case .healthy: "healthy"
             case .denied: "denied"
             case .broken: "broken"
             case .notDetermined: "notDetermined"
+            case .notApplicable: "notApplicable"
             }
         }
     }
