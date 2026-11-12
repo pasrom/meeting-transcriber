@@ -43,7 +43,7 @@ extension FluidDiarizer {
         timeline: DiarizerTimeline,
     ) async throws -> [String: [Float]] {
         if sortformerEmbeddingModels == nil {
-            sortformerEmbeddingModels = try await DiarizerModels.load()
+            sortformerEmbeddingModels = try await loadEmbeddingModels(FluidOfflineProcessor.computeUnits)
             embeddingLogger.info("WeSpeaker (wespeaker_v2) loaded for Sortformer post-hoc embeddings")
         }
         // swiftlint:disable:next force_unwrapping

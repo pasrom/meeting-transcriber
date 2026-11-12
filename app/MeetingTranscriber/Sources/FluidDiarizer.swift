@@ -78,6 +78,11 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
     /// `private` because the extension lives in a separate file (codecov-
     /// ignored — see `.codecov.yml`).
     var sortformerEmbeddingModels: DiarizerModels?
+    /// Loads those WeSpeaker models for the requested compute units.
+    /// Injectable so a test can see which units the post-hoc embeddings ask
+    /// for without loading a model. Not `private` for the same reason as
+    /// `sortformerEmbeddingModels`.
+    let loadEmbeddingModels: (MLComputeUnits) async throws -> DiarizerModels
 
     var isAvailable: Bool {
         true
@@ -96,11 +101,15 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
         makeNemotronDiarizer: @escaping (MLComputeUnits) async throws -> (any NemotronStreamingDiarizing, MLComputeUnits) = { computeUnits in
             try await FluidDiarizer.loadNemotronDiarizer(computeUnits: computeUnits)
         },
+        loadEmbeddingModels: @escaping (MLComputeUnits) async throws -> DiarizerModels = { computeUnits in
+            try await FluidOfflineProcessor.loadDiarizerModels(computeUnits: computeUnits)
+        },
     ) {
         self.mode = mode
         self.offlineProcessor = offlineProcessor ?? FluidOfflineProcessor(tuning: tuning)
         self.makeSortformerDiarizer = makeSortformerDiarizer
         self.makeNemotronDiarizer = makeNemotronDiarizer
+        self.loadEmbeddingModels = loadEmbeddingModels
     }
 
     /// Normalize FluidAudio's "Speaker 0" format to "SPEAKER_0".
@@ -163,8 +172,9 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
     /// run after a model or OS update pays a one-time compile for the new
     /// routing. FluidAudio forwards an explicit value to Core ML unchanged;
     /// only `nil` goes through its own `recommendedComputeUnits` choice.
-    /// This is a speed choice, not a crash fix: the WeSpeaker embeddings that
-    /// follow in Sortformer mode keep FluidAudio's default routing.
+    /// This is a speed choice, not a crash fix. The WeSpeaker embeddings that
+    /// follow in Sortformer mode take their units from
+    /// `FluidOfflineProcessor.computeUnits` instead.
     static let sortformerComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
 
     /// Log label for compute units read back from a loaded model.
@@ -490,14 +500,31 @@ struct FluidOfflineProcessor: OfflineDiarizationProcessing {
     /// Neural Engine route retains hardware acceleration without invoking the
     /// crash-prone GPU path. FluidAudio 0.15.5+ reads only `computeUnits` from
     /// this configuration; older releases silently use `.all` instead.
-    /// `LiveSpeakerMatcher` loads the same embedding model and reads
-    /// `computeUnits` too, so the two paths cannot drift apart.
+    /// `LiveSpeakerMatcher` and the Sortformer / Nemotron 3 post-hoc
+    /// embeddings load the same embedding model and read `computeUnits` too,
+    /// so the three paths cannot drift apart.
     static let computeUnits: MLComputeUnits = .cpuAndNeuralEngine
 
-    static func makeModelConfiguration() -> MLModelConfiguration {
+    static func makeModelConfiguration(
+        computeUnits units: MLComputeUnits = Self.computeUnits,
+    ) -> MLModelConfiguration {
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = computeUnits
+        configuration.computeUnits = units
         return configuration
+    }
+
+    /// FluidAudio's segmentation + WeSpeaker embedding models, loaded with
+    /// explicit compute units. Without a configuration FluidAudio picks `.all`
+    /// outside CI and `.cpuAndNeuralEngine` inside it; it reads only
+    /// `computeUnits` from the configuration. `load` is the FluidAudio call,
+    /// injectable so a test can see the configuration it receives.
+    static func loadDiarizerModels(
+        computeUnits units: MLComputeUnits,
+        load: (MLModelConfiguration) async throws -> DiarizerModels = { configuration in
+            try await DiarizerModels.load(configuration: configuration)
+        },
+    ) async throws -> DiarizerModels {
+        try await load(makeModelConfiguration(computeUnits: units))
     }
 
     mutating func prepare(numSpeakers: Int?) async throws {

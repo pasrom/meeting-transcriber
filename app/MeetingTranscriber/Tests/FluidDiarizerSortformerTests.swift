@@ -1,6 +1,7 @@
 import CoreML
 import FluidAudio
 @testable import MeetingTranscriber
+import os
 import XCTest
 
 final class FluidDiarizerSortformerTests: XCTestCase {
@@ -22,6 +23,38 @@ final class FluidDiarizerSortformerTests: XCTestCase {
     func testFluidDiarizerDefaultModeIsOffline() {
         let diarizer = FluidDiarizer()
         XCTAssertEqual(diarizer.mode, .offline)
+    }
+
+    /// The post-hoc embeddings load the same WeSpeaker model as the offline
+    /// pipeline and the live matcher, so they must ask for the same compute
+    /// units. Without an explicit configuration FluidAudio picks `.all`
+    /// outside CI, which lets Core ML route the model through MPSGraph,
+    /// whose abort takes the whole process down; CI, where FluidAudio picks
+    /// `.cpuAndNeuralEngine`, would also test a configuration that never ships.
+    /// Nemotron 3 mode reaches the same load through the same function.
+    func testEmbeddingModelLoadUsesSharedComputeUnits() async {
+        struct LoadNotAttempted: Error {}
+        let requested = OSAllocatedUnfairLock<[MLComputeUnits]>(initialState: [])
+        // Labelled on purpose: as a trailing closure it would bind to the
+        // first closure parameter, `makeSortformerDiarizer`, and the real
+        // loader would run.
+        // swiftlint:disable:next trailing_closure
+        let diarizer = FluidDiarizer(mode: .sortformer, loadEmbeddingModels: { units in
+            requested.withLock { $0.append(units) }
+            throw LoadNotAttempted()
+        })
+        // The load runs before the timeline is read, so an empty one is enough.
+        let timeline = DiarizerTimeline(config: FluidDiarizer.nemotronTimelineConfig)
+        do {
+            _ = try await diarizer.extractSortformerEmbeddings(audio: [], timeline: timeline)
+            XCTFail("the failing loader must abort the extraction")
+        } catch {
+            XCTAssertTrue(error is LoadNotAttempted, "unexpected error: \(error)")
+        }
+        XCTAssertEqual(
+            requested.withLock { $0 }, [FluidOfflineProcessor.computeUnits],
+            "Sortformer embeddings must load WeSpeaker with the offline pipeline's compute units",
+        )
     }
 
     func testFluidDiarizerAcceptsSortformerMode() {
