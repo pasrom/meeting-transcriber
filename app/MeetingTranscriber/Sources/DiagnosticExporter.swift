@@ -28,7 +28,7 @@ enum DiagnosticExporter {
     private static let lineStampLength = 31
 
     /// Cached `DateFormatter` for that prefix. Reused for every line in
-    /// `exportFromFile`'s filter loop: at thousands of lines the per-call
+    /// `readExcerpt`'s filter loop: at thousands of lines the per-call
     /// allocation cost matters. Locale-pinned to `en_US_POSIX` so the fixed
     /// format parses the same under any user locale; the offset is in the
     /// line, so no time zone is assumed.
@@ -72,47 +72,67 @@ enum DiagnosticExporter {
         )
     }
 
+    /// A source the export falls back to when the diagnostic log file has
+    /// nothing for the window. `read` returns the entries from `since` on,
+    /// oldest first; `name` identifies the source in the export. Injectable
+    /// so tests never touch the real `OSLogStore`.
+    struct LogSource: Sendable {
+        let name: String
+        let read: @Sendable (_ since: Date) throws -> [LogLine]
+    }
+
+    /// One entry from a `LogSource`: when it was logged, and the line the
+    /// export writes for it.
+    struct LogLine: Sendable, Equatable {
+        let date: Date
+        let text: String
+    }
+
+    /// The lines of the diagnostic log file that fall inside the window.
+    /// `entryCount` counts only the lines that start an entry; `lines` also
+    /// holds their continuation lines and any prelude before the first entry.
+    struct FileExcerpt {
+        let lines: [Substring]
+        let entryCount: Int
+    }
+
     /// Reads the last `windowSeconds` of unified-log entries for our subsystems
     /// and writes them to `outputURL`. Returns the number of body lines
     /// written (excluding the header): for the file source that counts the
     /// continuation lines of a multi-line entry too. Prefers the persistent
-    /// file source when available, falls back to `OSLogStore`.
-    @available(macOS 12, *)
+    /// file source when available, falls back to `fallback`.
     static func export(
         to outputURL: URL,
         info: HeaderInfo,
         windowSeconds: TimeInterval = 1800,
+        logDirectory: URL = PersistentDiagnosticLog.logDirectory,
+        fallback: LogSource = .osLogStore,
+        now: Date = Date(),
     ) throws -> Int {
-        let todayFile = PersistentDiagnosticLog.logDirectory
-            .appendingPathComponent(PersistentDiagnosticLog.logFileName(for: Date()))
+        let cutoff = now.addingTimeInterval(-windowSeconds)
+        let todayFile = logDirectory
+            .appendingPathComponent(PersistentDiagnosticLog.logFileName(for: now))
         if FileManager.default.fileExists(atPath: todayFile.path) {
-            return try exportFromFile(
-                sourceFile: todayFile,
-                to: outputURL,
-                info: info,
-                windowSeconds: windowSeconds,
-            )
+            let excerpt = (try? readExcerpt(of: todayFile, cutoff: cutoff)) ?? FileExcerpt(lines: [], entryCount: 0)
+            try write(body: excerpt.lines.joined(separator: "\n"), info: info, to: outputURL)
+            return excerpt.lines.count
         }
-        return try exportFromOSLogStore(
-            to: outputURL,
-            info: info,
-            windowSeconds: windowSeconds,
-        )
+        let lines = try fallback.read(cutoff)
+        try write(body: lines.map(\.text).joined(separator: "\n"), info: info, to: outputURL)
+        return lines.count
     }
 
-    /// File-source path: read the persistent diagnostic-log file, tail-filter
-    /// to entries within `windowSeconds`, write header + body to `outputURL`.
-    /// Returns the number of body lines (excludes header).
-    static func exportFromFile(
-        sourceFile: URL,
-        to outputURL: URL,
-        info: HeaderInfo,
-        windowSeconds: TimeInterval,
-    ) throws -> Int {
-        let header = makeHeader(info)
+    /// Header, then `body`. The body is joined by the caller straight from
+    /// its lines, so a 50-200 MB file source is not copied line by line.
+    private static func write(body: String, info: HeaderInfo, to outputURL: URL) throws {
+        try (makeHeader(info) + "\n" + body).write(to: outputURL, atomically: true, encoding: .utf8)
+    }
 
-        let raw = (try? String(contentsOf: sourceFile, encoding: .utf8)) ?? ""
-        let cutoff = Date().addingTimeInterval(-windowSeconds)
+    /// Reads the persistent diagnostic-log file and keeps the lines that fall
+    /// inside the window starting at `cutoff`. Throws when the file cannot be
+    /// read.
+    static func readExcerpt(of sourceFile: URL, cutoff: Date) throws -> FileExcerpt {
+        let raw = try String(contentsOf: sourceFile, encoding: .utf8)
         // omittingEmptySubsequences: false so blank lines in the source are
         // preserved verbatim — they may be intentional separators in the
         // streamed log output and dropping them changes the file shape.
@@ -123,47 +143,36 @@ enum DiagnosticExporter {
         // one (continuation lines of a multi-line message, blanks) belong to
         // the entry before them and share its fate; anything before the first
         // entry is prelude and is kept.
+        guard !raw.isEmpty else { return FileExcerpt(lines: [], entryCount: 0) }
         var keepingEntry = true
-        let kept: [Substring] = raw.isEmpty
-            ? []
-            : raw.split(separator: "\n", omittingEmptySubsequences: false).filter { line in
-                if let lineDate = parseLineDate(line) {
-                    keepingEntry = lineDate >= cutoff
-                }
-                return keepingEntry
+        var kept: [Substring] = []
+        var entryCount = 0
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+            if let lineDate = parseLineDate(line) {
+                keepingEntry = lineDate >= cutoff
+                if keepingEntry { entryCount += 1 }
             }
-        let body = kept.joined(separator: "\n")
-        try (header + "\n" + body).write(to: outputURL, atomically: true, encoding: .utf8)
-        return kept.count
+            if keepingEntry { kept.append(line) }
+        }
+        return FileExcerpt(lines: kept, entryCount: entryCount)
     }
 
-    /// OSLogStore-source path (legacy / App Store fallback).
-    @available(macOS 12, *)
-    static func exportFromOSLogStore(
-        to outputURL: URL,
-        info: HeaderInfo,
-        windowSeconds: TimeInterval,
-    ) throws -> Int {
+    /// Reads this process's entries for our subsystems from `OSLogStore`,
+    /// formatted one per line. Used by the App Store build, which has no
+    /// streamer, and whenever the diagnostic log file is missing.
+    static func osLogStoreLines(since: Date) throws -> [LogLine] {
         let store = try OSLogStore(scope: .currentProcessIdentifier)
-        let position = store.position(date: Date().addingTimeInterval(-windowSeconds))
+        let position = store.position(date: since)
         let predicate = NSPredicate(
             format: "subsystem CONTAINS 'com.meetingtranscriber'",
         )
-        let entries = try store.getEntries(at: position, matching: predicate)
-
-        var lines: [String] = [makeHeader(info)]
-        var count = 0
-        for entry in entries {
-            guard let log = entry as? OSLogEntryLog else { continue }
+        return try store.getEntries(at: position, matching: predicate).compactMap { entry in
+            guard let log = entry as? OSLogEntryLog else { return nil }
             let timestamp = formatter.string(from: log.date)
-            let line = "\(timestamp) [\(log.level.rawValue)] " +
+            let text = "\(timestamp) [\(log.level.rawValue)] " +
                 "\(log.subsystem)/\(log.category): \(log.composedMessage)"
-            lines.append(line)
-            count += 1
+            return LogLine(date: log.date, text: text)
         }
-
-        try lines.joined(separator: "\n").write(to: outputURL, atomically: true, encoding: .utf8)
-        return count
     }
 
     /// Parses the timestamp that starts an entry in the persistent diagnostic
@@ -177,5 +186,12 @@ enum DiagnosticExporter {
         let prefix = line.prefix(lineStampLength)
         guard prefix.count == lineStampLength else { return nil }
         return lineStampFormatter.date(from: String(prefix))
+    }
+}
+
+extension DiagnosticExporter.LogSource {
+    /// The production fallback: this process's entries in the unified log.
+    static let osLogStore = Self(name: "OSLogStore") { since in
+        try DiagnosticExporter.osLogStoreLines(since: since)
     }
 }

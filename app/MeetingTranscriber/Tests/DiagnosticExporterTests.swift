@@ -84,7 +84,7 @@ final class DiagnosticExporterTests: XCTestCase {
         XCTAssertNil(DiagnosticExporter.parseLineDate(""))
     }
 
-    // MARK: - exportFromFile
+    // MARK: - readExcerpt
 
     /// Stamp in the `log stream --style syslog` shape. Written out here rather
     /// than taken from the exporter so the test does not parse its own format.
@@ -95,64 +95,43 @@ final class DiagnosticExporterTests: XCTestCase {
         return fmt.string(from: date)
     }
 
-    private let info = DiagnosticExporter.HeaderInfo(
-        appVersion: "1.0", commit: "abc", macOSVersion: "14.5", settings: [:],
-    )
-
-    func test_exportFromFile_writesHeaderPlusBody_withinWindow() throws {
+    private func excerpt(of body: String, windowSeconds: TimeInterval) throws -> DiagnosticExporter.FileExcerpt {
         let tmpSrc = makeTempFile(suffix: ".log")
-        let tmpDst = makeTempFile(suffix: ".log")
-        let line = "\(streamStamp(Date()))  localhost MeetingTranscriber[1234]: hello world"
-        try line.write(to: tmpSrc, atomically: true, encoding: .utf8)
-
-        let count = try DiagnosticExporter.exportFromFile(
-            sourceFile: tmpSrc, to: tmpDst, info: info, windowSeconds: 60,
-        )
-        XCTAssertEqual(count, 1)
-        let written = try String(contentsOf: tmpDst, encoding: .utf8)
-        XCTAssertTrue(written.contains("MeetingTranscriber 1.0"))
-        XCTAssertTrue(written.contains("hello world"))
+        try body.write(to: tmpSrc, atomically: true, encoding: .utf8)
+        return try DiagnosticExporter.readExcerpt(of: tmpSrc, cutoff: Date().addingTimeInterval(-windowSeconds))
     }
 
-    func test_exportFromFile_filtersOutEntriesOlderThanWindow() throws {
-        let tmpSrc = makeTempFile(suffix: ".log")
-        let tmpDst = makeTempFile(suffix: ".log")
+    func test_readExcerpt_keepsAnEntryWithinTheWindow() throws {
+        let line = "\(streamStamp(Date()))  localhost MeetingTranscriber[1234]: hello world"
+        let result = try excerpt(of: line, windowSeconds: 60)
+        XCTAssertEqual(result.entryCount, 1)
+        XCTAssertEqual(result.lines.map(String.init), [line])
+    }
+
+    func test_readExcerpt_filtersOutEntriesOlderThanWindow() throws {
         let now = Date()
         let body = """
         \(streamStamp(now.addingTimeInterval(-7200)))  localhost MeetingTranscriber[1234]: too-old line
         \(streamStamp(now))  localhost MeetingTranscriber[1234]: recent line
         """
-        try body.write(to: tmpSrc, atomically: true, encoding: .utf8)
-
-        let count = try DiagnosticExporter.exportFromFile(
-            sourceFile: tmpSrc, to: tmpDst, info: info, windowSeconds: 1800,
-        )
-        XCTAssertEqual(count, 1)
-        let written = try String(contentsOf: tmpDst, encoding: .utf8)
-        XCTAssertTrue(written.contains("recent line"))
-        XCTAssertFalse(written.contains("too-old line"))
+        let result = try excerpt(of: body, windowSeconds: 1800)
+        XCTAssertEqual(result.entryCount, 1)
+        XCTAssertEqual(result.lines.count, 1)
+        XCTAssertTrue(result.lines[0].contains("recent line"))
     }
 
     /// The real line is a fixed instant long before any test run, so it must
     /// fall outside the window. This is the case the old `MMM d HH:mm:ss`
     /// parser missed: it never matched a real line and kept the whole file.
-    func test_exportFromFile_dropsARealFormatLineOutsideTheWindow() throws {
-        let tmpSrc = makeTempFile(suffix: ".log")
-        let tmpDst = makeTempFile(suffix: ".log")
-        try Self.realLine.write(to: tmpSrc, atomically: true, encoding: .utf8)
-
-        let count = try DiagnosticExporter.exportFromFile(
-            sourceFile: tmpSrc, to: tmpDst, info: info, windowSeconds: 1800,
-        )
-        XCTAssertEqual(count, 0)
-        XCTAssertFalse(try String(contentsOf: tmpDst, encoding: .utf8).contains("hello"))
+    func test_readExcerpt_dropsARealFormatLineOutsideTheWindow() throws {
+        let result = try excerpt(of: Self.realLine, windowSeconds: 1800)
+        XCTAssertEqual(result.entryCount, 0)
+        XCTAssertTrue(result.lines.isEmpty)
     }
 
     /// A multi-line message has a timestamp only on its first line. The
     /// continuation lines belong to that entry and share its fate.
-    func test_exportFromFile_continuationLinesFollowTheirEntry() throws {
-        let tmpSrc = makeTempFile(suffix: ".log")
-        let tmpDst = makeTempFile(suffix: ".log")
+    func test_readExcerpt_continuationLinesFollowTheirEntry() throws {
         let now = Date()
         let body = """
         prelude before any entry
@@ -161,31 +140,18 @@ final class DiagnosticExporterTests: XCTestCase {
         \(streamStamp(now))  localhost MeetingTranscriber[1234]: recent entry
           recent continuation
         """
-        try body.write(to: tmpSrc, atomically: true, encoding: .utf8)
-
-        let count = try DiagnosticExporter.exportFromFile(
-            sourceFile: tmpSrc, to: tmpDst, info: info, windowSeconds: 1800,
-        )
-        let written = try String(contentsOf: tmpDst, encoding: .utf8)
-        XCTAssertEqual(count, 3)
+        let result = try excerpt(of: body, windowSeconds: 1800)
+        let written = result.lines.joined(separator: "\n")
+        XCTAssertEqual(result.lines.count, 3)
+        XCTAssertEqual(result.entryCount, 1)
         XCTAssertTrue(written.contains("prelude before any entry"))
         XCTAssertTrue(written.contains("recent continuation"))
         XCTAssertFalse(written.contains("old entry"))
         XCTAssertFalse(written.contains("old continuation"))
     }
 
-    func test_exportFromFile_missingSource_writesHeaderOnly() throws {
+    func test_readExcerpt_missingSource_throws() {
         let bogusSrc = makeTempFile(suffix: ".log")
-        let tmpDst = makeTempFile(suffix: ".log")
-
-        let count = try DiagnosticExporter.exportFromFile(
-            sourceFile: bogusSrc,
-            to: tmpDst,
-            info: info,
-            windowSeconds: 60,
-        )
-        XCTAssertEqual(count, 0)
-        let written = try String(contentsOf: tmpDst, encoding: .utf8)
-        XCTAssertTrue(written.contains("MeetingTranscriber 1.0"))
+        XCTAssertThrowsError(try DiagnosticExporter.readExcerpt(of: bogusSrc, cutoff: Date()))
     }
 }
