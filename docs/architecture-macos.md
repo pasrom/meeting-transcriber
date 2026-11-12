@@ -762,12 +762,12 @@ AppSettings (UserDefaults)
 |------------|-------------|-------|
 | Screen Recording | Real meeting titles; fallback grant for the app-audio tap. Detection does not need it | CGWindowListCopyWindowInfo |
 | Microphone | Mic recording | AVAudioEngine |
-| Accessibility | Participant reading (optional) | Teams AX tree |
+| Accessibility | Participant reading (optional; not applicable in the App Store build) | Teams AX tree |
 | Audio Recording | App audio capture | CATapDescription (Screen Recording also accepted) |
 
 ### Permission health check + badge overlay
 
-`PermissionHealthCheck` verifies each of the three TCC permissions by combining the system verdict with a live probe (e.g. `CGWindowListCopyWindowInfo` returning non-empty window titles for Screen Recording). Each permission resolves to `PermissionStatus.healthy | .denied | .broken | .notDetermined` — `.broken` means "TCC says allowed but the probe disagrees," which happens when macOS hasn't actually wired the permission through and the user needs to toggle it off and on in System Settings.
+`PermissionHealthCheck` verifies each of the three TCC permissions the build uses by combining the system verdict with a live probe (e.g. `CGWindowListCopyWindowInfo` returning non-empty window titles for Screen Recording). Each permission resolves to `PermissionStatus.healthy | .denied | .broken | .notDetermined | .notApplicable` (the last is the App Store build's Accessibility verdict: that build does not use the grant, so it is not probed and raises no badge or notification) — `.broken` means "TCC says allowed but the probe disagrees," which happens when macOS hasn't actually wired the permission through and the user needs to toggle it off and on in System Settings.
 
 `WatchLoop` runs the check on startup and `AppState` re-runs it on app activation. When the result is unhealthy:
 
