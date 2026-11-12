@@ -6,12 +6,17 @@ final class ParticipantReaderTests: XCTestCase {
     // MARK: - Accessibility trust
 
     /// How many times `readParticipants` built the AX root to walk from.
-    private func rootsMade(trusted: Bool) -> Int {
+    private func rootsMade(trusted: Bool, accessibilityApplies: Bool = true) -> Int {
         var made = 0
-        _ = ParticipantReader.readParticipants(pid: getpid(), isTrusted: { trusted }, makeRoot: { pid in
-            made += 1
-            return AXUIElementCreateApplication(pid)
-        })
+        _ = ParticipantReader.readParticipants(
+            pid: getpid(),
+            accessibilityApplies: accessibilityApplies,
+            isTrusted: { trusted },
+            makeRoot: { pid in
+                made += 1
+                return AXUIElementCreateApplication(pid)
+            },
+        )
         return made
     }
 
@@ -22,6 +27,17 @@ final class ParticipantReaderTests: XCTestCase {
     func testUntrustedProcessWalksNoTree() {
         XCTAssertEqual(rootsMade(trusted: false), 0, "the AX tree was walked without the grant")
         XCTAssertEqual(rootsMade(trusted: true), 1)
+    }
+
+    /// A build that does not use the grant reports Accessibility as not
+    /// applicable and shows no Settings row, so the reader must stay off there
+    /// even when the process happens to be trusted. Otherwise the feature would
+    /// run with no way to diagnose it.
+    func testBuildWithoutTheGrantWalksNoTreeEvenWhenTrusted() {
+        XCTAssertEqual(
+            rootsMade(trusted: true, accessibilityApplies: false), 0,
+            "the AX tree was walked in a build that does not use the grant",
+        )
     }
 
     // MARK: - Basic Filtering

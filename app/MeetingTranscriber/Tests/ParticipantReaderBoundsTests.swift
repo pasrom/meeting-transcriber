@@ -142,7 +142,9 @@ private final class FakeAXTree {
 
     func read() -> [String]? { // swiftlint:disable:this discouraged_optional_collection
         ParticipantReader.readParticipants(
-            pid: rootPID, isTrusted: { true }, makeRoot: AXUIElementCreateApplication,
+            // The CI also runs this suite built for the App Store variant,
+            // where the reader is off by default; these tests are about the walk.
+            pid: rootPID, accessibilityApplies: true, isTrusted: { true }, makeRoot: AXUIElementCreateApplication,
             access: ParticipantReader.RosterAccess(
                 copyAttribute: { [self] element, attribute in copy(element, attribute) },
                 setTimeout: { [self] element, seconds in timeouts[pid(of: element)] = seconds },

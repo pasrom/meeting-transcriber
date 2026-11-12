@@ -14,6 +14,9 @@ enum PermissionStatus: Equatable {
     case denied
     case broken
     case notDetermined
+    /// This build cannot use the permission at all, so there is nothing for
+    /// the user to grant: no problem, no badge, no notification, no Settings row.
+    case notApplicable
 }
 
 enum PermissionProblem: Equatable {
@@ -65,7 +68,8 @@ enum PermissionProblem: Equatable {
     ///
     /// Accessibility never blocks: its only consumer is `ParticipantReader` (Teams
     /// participant names, read in `handleMeeting`), which a recording does not need.
-    /// Settings labels it optional too, via `PermissionRow(optional: true)`, but that
+    /// Settings labels it optional too, via `PermissionRow(optional: true)`, in a
+    /// build that shows the row at all (`accessibilityApplies`), but that
     /// row is not independent corroboration: nothing links the row to this switch,
     /// so flipping one leaves them disagreeing with no compile error and no failing
     /// test. (Mute handling is sample-level in `AudioMixer` and level-based in
@@ -124,17 +128,17 @@ struct HealthCheckResult: Equatable {
         switch screenRecording {
         case .denied: result.append(.screenRecordingDenied)
         case .broken: result.append(.screenRecordingBroken)
-        default: break
+        case .healthy, .notDetermined, .notApplicable: break
         }
         switch microphone {
         case .denied: result.append(.microphoneDenied)
         case .broken: result.append(.microphoneBroken)
-        default: break
+        case .healthy, .notDetermined, .notApplicable: break
         }
         switch accessibility {
         case .denied: result.append(.accessibilityDenied)
         case .broken: result.append(.accessibilityBroken)
-        default: break
+        case .healthy, .notDetermined, .notApplicable: break
         }
         return result
     }
@@ -438,7 +442,25 @@ enum PermissionHealthCheck {
         return classify(err)
     }
 
-    static func checkAccessibilityLive() -> PermissionStatus {
+    /// Whether this build uses the Accessibility grant at all, and the one
+    /// place that decides it. The sandboxed App Store build does not: it never
+    /// asks for the grant (`WatchingController`'s `requestAccessibility`
+    /// default), offers no way to fix a missing one, and does not read the
+    /// Teams roster (`ParticipantReader.readParticipants`), the grant's only
+    /// consumer. Reporting it as denied there raised the red menu-bar badge and
+    /// a notification about a permission the app itself never offers to fix.
+    ///
+    /// The compile-time flag only picks this production default; everything
+    /// downstream takes the value as a parameter, so the tests exercise both
+    /// answers in either variant of the suite.
+    #if APPSTORE
+        static let accessibilityApplies = false
+    #else
+        static let accessibilityApplies = true
+    #endif
+
+    static func checkAccessibilityLive(applies: Bool = accessibilityApplies) -> PermissionStatus {
+        guard applies else { return .notApplicable }
         let trusted = AXIsProcessTrusted()
         if !trusted {
             debugLog("checkAccessibilityLive: trusted=false → denied")

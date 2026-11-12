@@ -121,4 +121,36 @@ final class PermissionHealthCheckAccessibilityTests: XCTestCase {
         XCTAssertEqual(PermissionHealthCheck.AccessibilityProbe.responded.logToken, "responded")
         XCTAssertEqual(PermissionHealthCheck.AccessibilityProbe.apiDisabled.logToken, "apiDisabled")
     }
+
+    // MARK: - Build without a usable grant (App Store)
+
+    /// The sandboxed build never asks for the grant (`accessibilityApplies` is
+    /// false there, which also skips the watch-start prompt), so the app never
+    /// offers it. A `.denied` there would be a permanent badge and
+    /// notification about something the user cannot fix from the app.
+    func testAccessibilityIsNotApplicableWhereTheBuildCannotUseIt() {
+        XCTAssertEqual(PermissionHealthCheck.checkAccessibilityLive(applies: false), .notApplicable)
+    }
+
+    /// Pins which answer each variant ships. The parameterised tests above
+    /// cover both answers in either build; this one covers the choice, and
+    /// only means something because CI runs the suite built for both.
+    func testOnlyTheAppStoreBuildDoesWithoutTheGrant() {
+        #if APPSTORE
+            XCTAssertFalse(PermissionHealthCheck.accessibilityApplies)
+            XCTAssertEqual(PermissionHealthCheck.checkAccessibilityLive(), .notApplicable)
+        #else
+            XCTAssertTrue(PermissionHealthCheck.accessibilityApplies)
+        #endif
+    }
+
+    func testNotApplicableAccessibilityIsNoProblem() {
+        let result = PermissionHealthCheck.overallHealth(
+            screenRecording: .healthy,
+            microphone: .healthy,
+            accessibility: .notApplicable,
+        )
+        XCTAssertEqual(result.problems, [])
+        XCTAssertTrue(result.isHealthy)
+    }
 }

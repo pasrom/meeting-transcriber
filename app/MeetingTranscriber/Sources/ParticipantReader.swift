@@ -23,14 +23,21 @@ enum ParticipantReader {
     ///
     /// Returns nil if roster not found, and without walking the tree at all
     /// when the app is not trusted for Accessibility: every AX call would
-    /// fail and log a warning of its own. `isTrusted` and `makeRoot` are
-    /// seams for tests, so they do not depend on this machine's grant.
+    /// fail and log a warning of its own. Nor in a build that does not use the
+    /// grant (`PermissionHealthCheck.accessibilityApplies`), even if the process
+    /// happens to be trusted: that build reports Accessibility as not
+    /// applicable and has no Settings row, so a read there would run with no
+    /// way to diagnose it. `accessibilityApplies`, `isTrusted` and `makeRoot`
+    /// are seams for tests, so they do not depend on this build or this
+    /// machine's grant.
     static func readParticipants(
         pid: pid_t,
+        accessibilityApplies: Bool = PermissionHealthCheck.accessibilityApplies,
         isTrusted: () -> Bool = { AXIsProcessTrusted() },
         makeRoot: (pid_t) -> AXUIElement = AXUIElementCreateApplication,
         access: RosterAccess = .live,
     ) -> [String]? { // swiftlint:disable:this discouraged_optional_collection
+        guard accessibilityApplies else { return nil }
         guard isTrusted() else {
             logger.info("Accessibility not granted, skipping the Teams participant roster")
             return nil

@@ -19,6 +19,9 @@ private enum PrivacyPane: String {
 
 struct AdvancedSettingsView: View {
     @Bindable var settings: AppSettings
+    /// Whether to show the Accessibility row. A build that cannot use the
+    /// grant has nothing to offer there (`PermissionHealthCheck.accessibilityApplies`).
+    var showsAccessibility: Bool = PermissionHealthCheck.accessibilityApplies
 
     @State private var micPermission: AVAuthorizationStatus = .notDetermined
     @State private var screenRecordingOK = false
@@ -50,14 +53,9 @@ struct AdvancedSettingsView: View {
                     help: "System Settings → Privacy & Security → Microphone → enable Meeting Transcriber",
                     settingsURL: PrivacyPane.microphone.url,
                 )
-                PermissionRow(
-                    label: "Accessibility",
-                    detail: "Optional — reads Teams participant names",
-                    granted: accessibilityOK,
-                    optional: true,
-                    help: "System Settings → Privacy & Security → Accessibility → enable Meeting Transcriber",
-                    settingsURL: PrivacyPane.accessibility.url,
-                )
+                if showsAccessibility {
+                    accessibilityRow
+                }
 
                 Button("Refresh") {
                     refreshPermissions()
@@ -119,6 +117,18 @@ struct AdvancedSettingsView: View {
         }
         .formStyle(.grouped)
         .onAppear { refreshPermissions() }
+    }
+
+    private var accessibilityRow: some View {
+        PermissionRow(
+            label: "Accessibility",
+            detail: "Optional — reads Teams participant names",
+            granted: accessibilityOK,
+            optional: true,
+            help: "System Settings → Privacy & Security → Accessibility → enable Meeting Transcriber",
+            settingsURL: PrivacyPane.accessibility.url,
+        )
+        .accessibilityIdentifier(A11yID.accessibilityPermissionRow)
     }
 
     /// Meeting detection reads no window titles. The grant sharpens the meeting

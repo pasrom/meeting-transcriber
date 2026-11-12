@@ -86,8 +86,9 @@ final class WatchingController {
     /// Accessibility request, fired at watch start. Injectable so tests skip
     /// the real TCC prompt.
     ///
-    /// `PermissionHealthCheck` already reports a missing Accessibility grant as
-    /// a problem — red menu-bar badge plus a notification — because
+    /// Where the build can use the grant (`PermissionHealthCheck.accessibilityApplies`),
+    /// `PermissionHealthCheck` reports a missing one as a problem, a red
+    /// menu-bar badge plus a notification, because
     /// `ParticipantReader` needs it to read the Teams roster via
     /// `AXUIElementCreateApplication`. Without this call nothing ever showed the
     /// prompt, so the app diagnosed the problem but never offered the fix and
@@ -103,8 +104,8 @@ final class WatchingController {
     /// otherwise raises a system alert three seconds after every launch with no
     /// click of any kind; only when `watchTeams` is on, since the roster read is
     /// the grant's sole consumer and is itself Teams-gated; and the production
-    /// default is compiled out of the sandboxed build, which cannot use the API
-    /// against another process at all.
+    /// default does nothing in the sandboxed build, where
+    /// `PermissionHealthCheck.accessibilityApplies` is false.
     ///
     /// The result is ignored, like the other two gates. Watching, capture and
     /// transcription all work without the grant, so a refusal must not block the
@@ -142,9 +143,9 @@ final class WatchingController {
         ensureMicAccess: @escaping () async -> Bool = { await Permissions.ensureMicrophoneAccess() },
         requestScreenRecording: @escaping () -> Void = { Permissions.ensureScreenRecordingAccess() },
         requestAccessibility: @escaping () -> Void = {
-            #if !APPSTORE
+            if PermissionHealthCheck.accessibilityApplies {
                 Permissions.ensureAccessibilityAccess()
-            #endif
+            }
         },
         startJoinTimeout: Duration = WatchingController.defaultStartJoinTimeout,
         joinClock: any Clock<Duration> = ContinuousClock(),

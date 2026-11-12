@@ -14,6 +14,7 @@
             XCTAssertEqual(PermissionStatus.denied.rpcValue, "denied")
             XCTAssertEqual(PermissionStatus.broken.rpcValue, "broken")
             XCTAssertEqual(PermissionStatus.notDetermined.rpcValue, "notDetermined")
+            XCTAssertEqual(PermissionStatus.notApplicable.rpcValue, "notApplicable")
         }
 
         /// Sibling table for the notification status. These strings are a wire
