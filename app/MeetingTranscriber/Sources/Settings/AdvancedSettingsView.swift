@@ -175,7 +175,7 @@ struct AdvancedSettingsView: View {
                     NSWorkspace.shared.activateFileViewerSelecting([outURL])
                     let exportedFile = outURL.lastPathComponent
                     logger.info(
-                        "diagnostics_exported lines=\(count, privacy: .public) file=\(exportedFile, privacy: .public)",
+                        "diagnostics_exported entries=\(count, privacy: .public) file=\(exportedFile, privacy: .public)",
                     )
 
                 case let .failure(error):
