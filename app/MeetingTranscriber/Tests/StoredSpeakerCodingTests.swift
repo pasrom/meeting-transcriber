@@ -69,4 +69,27 @@ final class StoredSpeakerCodingTests: XCTestCase {
         XCTAssertEqual(decoded.useCount, original.useCount)
         XCTAssertEqual(decoded.isSynthetic, original.isSynthetic)
     }
+
+    /// The marker is written only while an entry awaits its first qualifying
+    /// sample, decodes as false from a file that predates it, and survives a
+    /// save and load, which is what keeps that entry from being mistaken for a
+    /// legacy one.
+    func testAwaitsQualifyingSampleIsOptionalAndRoundTrips() throws {
+        let old = try JSONDecoder().decode(
+            StoredSpeaker.self, from: Data(#"{"name":"Speaker A","embeddings":[[0.1,0.2]]}"#.utf8),
+        )
+        XCTAssertFalse(old.awaitsQualifyingSample, "an entry from an old file is legacy")
+
+        let waiting = StoredSpeaker(name: "Speaker B", embeddings: [[0.1, 0.2]], awaitsQualifyingSample: true)
+        XCTAssertEqual(try encodedKeys(waiting), ["name", "embeddings", "awaitsQualifyingSample"])
+        let decoded = try JSONDecoder().decode(StoredSpeaker.self, from: JSONEncoder().encode(waiting))
+        XCTAssertTrue(decoded.awaitsQualifyingSample)
+        XCTAssertTrue(decoded.renamed(to: "Speaker C").awaitsQualifyingSample, "a rename keeps the marker")
+
+        let inconsistent = try JSONDecoder().decode(
+            StoredSpeaker.self,
+            from: Data(#"{"name":"Speaker D","embeddings":[[0.1]],"centroid":[0.1],"awaitsQualifyingSample":true}"#.utf8),
+        )
+        XCTAssertFalse(inconsistent.awaitsQualifyingSample, "an entry with a centroid never awaits one")
+    }
 }

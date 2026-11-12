@@ -361,8 +361,10 @@ class SpeakerMatcher {
     }
 
     /// Pure helper: fold a confirmed embedding into an existing `StoredSpeaker`.
-    /// Centroid is updated only when `duration >= minSpeakingTimeForCentroid`.
-    /// FIFO of recent samples is bumped unconditionally.
+    /// Only `duration >= minSpeakingTimeForCentroid` moves the centroid; the FIFO
+    /// always takes the sample. A legacy entry's seed (the mean of its samples)
+    /// is persisted on its first confirmation of any length, as a match anchor the
+    /// short sample now in the FIFO can no longer join; an awaiting entry never seeds.
     static func applyConfirmation(
         to speaker: StoredSpeaker, embedding: [Float], duration: TimeInterval, now: Date,
     ) -> StoredSpeaker {
@@ -373,10 +375,8 @@ class SpeakerMatcher {
         }
 
         let qualifies = duration >= minSpeakingTimeForCentroid
-        // Seed the centroid from the existing sample list on first qualifying
-        // confirmation after a v3 schema upgrade. Subsequent confirmations
-        // run the normal incremental update.
-        let seedCentroid = speaker.centroid ?? meanEmbedding(speaker.embeddings)
+        let seedCentroid = speaker.centroid
+            ?? (speaker.awaitsQualifyingSample ? nil : meanEmbedding(speaker.embeddings))
         let seedCount = speaker.centroid != nil
             ? speaker.centroidSampleCount
             : (seedCentroid != nil ? speaker.embeddings.count : 0)
@@ -398,6 +398,7 @@ class SpeakerMatcher {
             embeddings: samples,
             centroid: nextCentroid,
             centroidSampleCount: nextCount,
+            awaitsQualifyingSample: speaker.awaitsQualifyingSample,
             lastUsed: now,
             useCount: speaker.useCount + 1,
         )
@@ -413,6 +414,7 @@ class SpeakerMatcher {
             embeddings: [embedding],
             centroid: qualifies ? embedding : nil,
             centroidSampleCount: qualifies ? 1 : 0,
+            awaitsQualifyingSample: !qualifies,
             lastUsed: now,
             useCount: 1,
         )
@@ -429,18 +431,24 @@ class SpeakerMatcher {
             a: dst.centroid, aCount: dst.centroidSampleCount,
             b: src.centroid, bCount: src.centroidSampleCount,
         )
-        let centroid = combined.centroid ?? meanEmbedding(samples)
-        let lastUsed: Date? = switch (dst.lastUsed, src.lastUsed) {
-        case let (a?, b?): max(a, b)
-        case let (a?, nil): a
-        case let (nil, b?): b
-        case (nil, nil): nil
+        // No centroid on either side: a legacy side seeds it from its own
+        // samples, weighted by their count; an awaiting side's never do.
+        let seedSamples = switch (dst.awaitsQualifyingSample, src.awaitsQualifyingSample) {
+        case (false, false): samples
+        case (false, true): dst.embeddings
+        case (true, false): src.embeddings
+        case (true, true): [[Float]]()
         }
+        let seed = combined.centroid == nil ? meanEmbedding(seedSamples) : nil
+        let centroid = combined.centroid ?? seed
+        let centroidCount = seed != nil ? seedSamples.count : combined.count
+        let lastUsed = [dst.lastUsed, src.lastUsed].compactMap(\.self).max()
         return StoredSpeaker(
             name: dst.name,
             embeddings: samples,
             centroid: centroid,
-            centroidSampleCount: combined.count,
+            centroidSampleCount: centroidCount,
+            awaitsQualifyingSample: dst.awaitsQualifyingSample && src.awaitsQualifyingSample,
             lastUsed: lastUsed,
             useCount: dst.useCount + src.useCount,
             // Stay synthetic only when both sides are synthetic. Merging a
