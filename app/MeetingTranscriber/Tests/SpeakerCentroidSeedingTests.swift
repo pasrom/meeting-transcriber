@@ -139,4 +139,27 @@ final class SpeakerCentroidSeedingTests: XCTestCase {
         assertCentroid(merged, equals: [0, 1], count: 2)
         assertCentroid(confirm(merged, Self.longSample, Self.long), equals: [1.0 / 3, 2.0 / 3], count: 3)
     }
+
+    /// Databases written by earlier merges hold a centroid with a count of
+    /// zero. That centroid is real and must not be thrown away by the next
+    /// confirmation, nor zeroed by another merge.
+    func testPersistedCentroidWithZeroCountIsNotDiscarded() {
+        let damaged = StoredSpeaker(name: "Speaker A", embeddings: [[0, 1]], centroid: [0, 1], centroidSampleCount: 0)
+        assertCentroid(confirm(damaged, Self.longSample, Self.long), equals: [0.5, 0.5], count: 2)
+
+        let merged = SpeakerMatcher.merged(into: damaged, from: damaged)
+        assertCentroid(merged, equals: [0, 1], count: 2)
+    }
+
+    /// Merging two centroids that both had a count of zero used to write an
+    /// all-zero vector. It has no direction, so it counts as no centroid: the
+    /// entry seeds from its samples like a legacy one, and a merge takes the
+    /// other side's centroid unchanged.
+    func testAllZeroCentroidCountsAsAbsent() {
+        let zeroed = StoredSpeaker(name: "Speaker A", embeddings: [Self.shortSample], centroid: [0, 0])
+        assertCentroid(confirm(zeroed, Self.longSample, Self.long), equals: [0.5, 0.5], count: 2)
+
+        let real = StoredSpeaker(name: "Speaker B", embeddings: [Self.longSample], centroid: Self.longSample, centroidSampleCount: 1)
+        assertCentroid(SpeakerMatcher.merged(into: zeroed, from: real), equals: Self.longSample, count: 1)
+    }
 }

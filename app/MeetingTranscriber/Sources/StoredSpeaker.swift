@@ -40,6 +40,19 @@ struct StoredSpeaker: Codable, Identifiable {
     /// for every user-confirmed speaker.
     let isSynthetic: Bool
 
+    /// `centroid` unless it has no direction: merging two centroids with a
+    /// count of 0 used to write an all-zero vector, which counts as absent.
+    var usableCentroid: [Float]? {
+        centroid.flatMap { $0.contains { $0 != 0 } ? $0 : nil }
+    }
+
+    /// Weight of `usableCentroid` in a running average. Earlier merges
+    /// persisted a centroid with a count of 0, which would make the next fold
+    /// replace it outright, so a usable centroid counts as at least one sample.
+    var centroidWeight: Int {
+        usableCentroid == nil ? 0 : max(centroidSampleCount, 1)
+    }
+
     // Migrate old single-embedding format automatically (legacy `embedding`
     // key); default lastUsed/useCount for entries before recency tracking;
     // default centroid/centroidSampleCount for entries before v3 schema.

@@ -375,10 +375,10 @@ class SpeakerMatcher {
         }
 
         let qualifies = duration >= minSpeakingTimeForCentroid
-        let seedCentroid = speaker.centroid
+        let seedCentroid = speaker.usableCentroid
             ?? (speaker.awaitsQualifyingSample ? nil : meanEmbedding(speaker.embeddings))
-        let seedCount = speaker.centroid != nil
-            ? speaker.centroidSampleCount
+        let seedCount = speaker.usableCentroid != nil
+            ? speaker.centroidWeight
             : (seedCentroid != nil ? speaker.embeddings.count : 0)
 
         let nextCentroid: [Float]?
@@ -428,8 +428,8 @@ class SpeakerMatcher {
             samples.removeFirst(samples.count - maxRecentSamples)
         }
         let combined = mergeCentroids(
-            a: dst.centroid, aCount: dst.centroidSampleCount,
-            b: src.centroid, bCount: src.centroidSampleCount,
+            a: dst.usableCentroid, aCount: dst.centroidWeight,
+            b: src.usableCentroid, bCount: src.centroidWeight,
         )
         // No centroid on either side: a legacy side seeds it from its own
         // samples, weighted by their count; an awaiting side's never do.
