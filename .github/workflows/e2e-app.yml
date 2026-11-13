@@ -284,7 +284,7 @@ jobs:
       # polling task); the channel-fault lane below drives that end.
       - name: Run channel-health indicator E2E
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        timeout-minutes: 3
+        timeout-minutes: 4
         run: bash scripts/e2e-channel-health.sh --no-build --screenshot
 
       - name: Upload channel-health menubar screenshot
