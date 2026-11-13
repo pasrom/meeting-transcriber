@@ -99,23 +99,32 @@ final class VoiceFormatImportTests: XCTestCase {
         )
     }
 
-    /// A source already at the target rate takes `resampleFile`'s copy fast path,
-    /// so a 16 kHz 3GP is passed through verbatim under a `*.wav` name. Pinned
-    /// because the mislabeling is invisible until something starts trusting the
-    /// extension instead of sniffing content — every consumer opens audio through
-    /// AVAudioFile today, which is what makes it survivable.
-    func testFastPathPassesNonWAVSourceThroughUnderWAVName() async throws {
+    /// A compressed source already at the target rate is decoded, not copied.
+    /// `resampleFile`'s copy fast path used to test the rate alone, so a 16 kHz
+    /// 3GP was passed through verbatim under a `*.wav` name: survivable only
+    /// because every consumer opened it through AVAudioFile, which sniffs the
+    /// content rather than trusting the extension. The output now is the
+    /// linear PCM WAV its name promises.
+    func testResampleFileDecodesNonWAVSourceAtTargetRate() async throws {
         let source = fixtureURL("two_speakers_de.3gp")
+        let sourceFile = try AVAudioFile(forReading: source)
+        XCTAssertEqual(Int(sourceFile.fileFormat.sampleRate), AudioConstants.targetSampleRate, "fixture must already be at the target rate")
         let destination = makeTempFile(suffix: ".wav")
         try await AudioMixer.resampleFile(from: source, to: destination)
 
-        XCTAssertEqual(
+        XCTAssertNotEqual(
             try Data(contentsOf: destination), try Data(contentsOf: source),
-            "a source already at 16 kHz must be copied verbatim, not re-encoded",
+            "a compressed source must not be copied under a WAV name",
         )
-        XCTAssertFalse(
-            try AudioMixer.loadAudioFileAsFloat32(url: destination).isEmpty,
-            "the mislabeled copy must stay decodable for downstream stages",
+        let output = try AVAudioFile(forReading: destination)
+        XCTAssertEqual(output.fileFormat.streamDescription.pointee.mFormatID, kAudioFormatLinearPCM)
+        XCTAssertEqual(output.fileFormat.channelCount, 1)
+        XCTAssertEqual(Int(output.fileFormat.sampleRate), AudioConstants.targetSampleRate)
+        XCTAssertEqual(
+            Double(output.length) / output.fileFormat.sampleRate,
+            Double(sourceFile.length) / sourceFile.processingFormat.sampleRate,
+            accuracy: 0.02,
+            "decoding must keep the source's length",
         )
     }
 }
