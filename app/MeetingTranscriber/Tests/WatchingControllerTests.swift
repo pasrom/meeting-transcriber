@@ -304,15 +304,22 @@ final class WatchingControllerTests: XCTestCase {
             // the bail guard. Registering the manual start from there orders
             // the race instead of betting on it: the entry guard of
             // `startWatching` has provably already run.
+            // Own pid, so the manual recording is still running when the
+            // auto start is judged: a loop recording a pid that is gone stops
+            // itself on its monitor's first poll, and the verdict below keys on
+            // a manual recording being there.
             requestScreenRecording: {
                 MainActor.assumeIsolated {
-                    box.controller?.startManualRecording(pid: 99, appName: "Chrome", title: "Meeting")
+                    box.controller?.startManualRecording(pid: getpid(), appName: "Chrome", title: "Meeting")
                 }
             },
         )
         box.controller = controller
         addTeardownBlock {
             await micGate.open()
+            // The manual recording is on a live pid and would run on after
+            // the test; wait for its start to land so there is a loop to stop.
+            _ = await controller.joinManualStart()
             await controller.watchLoop?.stop()
         }
 
