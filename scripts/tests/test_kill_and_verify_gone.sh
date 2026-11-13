@@ -26,9 +26,10 @@ PASSED=0
 TMPD="$(mktemp -d)"
 PIDS=""
 # Set at the very end. MEASURED on bash 3.2, which is the system bash here: a
-# `set -u` abort in a script that has an EXIT trap reports `$? = 0` inside the
-# trap AND exits 0, so the abort is indistinguishable from success to anything
-# reading the exit status, which is exactly how ci.yml runs this file. (An
+# `set -u` abort in a script that also has `set -e` and an EXIT trap reports
+# `$? = 0` inside the trap AND exits 0, so the abort is indistinguishable from
+# success to anything reading the exit status, which is exactly how ci.yml runs
+# this file. (An
 # errexit abort behaves correctly, 1 both places; only `set -u` is affected.)
 # Without this sentinel the whole file could silently pass while running none of
 # its cases, which is the failure it exists to prevent, one level up.
