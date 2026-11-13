@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "description": "CDP driver deps for the real-Jitsi browser-meeting e2e (issue #503). Install with `npm ci` in this dir; node_modules is gitignored.",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "dependencies": {
-    "puppeteer-core": "^24.0.0"
+    "puppeteer-core": "^25.17.0"
   }
 }
