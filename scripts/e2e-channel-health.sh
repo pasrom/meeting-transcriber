@@ -26,7 +26,10 @@
 #
 # Runs on:
 #   - Any macOS host with Xcode + zsh + jq
-#   - Local dev (no permissions needed beyond what a fresh build needs)
+#   - Local dev (no permissions needed beyond what a fresh build needs;
+#     --screenshot additionally needs every permission the app checks to
+#     report healthy, since the red permission badge would satisfy the
+#     pixel check on its own, and fails otherwise)
 #   - CI: GitHub-hosted macos-26 runner or the self-hosted Mac mini
 #
 # Usage: bash scripts/e2e-channel-health.sh [--no-build] [--screenshot]
@@ -60,9 +63,11 @@ BIN="$APP/Contents/MacOS/MeetingTranscriber"
 MTCLI="$ROOT/tools/mt-cli/.build/debug/mt-cli"
 
 cleanup() {
-    if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
-        kill -9 "$APP_PID" 2>/dev/null || true
-    fi
+    # Started through `open`, so it is no child of this shell and has no PID
+    # here; found by the pattern assert_app_alive uses and ended by PID. Only
+    # once this lane launched it, so an early exit leaves alone an instance it
+    # never started. Quiet: an app that already exited is no failure here.
+    [ -z "${APP_LAUNCHED:-}" ] || kill_and_verify_gone "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" 5 2>/dev/null || true
     bootout_stale_launchctl
 }
 trap cleanup EXIT
@@ -91,11 +96,20 @@ bootout_stale_launchctl
 # `_SUPPRESS_AUTOWATCH=1` prevents the +3 s auto-watch trigger from running
 # `stopChannelHealthMonitoring()` which would clear the forced flag before
 # we can observe it.
-env MEETINGTRANSCRIBER_DEBUG_RPC=1 \
-    MEETINGTRANSCRIBER_DEBUG_FORCE_MIC_SILENT=1 \
-    MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1 \
-    "$BIN" &
-APP_PID=$!
+#
+# `open --env`, not the binary directly: TCC answers for the process launchd
+# knows, and an executable started from this shell is asked about an identity
+# the grants were never made against. The app then reports a permission
+# problem and draws its red badge, which the pixel check below would count as
+# the channel tint.
+assert_console_user
+# Set before the launch: an `open` that fails after the app already started
+# must still be cleaned up.
+APP_LAUNCHED=1
+open --env MEETINGTRANSCRIBER_DEBUG_RPC=1 \
+    --env MEETINGTRANSCRIBER_DEBUG_FORCE_MIC_SILENT=1 \
+    --env MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1 \
+    "$APP"
 
 # --- 4. Wait for RPC server to come up (max 30 s) ------------------------
 
@@ -123,6 +137,25 @@ fi
 # --- 6. Optional visual proof --------------------------------------------
 
 if [ "$TAKE_SCREENSHOT" = true ]; then
+    # The permission badge is red too, and on its own it clears the pixel
+    # threshold, so red pixels prove the channel tint only while no permission
+    # problem is shown. Wait for the app's check to report, then require it
+    # healthy. Not ruled out here: the other red marks the icon can carry (the
+    # record-only dot, the error badge) and red elsewhere in the captured strip.
+    echo "▸ Waiting for the app's permission health check…"
+    status=0
+    poll_state --each assert_app_alive 20 0.5 permission_health_reported || status=$?
+    case "$status" in
+        0) ;;
+        1) die "the app answered /state but its permission health check reported nothing within 20 s, so whether the red permission badge is drawn is unknown and the pixel check cannot be read" ;;
+        *) die "$(state_why "$status" "whether the app reports a permission problem")" ;;
+    esac
+    if [ "$(jq -r '.permissionHealth.isHealthy' <<<"$STATE_BODY")" != "true" ]; then
+        echo "permissionHealth:" >&2
+        jq .permissionHealth <<<"$STATE_BODY" >&2 || true
+        die "the app reports a permission problem, so its menu bar icon carries the red permission badge and the red-pixel check would pass on the badge alone. Fix: $(tcc_fix_hint 'the pane named above' "$APP")"
+    fi
+
     OUT="/tmp/e2e-channel-health-menubar.png"
     # `screencapture` can fail on headless GUI sessions (rare; Mac mini CI
     # runner has an Aqua session via auto-login so it works there). When it
