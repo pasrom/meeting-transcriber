@@ -20,6 +20,16 @@ enum AppPaths {
             .appendingPathComponent(".MeetingTranscriber", isDirectory: true)
     }()
 
+    /// Replace a home-directory prefix in displayed text with `~`, so it cannot
+    /// leak the account name. Anchored on the path separator (`home + "/"`) so a
+    /// longer sibling like `/Users/speakerphone` is never mangled; a bare home
+    /// path collapses to `~`.
+    nonisolated static func abbreviatingHome(in value: String, home: String) -> String {
+        guard !home.isEmpty else { return value }
+        let abbreviated = value.replacingOccurrences(of: home + "/", with: "~/")
+        return abbreviated == home ? "~" : abbreviated
+    }
+
     /// IPC directory: under `dataDir` for sandbox compatibility.
     static let ipcDir = dataDir.appendingPathComponent("ipc", isDirectory: true)
 

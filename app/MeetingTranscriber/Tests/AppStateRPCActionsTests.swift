@@ -294,6 +294,51 @@
             XCTAssertEqual(snapshot.liveCaptions.recentFinals[1].text, "guten morgen")
         }
 
+        /// An `AppState` with captions on, whose English caption load is a fake.
+        private func makeWarmingState(loadError: (any Error)? = nil) throws -> AppState {
+            let suite = "RPCWarmup-\(getpid())-\(UUID().uuidString)"
+            addTeardownBlock { DefaultsSuite.remove(suite) }
+            let settings = try AppSettings(defaults: XCTUnwrap(DefaultsSuite.open(suite)))
+            settings.liveTranscriptionEnabled = true
+            let eouFactory: LiveTranscriptionController.EouSessionFactory = { MockEouManager(loadError: loadError) }
+            let factory: LiveTranscriptionCoordinator.ControllerFactory = { _, captions, _, _ in
+                LiveTranscriptionController(
+                    engine: nil, vad: FluidVAD(threshold: 0.5), captions: captions,
+                    speakerMatcher: FakeLiveSpeakerMatcher(), engineLanguage: "en",
+                    eouSessionFactory: eouFactory,
+                )
+            }
+            return try AppState(
+                pipelineEnvironment: makeIsolatedPipelineEnvironment(),
+                settings: settings,
+                liveControllerFactory: factory,
+            )
+        }
+
+        func test_snapshot_liveCaptions_carriesTheWarmupState() async throws {
+            XCTAssertEqual(state.rpcStateSnapshot().liveCaptions.warmup, "none")
+
+            let warming = try makeWarmingState()
+
+            // Set when the controller is built; its prepare() has not run yet.
+            XCTAssertEqual(warming.rpcStateSnapshot().liveCaptions.warmup, "preparing")
+
+            await waitFor(!warming.liveTranscription.warmup.isPreparing, timeout: .seconds(10))
+            XCTAssertEqual(warming.rpcStateSnapshot().liveCaptions.warmup, "ready")
+            XCTAssertNil(warming.rpcStateSnapshot().liveCaptions.warmupFailure)
+        }
+
+        func test_snapshot_liveCaptions_carriesTheWarmupFailure() async throws {
+            let error = URLError(.notConnectedToInternet)
+            let warming = try makeWarmingState(loadError: error)
+
+            await waitFor(!warming.liveTranscription.warmup.isPreparing, timeout: .seconds(10))
+
+            let snapshot = warming.rpcStateSnapshot().liveCaptions
+            XCTAssertEqual(snapshot.warmup, "failed")
+            XCTAssertEqual(snapshot.warmupFailure, error.localizedDescription)
+        }
+
         // MARK: - notifications mapping in rpcStateSnapshot
 
         /// `rpcStateSnapshot()` reads the notifier the AppState was constructed

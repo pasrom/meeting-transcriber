@@ -457,6 +457,62 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertTrue(picker.isDisabled())
     }
 
+    // MARK: - Caption warm-up status
+
+    private func warmupStatusText(_ warmup: LiveCaptionsWarmup, enabled: Bool = true) throws -> String {
+        let settings = makeSettings()
+        settings.liveTranscriptionEnabled = enabled
+        let view = TranscriptionSettingsView(
+            settings: settings,
+            whisperKitEngine: WhisperKitEngine(),
+            parakeetEngine: ParakeetEngine(),
+            captionWarmup: warmup,
+        )
+        return try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsWarmupStatus)
+            .find(ViewType.Text.self).string()
+    }
+
+    func testCaptionWarmupStatusShowsEachState() throws {
+        XCTAssertEqual(
+            try warmupStatusText(.preparing(since: Date())),
+            "Preparing live captions\u{2026} (loading the model can take a minute or more)",
+        )
+        XCTAssertEqual(try warmupStatusText(.ready), "Live captions ready")
+        XCTAssertEqual(
+            try warmupStatusText(.failed("offline")),
+            "Live captions unavailable: offline\nTurn live captions off and on to retry.",
+        )
+    }
+
+    func testCaptionWarmupSpinnerShowsOnlyWhilePreparing() {
+        XCTAssertNoThrow(try CaptionWarmupStatus(warmup: .preparing(since: Date())).inspect().find(ViewType.ProgressView.self))
+        XCTAssertThrowsError(try CaptionWarmupStatus(warmup: .ready).inspect().find(ViewType.ProgressView.self))
+        XCTAssertThrowsError(try CaptionWarmupStatus(warmup: .failed("offline")).inspect().find(ViewType.ProgressView.self))
+    }
+
+    func testCaptionWarmupElapsedTimeShowsOnlyWhilePreparing() {
+        let elapsed = A11yID.liveCaptionsWarmupElapsed
+        XCTAssertNoThrow(
+            try CaptionWarmupStatus(warmup: .preparing(since: Date())).inspect().find(viewWithAccessibilityIdentifier: elapsed),
+        )
+        XCTAssertThrowsError(try CaptionWarmupStatus(warmup: .ready).inspect().find(viewWithAccessibilityIdentifier: elapsed))
+        XCTAssertThrowsError(
+            try CaptionWarmupStatus(warmup: .failed("offline")).inspect().find(viewWithAccessibilityIdentifier: elapsed),
+        )
+    }
+
+    func testCaptionWarmupReadyShowsTheCheckmarkLabel() throws {
+        let label = try CaptionWarmupStatus(warmup: .ready).inspect().find(ViewType.Label.self)
+        XCTAssertEqual(try label.icon().image().actualImage().name(), "checkmark.circle.fill")
+        XCTAssertThrowsError(try CaptionWarmupStatus(warmup: .preparing(since: Date())).inspect().find(ViewType.Label.self))
+    }
+
+    func testCaptionWarmupStatusHiddenWithoutAWarmupOrWithCaptionsOff() {
+        XCTAssertThrowsError(try warmupStatusText(.idle))
+        XCTAssertThrowsError(try warmupStatusText(.ready, enabled: false))
+    }
+
     // MARK: - LiveCaptionsOverlay render
 
     func testLiveCaptionsOverlayBackendIdentifierTracksActiveBackend() throws {
