@@ -35,6 +35,8 @@ struct MenuBarView: View {
     /// before the setting was turned off still falls back to it when no local
     /// file exists; `JobOpenTarget` owns that rule.
     var notionExportEnabled: Bool = false
+    /// Whether the live-caption models are still loading.
+    var captionsPreparing: Bool = false
 
     private var state: TranscriberState {
         status?.state ?? .idle
@@ -96,6 +98,12 @@ struct MenuBarView: View {
 
             if let detail = status?.detail, !detail.isEmpty {
                 Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if captionsPreparing {
+                Text(LiveCaptionsWarmup.preparingMenuText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

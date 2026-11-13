@@ -143,8 +143,14 @@
             let hypothesisMic: String
             let hypothesisApp: String
             let recentFinals: [LiveCaptionLine]
+            /// The caption model warm-up: "none", "preparing", "ready" or "failed".
+            let warmup: String
+            /// The load error when `warmup` is "failed".
+            let warmupFailure: String?
 
-            static let empty = Self(hypothesisMic: "", hypothesisApp: "", recentFinals: [])
+            static let empty = Self(
+                hypothesisMic: "", hypothesisApp: "", recentFinals: [], warmup: "none", warmupFailure: nil,
+            )
         }
 
         struct ChannelHealth: Codable {
