@@ -4,24 +4,27 @@ import XCTest
 @MainActor
 final class QualityResultsTests: XCTestCase {
     func test_appendCollectsRowsInOrder() {
-        QualityResultsWriter.shared.reset()
-        let writer = QualityResultsWriter.shared
+        let sharedRowsBefore = QualityResultsWriter.shared.collectedRows.count
+        let writer = QualityResultsWriter()
         writer.append(makeRow(engine: "whisperKit", fixture: "two_speakers_de", wer: 0.05))
         writer.append(makeRow(engine: "parakeet", fixture: "two_speakers_de", wer: 0.07))
         XCTAssertEqual(writer.collectedRows.count, 2)
         XCTAssertEqual(writer.collectedRows[0].engine, "whisperKit")
         XCTAssertEqual(writer.collectedRows[1].engine, "parakeet")
+        XCTAssertEqual(
+            QualityResultsWriter.shared.collectedRows.count, sharedRowsBefore,
+            "the shared writer holds a quality run's rows; these tests must not add to or clear them",
+        )
     }
 
-    func test_flushWritesValidJSONToOverridePath() throws {
-        QualityResultsWriter.shared.reset()
+    func test_flushWritesValidJSONToItsDestination() throws {
+        let sharedRowsBefore = QualityResultsWriter.shared.collectedRows.count
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("quality-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
-        setenv("QUALITY_RESULTS_PATH", tmp.path, 1)
-        defer { unsetenv("QUALITY_RESULTS_PATH") }
+        let writer = QualityResultsWriter(destination: tmp)
 
-        QualityResultsWriter.shared.append(
+        writer.append(
             makeRow(
                 engine: "whisperKit",
                 fixture: "two_speakers_de",
@@ -36,9 +39,13 @@ final class QualityResultsTests: XCTestCase {
                 ),
             ),
         )
-        let written = try QualityResultsWriter.shared.flush()
+        let written = try writer.flush()
         XCTAssertEqual(written.path, tmp.path)
         XCTAssertTrue(FileManager.default.fileExists(atPath: tmp.path))
+        XCTAssertEqual(
+            QualityResultsWriter.shared.collectedRows.count, sharedRowsBefore,
+            "the shared writer holds a quality run's rows; these tests must not add to or clear them",
+        )
 
         let decoded = try JSONDecoder().decode(
             [QualityResult].self,
@@ -62,6 +69,19 @@ final class QualityResultsTests: XCTestCase {
         XCTAssertEqual(row.derBreakdown?.falseAlarm, 0.2)
         XCTAssertEqual(row.derBreakdown?.speakerConfusion, 0.3)
         XCTAssertEqual(row.derBreakdown?.totalReference, 10.0)
+    }
+
+    func test_destinationFollowsTheResultsPathVariable() {
+        XCTAssertEqual(
+            QualityResultsWriter.destination(environment: ["QUALITY_RESULTS_PATH": "/tmp/results/q.json"]).path,
+            "/tmp/results/q.json",
+        )
+    }
+
+    func test_destinationDefaultsToThePackageBuildFolder() {
+        let url = QualityResultsWriter.destination(environment: [:])
+        XCTAssertEqual(url.lastPathComponent, "quality-results.json")
+        XCTAssertEqual(url.deletingLastPathComponent().lastPathComponent, ".build")
     }
 
     private func makeRow(

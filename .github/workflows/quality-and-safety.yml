@@ -740,10 +740,12 @@ jobs:
         timeout-minutes: 20
         with:
           cache-key-suffix: quality-v2
-      # Filter explicitly to engine-quality test classes — `--filter Quality`
-      # would also pull in `QualityResultsTests`, which exercises the writer
-      # via fake rows and would pollute the shared singleton's row buffer.
-      # When adding a new engine quality class, append it to the alternation.
+      # Filter explicitly to engine-quality test classes: `--filter Quality`
+      # would also run `QualityBaselineGateTests`, which sorts between the
+      # engine classes and would read a half-written results file.
+      # When adding a new engine quality class, append it to the alternation
+      # here and in `scripts/generate_real_meeting_fixture.sh`, which prints
+      # the same command.
       # Pin the model variant explicitly so changes to the in-code default
       # in `WhisperKitEngine.modelVariant` don't silently shift the
       # baseline. When this needs to change, change it here and document
