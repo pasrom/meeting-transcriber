@@ -15,12 +15,12 @@ import XCTest
 @MainActor
 extension XCTestCase {
     /// - Parameter permissionHealth: seeds the health the controller hands to
-    ///   each loop it builds. Pass one whenever a test asserts that a start
-    ///   *succeeds*: nil leaves it unprobed, and the loop then runs a live TCC
-    ///   check whose microphone arm opens the real input device. Under
-    ///   `swift test --parallel` that is several forked processes probing the
-    ///   HAL at once, and it intermittently comes back denied, which the start
-    ///   then correctly refuses.
+    ///   each loop it builds. Always seeded, defaulting to all healthy: an
+    ///   unseeded loop falls back to the live TCC check, whose microphone arm
+    ///   opens the real input device. Its answer then depends on the host's
+    ///   grants, and under `swift test --parallel` several forked processes
+    ///   probe the HAL at once and it intermittently comes back denied. A test
+    ///   about a refusal passes the health that causes it.
     /// - Parameter makeRecorder: defaults to a `MockRecorder` carrying a mix
     ///   path, so a stop through it takes the success path. Nothing built here
     ///   touches real audio hardware, because `DualSourceRecorder` writes into
@@ -46,7 +46,7 @@ extension XCTestCase {
         requestAccessibility: @escaping () -> Void = {},
         watchTeams: Bool = true,
         noMic: Bool = false,
-        permissionHealth: HealthCheckResult? = nil,
+        permissionHealth: HealthCheckResult = .allHealthy,
         startJoinTimeout: Duration = WatchingController.defaultStartJoinTimeout,
         joinClock: any Clock<Duration> = ContinuousClock(),
         channelFaultWindow: TimeInterval = 0,
@@ -96,7 +96,7 @@ extension XCTestCase {
             indicatorEnabled: { false },
         )
         let permissions = PermissionsController(notifier: notifier)
-        if let permissionHealth { permissions.handle(permissionHealth) }
+        permissions.handle(permissionHealth)
         let liveTranscription = LiveTranscriptionCoordinator(
             captions: LiveCaptionsState(),
             liveEnabled: { false },
