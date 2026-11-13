@@ -6,6 +6,7 @@ struct TranscriptionSettingsView: View {
     @Bindable var settings: AppSettings
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
+    var captionWarmup: LiveCaptionsWarmup = .idle
 
     /// Set when the user flips live captions on while a first-use Nemotron model
     /// download is pending — defers the actual enable to the consent alert.
@@ -25,11 +26,13 @@ struct TranscriptionSettingsView: View {
         settings: AppSettings,
         whisperKitEngine: WhisperKitEngine,
         parakeetEngine: ParakeetEngine,
+        captionWarmup: LiveCaptionsWarmup = .idle,
         legacyModels: LegacyWhisperModelsState? = nil,
     ) {
         self.settings = settings
         self.whisperKitEngine = whisperKitEngine
         self.parakeetEngine = parakeetEngine
+        self.captionWarmup = captionWarmup
         // Created here, not as a default value: for an `@Observable` type the
         // default-value form creates the object only once the view is installed,
         // so a view inspected outside a hierarchy, as the view tests do, would get
@@ -255,6 +258,7 @@ struct TranscriptionSettingsView: View {
                 )
             }
 
+            if settings.liveTranscriptionEnabled { CaptionWarmupStatus(warmup: captionWarmup) }
             captionOverlayToggle
             captionSizePicker
 

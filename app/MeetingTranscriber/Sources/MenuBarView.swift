@@ -48,6 +48,8 @@ struct MenuBarView: View {
     var notionExportEnabled: Bool = false
     /// Picks transcripts and queues meeting notes for each.
     var onGenerateNotesFromTranscripts: () -> Void = {}
+    /// Whether the live-caption models are still loading.
+    var captionsPreparing: Bool = false
 
     private var state: TranscriberState {
         status?.state ?? .idle
@@ -109,6 +111,12 @@ struct MenuBarView: View {
 
             if let detail = status?.detail, !detail.isEmpty {
                 Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if captionsPreparing {
+                Text(LiveCaptionsWarmup.preparingMenuText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

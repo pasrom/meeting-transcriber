@@ -215,6 +215,7 @@ struct MeetingTranscriberApp: App {
             onAnswerPendingConsent: appState.answerPendingConsent,
             notionExportEnabled: appState.settings.notionExportEnabled,
             onGenerateNotesFromTranscripts: generateNotesFromTranscripts,
+            captionsPreparing: appState.liveTranscription.warmup.isPreparing,
         )
     }
 
@@ -338,6 +339,7 @@ struct MeetingTranscriberApp: App {
                     dbPath: appState.pipeline.speakersDB, notifier: appState.notifier,
                 ),
                 legacyWhisperModels: appState.engines.legacyWhisperModels,
+                captionWarmup: appState.liveTranscription.warmup,
             )
         }
         .windowResizability(.contentSize)

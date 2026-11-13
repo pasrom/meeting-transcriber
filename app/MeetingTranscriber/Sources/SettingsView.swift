@@ -32,6 +32,7 @@ struct SettingsView: View {
     /// The old-models row's state, built once by `EngineController`. Nil leaves the row
     /// out, which is what tests and the App Store build get.
     var legacyWhisperModels: LegacyWhisperModelsState?
+    var captionWarmup: LiveCaptionsWarmup = .idle
 
     @State private var selection: SettingsTab = .general
 
@@ -79,6 +80,7 @@ struct SettingsView: View {
                 settings: settings,
                 whisperKitEngine: whisperKitEngine,
                 parakeetEngine: parakeetEngine,
+                captionWarmup: captionWarmup,
                 legacyModels: legacyWhisperModels,
             )
 
