@@ -78,8 +78,10 @@ final class AudioImportFidelityTests: XCTestCase {
 
     // MARK: - Length comes from the audio, not from the container
 
-    /// Fixtures whose sample rate differs from the pipeline target, so
-    /// `resampleFile` decodes them instead of taking its byte-copy fast path.
+    /// Fixtures `resampleFile` decodes instead of taking its byte-copy fast
+    /// path, which is reserved for a mono linear PCM WAV at the target rate.
+    /// These all differ from the target in rate; a compressed source that
+    /// shares the rate is covered in `VoiceFormatImportTests`.
     private static let fixturesRequiringDecode = [
         "sine_440hz_44k.m4a",
         "sine_440hz_44k.mp3",

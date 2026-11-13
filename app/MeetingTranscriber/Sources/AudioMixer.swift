@@ -282,14 +282,17 @@ enum AudioMixer {
 
     /// Load an audio or video file, resample to a target rate, and save to a new WAV file.
     ///
-    /// Fast path: if the source is already at `targetRate` (readable by AVAudioFile), copies
+    /// Fast path: if the source already is a mono linear PCM WAV at `targetRate`, copies
     /// the file directly instead of decoding and re-encoding. Sources too large for one
     /// `AVAudioPCMBuffer` are streamed; ordinary sources keep the established buffered path.
     static func resampleFile(from source: URL, to destination: URL, targetRate: Int = AudioConstants.targetSampleRate) async throws {
-        // Probe rate without loading all samples — O(1) for WAV/MP3/M4A
+        // Probe the format without loading all samples — O(1) for WAV/MP3/M4A
         if let audioFile = try? AVAudioFile(forReading: source) {
-            if Int(audioFile.processingFormat.sampleRate) == targetRate {
+            if isMonoPCMWAV(audioFile, at: source, sampleRate: targetRate) {
                 try FileManager.default.copyItem(at: source, to: destination)
+                // The copy carries the source's mode; the converted file is
+                // written private, and this one holds the same audio.
+                try FileManager.default.restrictToOwner(destination)
                 return
             }
             if !canAllocateSinglePCMBuffer(frameCount: audioFile.length, format: audioFile.processingFormat) {
@@ -312,6 +315,29 @@ enum AudioMixer {
         let (samples, sourceRate) = try await loadAudioAsFloat32(url: source)
         let resampled = resample(samples, from: sourceRate, to: targetRate)
         try saveWAV(samples: resampled, sampleRate: targetRate, url: destination)
+    }
+
+    /// Whether `file` is already a mono linear PCM WAV at `sampleRate`, which is
+    /// what the readers of `resampleFile`'s output rely on, so it can be copied
+    /// instead of converted. Bit depth is left open: a copy keeps the source's,
+    /// and every reader decodes through `AVAudioFile`.
+    ///
+    /// The container comes from the file's header: `AVAudioFile` opens by
+    /// content, so the name proves nothing.
+    private static func isMonoPCMWAV(_ file: AVAudioFile, at url: URL, sampleRate: Int) -> Bool {
+        let format = file.fileFormat
+        return Int(format.sampleRate) == sampleRate
+            && format.channelCount == 1
+            && format.streamDescription.pointee.mFormatID == kAudioFormatLinearPCM
+            && hasRIFFWaveHeader(url)
+    }
+
+    /// `RIFF` at offset 0 and `WAVE` at offset 8.
+    private static func hasRIFFWaveHeader(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: 12), header.count == 12 else { return false }
+        return header.prefix(4) == Data("RIFF".utf8) && header.suffix(4) == Data("WAVE".utf8)
     }
 
     // MARK: - Audio I/O

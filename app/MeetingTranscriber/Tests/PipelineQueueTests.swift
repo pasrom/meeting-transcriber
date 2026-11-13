@@ -1261,8 +1261,9 @@ final class PipelineQueueTests: XCTestCase {
     /// that job, so a second run walks into the first run's intermediate files.
     /// This pins the collision half: a `pipeline_<jobID>` directory that already
     /// holds a `mix_16k.wav` must not fail the run that arrives second.
-    /// `AudioMixer.resampleFile` copies when the source is already 16 kHz mono,
-    /// and `copyItem` onto an existing destination throws Cocoa 516.
+    /// `AudioMixer.resampleFile` copies when the source is already a 16 kHz
+    /// mono PCM WAV, which the test audio is, and `copyItem` onto an existing
+    /// destination throws Cocoa 516.
     func testRunIsNotFailedByAnotherRunsWorkDirectory() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [
