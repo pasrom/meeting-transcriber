@@ -5,6 +5,13 @@ updates:
     schedule:
       interval: "weekly"
 
+  # The real-Jitsi e2e keeper installs from a committed lockfile, so nothing
+  # moves it forward unless a PR does.
+  - package-ecosystem: "npm"
+    directory: "/scripts/fixtures"
+    schedule:
+      interval: "weekly"
+
   # "/" covers .github/workflows and a root action.yml only. The composite
   # actions under .github/actions carry pins of their own, which drifted
   # behind the workflows while nothing updated them.
