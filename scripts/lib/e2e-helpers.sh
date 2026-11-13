@@ -462,6 +462,32 @@ state_is() {
     jq -e "$@" "$filter" <<<"$STATE_BODY" >/dev/null 2>&1
 }
 
+# permission_health_reported: true once STATE_BODY carries the result of the
+# app's permission check, which runs asynchronously after launch. Keyed on a
+# verdict field rather than on `isHealthy`, which reads false until the first
+# check completes and would be indistinguishable from a real problem.
+permission_health_reported() {
+    state_is '(.permissionHealth.microphone // "unknown") != "unknown"'
+}
+
+# assert_console_user: die unless this user holds the foreground Aqua session.
+# `open` routes to the WindowServer of that session, so with another user in
+# front (Fast User Switching) or nobody signed in it fails with a bare
+# `procNotFound (-600)`. For lanes that launch through `open`; a directly
+# executed binary does not need it.
+assert_console_user() {
+    local fg_user my_user
+    fg_user="$(stat -f "%Su" /dev/console)"
+    my_user="$(id -un)"
+    [ "$fg_user" != "$my_user" ] || return 0
+    # `root` means the login window is up and nobody is signed in, a different
+    # fix from another user holding the foreground.
+    if [ "$fg_user" = "root" ]; then
+        die "no user is signed in at the console (loginwindow), so \`open\` has no Aqua session to route to. Sign '$my_user' in and re-run."
+    fi
+    die "Aqua foreground user is '$fg_user', not '$my_user': Fast User Switching is active, and \`open\` would fail with a bare -600. Log '$fg_user' out completely, then re-run."
+}
+
 # poll_state [--each <cmd>] [--judge-deadline-read] <timeout_s> <interval_s>
 #            <predicate> [args...]
 # poll_until with a fresh state_read before every tick; the predicate runs
@@ -701,9 +727,9 @@ rpc_post() {
 # sees `{}` (or no /state response) and surfaces a misleading
 # "expected X never happened" error.
 #
-# Pattern-based (via `pgrep -f`) rather than PID-based so it works for
-# both `&`-launched scripts (e2e-silent-recording.sh) and
-# `open`-launched scripts (e2e-app.sh) without two APIs. The default
+# Pattern-based (via `pgrep -f`) rather than PID-based: an app started
+# through `open` (the way the lanes launch it, see the e2e-architecture
+# skill) is no child of the driver, so there is no PID to hold. The default
 # matches the deployed dev .app — same string as `quit_running_app`.
 assert_app_alive() {
     local pattern="${1:-MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber}"

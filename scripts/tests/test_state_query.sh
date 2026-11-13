@@ -121,6 +121,20 @@ status=0; state_read || status=$?
 
 # --- poll_state -------------------------------------------------------------
 
+# The permission check runs asynchronously after launch. Until it reports,
+# `isHealthy` reads false, so readiness is taken from a verdict field: absent
+# or "unknown" is not yet, any verdict (a bad one included) is reported.
+for body in '{}' '{"permissionHealth":{"isHealthy":false}}' '{"permissionHealth":{"microphone":"unknown","isHealthy":false}}'; do
+    STATE_BODY="$body"
+    ! permission_health_reported \
+        && ok permission_health_not_reported_yet || bad permission_health_not_reported_yet "$body"
+done
+for verdict in healthy denied broken; do
+    STATE_BODY="{\"permissionHealth\":{\"microphone\":\"$verdict\",\"isHealthy\":false}}"
+    permission_health_reported \
+        && ok "permission_health_reported_$verdict" || bad "permission_health_reported_$verdict" "$STATE_BODY"
+done
+
 # The windows of the polls meant to hold are ceilings: they end at the read
 # the condition holds on. The interval keeps a never-true condition from
 # forking the fake back to back for the whole window.
