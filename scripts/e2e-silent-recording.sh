@@ -90,9 +90,11 @@ cleanup() {
     if [ -n "${SIM_PID:-}" ] && kill -0 "$SIM_PID" 2>/dev/null; then
         kill -TERM "$SIM_PID" 2>/dev/null || true
     fi
-    if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
-        kill -9 "$APP_PID" 2>/dev/null || true
-    fi
+    # Started through `open`, so it is no child of this shell and has no PID
+    # here; found by the pattern assert_app_alive uses and ended by PID. Only
+    # once this lane launched it, so an early exit leaves alone an instance it
+    # never started. Quiet: an app that already exited is no failure here.
+    [ -z "${APP_LAUNCHED:-}" ] || kill_and_verify_gone "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" 5 2>/dev/null || true
     # The app was kill -9'd mid-recording above, orphaning a raw temp; sweep
     # this run's artifacts so the next run doesn't crash-recover a stale temp.
     sweep_run_artifacts "$REC_DIR" "$RUN_START_MARKER"
@@ -208,12 +210,43 @@ write_dev_default "$BUNDLE_ID" perChannelIndicatorEnabled true bool
 
 # --- 4. Launch app with RPC enabled -----------------------------------------
 
-env MEETINGTRANSCRIBER_DEBUG_RPC=1 "$BIN" &
-APP_PID=$!
+# `open`, not the binary directly. TCC answers for the process launchd knows:
+# an executable started from this shell is attributed to whatever started the
+# lane (the runner agent under CI), whose grants are not the app's, and a
+# capture refused that way delivers zeroes without an error. That is exactly
+# the silence this lane asserts, so a direct launch could pass for the wrong
+# reason.
+assert_console_user
+# Set before the launch: an `open` that fails after the app already started
+# must still be cleaned up.
+APP_LAUNCHED=1
+open --env MEETINGTRANSCRIBER_DEBUG_RPC=1 "$DEV_BUNDLE_DEPLOY"
 
 echo "▸ Waiting for RPC on 127.0.0.1:9876…"
 wait_for_rpc "$MTCLI" 30 || die "RPC server did not start within 30 s"
 echo "  RPC up"
+
+# The capture must be allowed before its silence can mean anything, so a host
+# whose grant lapsed fails here, named, instead of passing on zeroes.
+# Microphone covers the mic track. Screen Recording is one of the two grants
+# the app-audio tap accepts; the other, Audio Recording, is not reported in
+# /state, so this lane insists on the one it can read. A host that granted
+# only Audio Recording is refused here although its tap would work.
+echo "▸ Waiting for the app's permission health check…"
+status=0
+poll_state --each assert_app_alive 20 0.5 permission_health_reported || status=$?
+case "$status" in
+    0) ;;
+    1) die "the app answered /state but its permission health check reported nothing within 20 s, so whether its capture is allowed is unknown" ;;
+    *) die "$(state_why "$status" "what the app's permission health check reports")" ;;
+esac
+read -r APP_MIC_STATE APP_SR_STATE < <(
+    jq -r '"\(.permissionHealth.microphone // "unknown") \(.permissionHealth.screenRecording // "unknown")"' <<<"$STATE_BODY"
+)
+echo "  microphone=$APP_MIC_STATE screenRecording=$APP_SR_STATE"
+if [ "$APP_MIC_STATE" != "healthy" ] || [ "$APP_SR_STATE" != "healthy" ]; then
+    die "the app reports microphone=$APP_MIC_STATE screenRecording=$APP_SR_STATE, so its capture may be zeroed by TCC and silence on both tracks would prove nothing about the detector. This lane needs both to read healthy, because /state does not report the Audio Recording grant that would also allow the app-audio tap. Fix: $(tcc_fix_hint 'Microphone and Screen & System Audio Recording' "$DEV_BUNDLE_DEPLOY")"
+fi
 
 # --- 5. Trigger a "silent meeting" via meeting-simulator --------------------
 
@@ -268,7 +301,7 @@ case "$status" in
     0) echo "  recordingSilent=true (mic=$MIC_SILENT app=$APP_SILENT)" ;;
     2)
         assert_app_alive
-        die "the app did not answer /state through the end of the 50 s window, so whether recordingSilent went true is unknown (last error: ${STATE_ERR:-<none>}). The app process is alive. If mt-cli timed out rather than being refused, the app is blocked, and on the runner the likeliest cause is a TCC consent prompt waiting on its screen (this lane starts the binary directly, so TCC may attribute the app's accesses to the runner's node). Fix: $(tcc_fix_hint 'the pane the prompt names')"
+        die "the app did not answer /state through the end of the 50 s window, so whether recordingSilent went true is unknown (last error: ${STATE_ERR:-<none>}). The app process is alive. If mt-cli timed out rather than being refused, the app is blocked, and on the runner the likeliest cause is a TCC consent prompt waiting on its screen. Fix: $(tcc_fix_hint 'the pane the prompt names' "$DEV_BUNDLE_DEPLOY")"
         ;;
     *)
         # STATE_BODY is the last answer the app gave, not a later empty read.
