@@ -43,6 +43,7 @@
             )
             window.contentView = hosting
             window.makeKeyAndOrderFront(nil)
+            addTeardownBlock { @MainActor in window.orderOut(nil) }
 
             // SwiftUI builds its backing NSView tree on a later run-loop turn.
             pump { hosting.subviews.isEmpty == false && self.firstTextInput(in: hosting) != nil }

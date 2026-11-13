@@ -106,17 +106,20 @@ final class LiveCaptionsPanelSavingTests: XCTestCase { // swiftlint:disable:this
     /// Shows the bar and returns the panel the controller made for it: the
     /// caption window that was not there before. At the end of the test the
     /// bar is hidden and the controller must be gone, which is what removes
-    /// its key monitors and move observer.
+    /// its key monitors and move observer. The teardown orders the panel out
+    /// itself, since a shown panel stays on screen after its controller is
+    /// released.
     private func showPanel(_ controller: LiveCaptionsWindowController) throws -> NSWindow {
         let before = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
         controller.show()
+        let panel = NSApplication.shared.windows.first { window in
+            !before.contains(ObjectIdentifier(window)) && window.identifier == LiveCaptionsWindowController.panelIdentifier
+        }
         addTeardownBlock { @MainActor [weak controller] in
-            controller?.hide()
+            panel?.orderOut(nil)
             XCTAssertNil(controller, "the controller outlived its test")
         }
-        return try XCTUnwrap(NSApplication.shared.windows.first { window in
-            !before.contains(ObjectIdentifier(window)) && window.identifier == LiveCaptionsWindowController.panelIdentifier
-        })
+        return try XCTUnwrap(panel)
     }
 
     /// Sends a left mouse button event to `panel` through the application,
