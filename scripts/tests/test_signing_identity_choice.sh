@@ -153,6 +153,10 @@ exit 0
 STUB
     printf '#!/usr/bin/env bash\nexit 0\n' > "$STUB_HARNESS/swift"
     printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB_HARNESS/pgrep"
+    # test_rpc.sh stops the dev app with `pkill -f MeetingTranscriber-Dev`, from its
+    # exit trap too, so the real pkill would stop the developer's installed dev app.
+    # The stand-in only records the call.
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\nexit 1\n' "$STUB_ROOT/pkill.log" > "$STUB_HARNESS/pkill"
     printf '#!/usr/bin/env bash\nexit 42\n' > "$STUB_HARNESS/open"
     printf 'stand-in model\n' > "$STUB_ROOT/model/localvqe-test.gguf"
     printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$STUB_ROOT/model/localvqe-test.gguf" \
@@ -599,6 +603,11 @@ test_test_rpc_decides_before_it_replaces_the_executable() {
     if [ "$status" -ne 42 ]; then
         echo "  test_rpc.sh exited $status before reaching its launch; its last lines:" >&2
         tail -5 "$workdir/run.log" | sed 's/^/    /' >&2
+        rc=1
+    fi
+    if ! grep -q 'MeetingTranscriber-Dev' "$STUB_ROOT/pkill.log" 2>/dev/null; then
+        echo "  test_rpc.sh's pkill of the dev app did not reach the pkill stand-in: the" >&2
+        echo "  real pkill stops an installed MeetingTranscriber-Dev on the machine" >&2
         rc=1
     fi
     if [ "$signed" != "$carried" ]; then
