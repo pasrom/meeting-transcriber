@@ -112,6 +112,20 @@ final class LiveTranscriptionController {
     /// Called before `prepare()` loads the shared engine, so the owner can hold its model.
     var willLoadEngine: (() -> Void)?
 
+    /// Why `prepare()` ended with no caption pipelines; nil while it runs and
+    /// when captions can run (a fallback to re-transcribe included).
+    private(set) var prepareFailure: String?
+    private var streamingLoadFailure: String?
+
+    /// Set by `cancelPrepare()`; `prepare()` checks it between model loads.
+    private var prepareCancelled = false
+
+    /// Stop `prepare()` at its next step. The owner calls this when it drops the
+    /// controller; a model load already running is not interrupted.
+    func cancelPrepare() {
+        prepareCancelled = true
+    }
+
     /// The most recent stop-time flush, kept so the NEXT recording's reset can
     /// await it before reusing a kept EOU session. `flush()` is dispatched
     /// fire-and-forget from `WatchingController`, and a slow `asr.finish()` can
@@ -192,9 +206,13 @@ final class LiveTranscriptionController {
     /// settings change or relaunch drops + re-creates it) — deliberate, so a
     /// failing first-use model download isn't re-hammered on every recording.
     func prepare() async {
+        guard !prepareCancelled else { return }
         await prewarmSpeakerMatcher()
+        guard !prepareCancelled else { return }
         if micPipeline == nil, appPipeline == nil {
             await buildPipelines()
+            // A dropped controller must not publish its backend over its successor's.
+            guard !prepareCancelled else { return }
             // Arm the feeds here too (not only in `prepareForNextRecording()`)
             // so the late-resolution ordering — recording already running,
             // EOU models finishing their first-use load — connects the sinks
@@ -212,6 +230,7 @@ final class LiveTranscriptionController {
             engineLanguage.map { "\(name) · \($0.uppercased())" } ?? name
         }
         captions.setActiveBackend(backend)
+        prepareFailure = backend == nil ? streamingLoadFailure ?? "No caption model could be loaded." : nil
         if verboseDiagnostics() {
             logger.info(
                 "Live transcription ready (backend: \(backend ?? "none", privacy: .public))",
@@ -234,7 +253,7 @@ final class LiveTranscriptionController {
         }
         // Re-transcribe path (default or streaming fallback). With no streaming
         // engine (failed streaming backend on a non-streaming engine) captions stay off.
-        guard let engine else { return }
+        guard let engine, !prepareCancelled else { return }
         willLoadEngine?()
         await engine.loadModel()
         micPipeline = makeReTranscribePipeline(channel: .mic, engine: engine)
@@ -259,6 +278,7 @@ final class LiveTranscriptionController {
             logger.warning(
                 "Nemotron streaming model load failed, falling back: \(error.localizedDescription, privacy: .public)",
             )
+            streamingLoadFailure = error.localizedDescription
             micPipeline = nil
             appPipeline = nil
             usingStreamingSession = false
@@ -273,6 +293,7 @@ final class LiveTranscriptionController {
         do {
             let mic = makeEouPipeline(channel: .mic)
             try await mic.prepare()
+            guard !prepareCancelled else { return true }
             let app = makeEouPipeline(channel: .app)
             try await app.prepare()
             micPipeline = mic
@@ -283,6 +304,7 @@ final class LiveTranscriptionController {
             // Non-fatal: log and let the caller fall back to the re-transcribe
             // path (or no captions). Model-load errors carry no spoken content.
             logger.warning("EOU streaming model load failed, falling back: \(error.localizedDescription, privacy: .public)")
+            streamingLoadFailure = error.localizedDescription
             micPipeline = nil
             appPipeline = nil
             usingStreamingSession = false

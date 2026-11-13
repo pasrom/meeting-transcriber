@@ -156,6 +156,15 @@ final class MenuBarViewTests: XCTestCase {
         XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: A11yID.menuRecordPendingConsent))
     }
 
+    // MARK: - Caption warm-up
+
+    func testCaptionWarmupLineShownOnlyWhilePreparing() throws {
+        var sut = try makeView(status: makeStatus(state: .idle))
+        XCTAssertThrowsError(try sut.inspect().find(text: "Preparing live captions\u{2026}"))
+        sut.captionsPreparing = true
+        XCTAssertNoThrow(try sut.inspect().find(text: "Preparing live captions\u{2026}"))
+    }
+
     // MARK: - Detail text
 
     func testDetailShownWhenNonEmpty() throws {

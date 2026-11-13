@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+import os
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveTranscription")
 
 // MARK: - LiveTranscriptionCoordinator
 
@@ -19,12 +22,15 @@ import Observation
 /// `engineLanguage` / `verboseDiagnostics` are settings-backed closures.
 ///
 /// `@Observable` for `captionsUseEngine`, which the engine lifetime observer
-/// reads. It also uses `withObservationTracking` internally to watch the
+/// reads, and `warmup`, which Settings and the menu show. It also uses `withObservationTracking` internally to watch the
 /// settings keys.
 @MainActor
 @Observable
 final class LiveTranscriptionCoordinator {
     private var controller: LiveTranscriptionController?
+
+    /// Where the current controller's model warm-up stands; `.idle` without one.
+    private(set) var warmup: LiveCaptionsWarmup = .idle
 
     /// Whether the prepared controller's captions run on the active engine.
     private(set) var captionsUseEngine = false
@@ -183,8 +189,7 @@ final class LiveTranscriptionCoordinator {
         // would orphan the one it is binding (fast manual stop→restart).
         if needsRewarmWhenIdle, !isRecording(), !attachInFlight {
             needsRewarmWhenIdle = false
-            controller = nil
-            captionsUseEngine = false
+            dropController()
             prewarmIfEligible()
         }
     }
@@ -226,9 +231,17 @@ final class LiveTranscriptionCoordinator {
             observeSettings()
             return
         }
+        dropController()
+        prewarmAndObserve()
+    }
+
+    /// Drop the controller and stop the rest of its warm-up, so a stale one does
+    /// not keep loading models next to its successor's.
+    private func dropController() {
+        controller?.cancelPrepare()
         controller = nil
         captionsUseEngine = false
-        prewarmAndObserve()
+        warmup = .idle
     }
 
     private func prewarmIfEligible() {
@@ -261,6 +274,9 @@ final class LiveTranscriptionCoordinator {
         guard strategy != .reTranscribe || streamingEngine != nil else { return nil }
         let controller = makeController(streamingEngine, captions, language, verboseDiagnostics)
         self.controller = controller
+        let started = Date()
+        warmup = .preparing(since: started)
+        logger.notice("Live caption warm-up started (language: \(language ?? "auto", privacy: .public))")
         // Before prepare(), so a release cannot land while its engine load runs.
         captionsUseEngine = strategy == .reTranscribe
         // The fallback after a failed streaming load reaches the engine load later.
@@ -273,7 +289,17 @@ final class LiveTranscriptionCoordinator {
         Task { @MainActor [weak self] in
             await queue.run {
                 await controller.prepare()
-                if let self, self.controller === controller { self.captionsUseEngine = controller.usesTranscriptionEngine }
+                // Counted from the build, so time spent waiting in the queue is included.
+                let seconds = Date().timeIntervalSince(started)
+                guard let self, self.controller === controller else {
+                    logger.notice("Live caption warm-up dropped after \(seconds, format: .fixed(precision: 1), privacy: .public) s")
+                    return
+                }
+                self.captionsUseEngine = controller.usesTranscriptionEngine
+                self.warmup = controller.prepareFailure.map(LiveCaptionsWarmup.failed) ?? .ready
+                logger.notice(
+                    "Live caption warm-up \(self.warmup.name, privacy: .public) after \(seconds, format: .fixed(precision: 1), privacy: .public) s",
+                )
             }
         }
         return controller
