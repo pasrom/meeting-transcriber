@@ -38,8 +38,15 @@ struct QualityResult: Codable {
 final class QualityResultsWriter {
     static let shared = QualityResultsWriter()
     private var rows: [QualityResult] = []
+    private let destination: URL?
 
-    private init() {}
+    /// - Parameter destination: where `flush()` writes. Nil, as for `shared`,
+    ///   resolves it from the environment at flush time. The writer's own
+    ///   tests pass a file of their own, so they never touch `shared`, whose
+    ///   rows and destination belong to a quality run in the same process.
+    init(destination: URL? = nil) {
+        self.destination = destination
+    }
 
     func append(_ row: QualityResult) {
         rows.append(row)
@@ -50,7 +57,7 @@ final class QualityResultsWriter {
     /// CI sets `QUALITY_RESULTS_PATH` to the artifact path; locally the file
     /// lands next to the package in `.build/quality-results.json`.
     func flush() throws -> URL {
-        let url = destinationURL
+        let url = destination ?? Self.destination(environment: ProcessInfo.processInfo.environment)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true,
@@ -62,19 +69,16 @@ final class QualityResultsWriter {
         return url
     }
 
-    func reset() {
-        rows.removeAll()
-    }
-
     var collectedRows: [QualityResult] {
         rows
     }
 
-    private var destinationURL: URL {
-        if let override = ProcessInfo.processInfo.environment["QUALITY_RESULTS_PATH"] {
+    /// `QUALITY_RESULTS_PATH` when set, as CI does, else
+    /// `<repo>/app/MeetingTranscriber/.build/quality-results.json`.
+    static func destination(environment: [String: String]) -> URL {
+        if let override = environment["QUALITY_RESULTS_PATH"] {
             return URL(fileURLWithPath: override)
         }
-        // Default: `<repo>/app/MeetingTranscriber/.build/quality-results.json`.
         return URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent() // Quality/
             .deletingLastPathComponent() // Tests/

@@ -104,6 +104,10 @@ echo "Wrote:"
 echo "  $OUT_DIR/${FIXTURE}.wav (${WIN_DURATION}s, sha256 verified)"
 echo "  $OUT_DIR/${FIXTURE}_truth.json"
 echo
+# The filter names the engine quality classes, the same list as in
+# .github/workflows/quality-and-safety.yml: a bare `--filter Quality` would
+# also run the baseline-gate test class in the middle of the measurement.
 echo "If the fixture changed, baselines are stale. Re-measure with"
-echo "  RUN_QUALITY_TESTS=1 swift test --filter Quality"
-echo "and re-bless via scripts/bless_quality_baseline.sh."
+echo "  (cd app/MeetingTranscriber && RUN_QUALITY_TESTS=1 swift test --filter \"WhisperKitQualityTests|FluidDiarizerQualityTests|ParakeetQualityTests\")"
+echo "from the repository root, with QUALITY_RESULTS_PATH unset, and re-bless via"
+echo "  scripts/bless_quality_baseline.sh app/MeetingTranscriber/.build/quality-results.json"
