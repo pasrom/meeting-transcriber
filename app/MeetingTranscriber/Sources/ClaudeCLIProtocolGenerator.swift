@@ -73,11 +73,13 @@
 
         func generate(
             transcript: String,
-            title _: String,
+            title: String,
             diarized: Bool,
             meetingStartTime: Date?,
         ) async throws -> String {
-            let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language, meetingStartTime: meetingStartTime) + transcript
+            let prompt = ProtocolGenerator.buildSystemPrompt(
+                diarized: diarized, language: language, meetingStartTime: meetingStartTime, title: title,
+            ) + transcript
             let launch = await launchConfiguration()
             try Task.checkCancellation()
             do {
