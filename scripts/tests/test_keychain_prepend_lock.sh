@@ -13,9 +13,18 @@ SCRIPT="$ROOT/scripts/keychain-prepend.sh"
 
 TMP="$(mktemp -d)"
 holder=""
+# Set at the very end; see test_kill_and_verify_gone.sh for why a `set -u`
+# abort would otherwise read as a pass.
+COMPLETED=0
 cleanup() {
+    local rc=$?
     [ -n "$holder" ] && kill "$holder" 2>/dev/null || true
     rm -rf "$TMP"
+    if [ "$COMPLETED" -ne 1 ]; then
+        echo "FAIL: the test aborted before reaching its end" >&2
+        exit 1
+    fi
+    exit "$rc"
 }
 trap cleanup EXIT
 PASSED=0
@@ -51,4 +60,5 @@ PATH="$TMP/bin:$PATH" TMPDIR="$TMP/tmpdir" bash "$SCRIPT" /target.keychain-db 2>
 [ "$status" -eq 1 ] && [ ! -e "$TMP/security.calls" ] && [ -e "$lockfile" ] \
     && ok contended_run_gives_up || bad contended_run_gives_up "status $status, calls: $(cat "$TMP/security.calls" 2>/dev/null)"
 
+COMPLETED=1
 echo "$PASSED passed"
