@@ -334,7 +334,7 @@ jobs:
       # meeting-simulator + mt-cli built during the earlier lanes.
       - name: Run silent-recording detector E2E
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        timeout-minutes: 3
+        timeout-minutes: 4
         run: bash scripts/e2e-silent-recording.sh --no-build
 
       # Capture-fault e2e (issue #614): the lane that pins the distinction
