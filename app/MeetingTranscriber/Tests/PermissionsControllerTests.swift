@@ -113,6 +113,42 @@ final class PermissionsControllerTests: XCTestCase {
         { await gate.wait(); return counter.probe() }
     }
 
+    /// Runs one check as far as the gated probe, then has a second caller open
+    /// the gate and call `check()` in the same main-actor turn, and waits for both.
+    ///
+    /// The join is decided the moment a caller enters `check()`: it reads whether
+    /// a run is in flight and awaits that run or starts its own, with no suspension
+    /// in between. Opening the gate only enqueues the parked probe, so the released
+    /// run cannot finish before the second caller has entered and made that
+    /// decision (see `MainActorGate`). The order holds by construction; two sibling
+    /// tasks would leave it to the scheduler, and a late second caller finds no
+    /// run to join.
+    ///
+    /// It rests on `check()` not suspending ahead of the join. With an `await`
+    /// there the released run could finish first, and these tests would no longer
+    /// pin the order.
+    private func runCheckWithJoiner(
+        on controller: PermissionsController,
+        heldBy gate: MainActorGate,
+        joinerInterval: TimeInterval? = nil,
+    ) async {
+        let first = Task { @MainActor in await controller.check() }
+        await waitFor(gate.hasWaiter, timeout: regressionCeiling)
+        guard gate.hasWaiter else {
+            gate.open()
+            XCTFail("the first check never parked in its probe")
+            return
+        }
+        let joiner = Task { @MainActor in
+            gate.open()
+            await controller.check(minimumInterval: joinerInterval)
+        }
+        let firstReturned = await value(of: first) != nil
+        let joinerReturned = await value(of: joiner) != nil
+        XCTAssertTrue(firstReturned, "the first check never returned")
+        XCTAssertTrue(joinerReturned, "the second check never returned")
+    }
+
     func testCheckDuringARunningCheckJoinsItInsteadOfProbingAgain() async {
         // The debounce only knows about checks that have finished (`lastCheckAt`
         // is written after the probe returns), so a check arriving while one is
@@ -121,16 +157,9 @@ final class PermissionsControllerTests: XCTestCase {
         let counter = ProbeCounter()
         let controller = PermissionsController(notifier: RecordingNotifier(), probe: gatedProbe(gate, counter))
 
-        async let first: Void = controller.check()
-        async let second: Void = controller.check(minimumInterval: 3)
-        await waitFor(gate.hasWaiter)
-        // Both callers are inside `check()` now; only one probe may be out.
-        try? await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(gate.waiterCount, 1, "the second check must join the running probe, not start its own")
+        await runCheckWithJoiner(on: controller, heldBy: gate, joinerInterval: 3)
 
-        gate.open()
-        _ = await (first, second)
-        XCTAssertEqual(counter.count, 1)
+        XCTAssertEqual(counter.count, 1, "the second check must join the running probe, not start its own")
         XCTAssertNotNil(controller.health, "the joined check reports the shared result")
         XCTAssertNotNil(controller.lastCheckAt)
     }
@@ -141,11 +170,8 @@ final class PermissionsControllerTests: XCTestCase {
         let gate = MainActorGate()
         let counter = ProbeCounter()
         let controller = PermissionsController(notifier: RecordingNotifier(), probe: gatedProbe(gate, counter))
-        async let first: Void = controller.check()
-        async let second: Void = controller.check()
-        await waitFor(gate.hasWaiter)
-        gate.open()
-        _ = await (first, second)
+        await runCheckWithJoiner(on: controller, heldBy: gate)
+        XCTAssertEqual(counter.count, 1, "the joined check must not have probed on its own")
         await controller.check()
         XCTAssertEqual(counter.count, 2)
     }
