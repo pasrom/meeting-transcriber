@@ -19,6 +19,7 @@
             window.identifier = NSUserInterfaceItemIdentifier(id)
             if visible {
                 window.orderFront(nil)
+                addTeardownBlock { @MainActor in window.orderOut(nil) }
             }
             return window
         }
