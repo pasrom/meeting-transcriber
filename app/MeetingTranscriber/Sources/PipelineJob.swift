@@ -229,6 +229,12 @@ struct PipelineJob: Identifiable, Codable {
     // See `includeFullTranscriptInProtocol`.
     // swiftlint:disable:next discouraged_optional_boolean
     var useAITitleForFilenames: Bool?
+    /// The template this job's meeting notes are made from, captured by name
+    /// when the job enters the queue; the file's text is read only when the
+    /// notes are generated. Nil for a job from a snapshot written before
+    /// templates, which uses the current default. A retry keeps it: it is the
+    /// user's choice, not something the failed run concluded.
+    var protocolTemplate: ProtocolTemplateID?
     /// Diarizer mode that produced the *current* `speakerNamingDataByJob`
     /// entry. Set by `PipelineQueue` after diarisation completes (in the
     /// initial pipeline run and after `lateDiarization`). Used by the
@@ -367,6 +373,7 @@ struct PipelineJob: Identifiable, Codable {
         saveRawTranscriptSeparately: Bool? = nil,
         // swiftlint:disable:next discouraged_optional_boolean
         useAITitleForFilenames: Bool? = nil,
+        protocolTemplate: ProtocolTemplateID? = nil,
     ) {
         self.id = UUID()
         self.meetingTitle = meetingTitle
@@ -389,6 +396,7 @@ struct PipelineJob: Identifiable, Codable {
         self.includeFullTranscriptInProtocol = includeFullTranscriptInProtocol
         self.saveRawTranscriptSeparately = saveRawTranscriptSeparately
         self.useAITitleForFilenames = useAITitleForFilenames
+        self.protocolTemplate = protocolTemplate
         self.usedDiarizerMode = nil
         self.autoSkipNaming = autoSkipNaming
     }
@@ -417,7 +425,8 @@ struct PipelineJob: Identifiable, Codable {
     /// again from its own run, and a leftover one would describe a recording
     /// the retry never saw that way. The paths stay: the audio is the input
     /// the retry needs, and the slug and transcript path name files the retry
-    /// overwrites under the same basename.
+    /// overwrites under the same basename. So does the meeting-notes template,
+    /// which the user chose rather than the run.
     mutating func prepareForRetry() {
         error = nil
         warnings = []

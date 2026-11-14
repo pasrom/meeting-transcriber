@@ -69,7 +69,9 @@ final class ParkingProtocolGen: ProtocolGenerating, @unchecked Sendable {
         lock.withLock { armed = true }
     }
 
-    func generate(transcript _: String, title: String, diarized _: Bool, meetingStartTime _: Date?) async -> String {
+    func generate(
+        transcript _: String, title: String, diarized _: Bool, meetingStartTime _: Date?, instructions _: ProtocolInstructions,
+    ) async -> String {
         let parks = lock.withLock { () -> Bool in
             calls += 1
             defer { armed = false }

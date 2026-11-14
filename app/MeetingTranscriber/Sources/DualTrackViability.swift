@@ -108,9 +108,9 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
     /// never sees it and it leaves with the job.
     ///
     /// Bracketed and on a single line so it cannot be mistaken for something a
-    /// participant said. The prompt is not what makes it legible: a user's own
-    /// `protocol_prompt.md` replaces the built-in one, so the line has to
-    /// explain itself wherever it lands.
+    /// participant said. The prompt is not what makes it legible: a
+    /// meeting-notes template of the user's own replaces the built-in one, so
+    /// the line has to explain itself wherever it lands.
     ///
     /// Worded for both ways a track is lost, empty or failing to transcribe:
     /// "carried nothing" would tell the user of a failed track that there was

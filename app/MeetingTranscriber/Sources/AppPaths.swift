@@ -43,8 +43,13 @@ enum AppPaths {
     /// Speaker voice profiles DB.
     static let speakersDB = dataDir.appendingPathComponent("speakers.json")
 
-    /// Custom protocol prompt file.
+    /// The single custom prompt of builds before meeting-notes templates.
+    /// Copied into `protocolTemplatesDir` by `ProtocolTemplateMigration` and
+    /// never modified, because an older build sharing `dataDir` still reads it.
     static let customPromptFile = dataDir.appendingPathComponent("protocol_prompt.md")
+
+    /// Meeting-notes templates, one Markdown file per template (`ProtocolTemplateStore`).
+    static let protocolTemplatesDir = dataDir.appendingPathComponent("Protocol Templates", isDirectory: true)
 
     /// Exists exactly while a run of this bundle is alive; see `LivenessMarker`.
     /// Named per bundle identifier because the dev and release builds share

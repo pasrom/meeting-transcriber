@@ -446,8 +446,9 @@
                 /// A user-picked custom output dir (security-scoped bookmark) is
                 /// set, vs the default ~/Downloads/MeetingTranscriber.
                 let hasCustomDirectory: Bool
-                /// A custom protocol-prompt file exists on disk. The content is
-                /// intentionally not exposed (potentially large / user-authored).
+                /// The default meeting-notes template is one of the user's own
+                /// files rather than the built-in one. Neither its name nor its
+                /// content is exposed (user-authored).
                 let hasCustomPrompt: Bool
                 /// Whether the generated Markdown includes the verbatim transcript.
                 let includeFullTranscriptInProtocol: Bool

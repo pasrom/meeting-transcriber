@@ -123,8 +123,8 @@ final class DualTrackViabilityTests: XCTestCase {
     /// The note is read by the protocol model as well as by a person, so it has
     /// to say what is missing without being mistakable for something a
     /// participant said. A bracketed prefix is the whole mechanism: the prompt
-    /// cannot be relied on to explain it, because a user-supplied
-    /// `protocol_prompt.md` replaces the built-in one.
+    /// cannot be relied on to explain it, because a meeting-notes template of
+    /// the user's own replaces the built-in one.
     func testTheNoteIsMarkedAsAnAnnotationRatherThanSpeech() throws {
         for viability in [DualTrackViability.appOnly, .micOnly] {
             let note = try XCTUnwrap(viability.transcriptNote)

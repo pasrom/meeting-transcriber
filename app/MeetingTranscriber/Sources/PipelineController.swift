@@ -64,6 +64,9 @@ final class PipelineController {
         var speakersDB: URL
         var recognitionStatsLog: URL
         var stageTimingLog: URL
+        /// The meeting-notes templates folder: where a job's template is read
+        /// and where the default setting is checked against.
+        var protocolTemplateStore: ProtocolTemplateStore
         var securityScope: SecurityScopeAccess = .live
         /// Rescues crashed recordings from the staging folder and enqueues
         /// orphans into the queue it is handed; nil skips it.
@@ -327,6 +330,10 @@ final class PipelineController {
                     useAITitleForFilenames: settings.useAITitleForFilenames,
                 )
             },
+            defaultProtocolTemplateProvider: { [settings, store = queueEnvironment.protocolTemplateStore] in
+                store.effectiveDefault(settings.defaultProtocolTemplate)
+            },
+            protocolTemplateStore: queueEnvironment.protocolTemplateStore,
             speakerMatcherFactory: SpeakerMatcher.factory(dbPath: speakersDB, notifier: notifier),
             vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
             recognitionStatsLog: RecognitionStatsLog(path: queueEnvironment.recognitionStatsLog),

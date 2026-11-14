@@ -202,6 +202,7 @@ final class AppState {
         // This is the only production construction of `AppSettings` — tests
         // inject their own, so none of them touch the real domains.
         LegacyDefaultsMigration.run(into: .standard)
+        ProtocolTemplateMigration.run(defaults: .standard, legacyPrompt: AppPaths.customPromptFile, store: .production)
         let settings = AppSettings()
         // Once, here, rather than from `customOutputDir` or
         // `terminologyRulesFile` — those getters are read during view updates,

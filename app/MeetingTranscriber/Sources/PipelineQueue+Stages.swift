@@ -1104,6 +1104,7 @@ extension PipelineQueue {
         let initialBasename = job.namingSlug
             ?? Self.namingSlug(title: title, jobID: jobID, startTime: Date())
         let meetingStartTime = job.meetingStartTime
+        let (instructions, usedTemplate) = protocolInstructions(for: job)
         updateJobState(id: jobID, to: .generatingProtocol)
         let protocolMD: String
         do {
@@ -1115,6 +1116,7 @@ extension PipelineQueue {
                 title: title,
                 diarized: diarized,
                 meetingStartTime: meetingStartTime,
+                instructions: instructions,
             )
         } catch {
             // Cancelled while the model was writing. A generator stopped this
@@ -1145,8 +1147,7 @@ extension PipelineQueue {
 
         let outputOptions = transcriptOutputOptions(forJobID: jobID)
         var basename = initialBasename
-        if outputOptions.useAITitleForFilenames,
-           let titleSlug = ProtocolGenerator.extractTitle(from: protocolMD).flatMap(ProtocolGenerator.toSnakeCase) {
+        if let titleSlug = ProtocolGenerator.fileTitleSlug(from: protocolMD, enabled: outputOptions.useAITitleForFilenames, template: usedTemplate) {
             basename = renameJobArtifacts(
                 jobID: jobID, from: initialBasename, titleSlug: titleSlug, protocolsDir: protocolsDir,
             )
@@ -1170,10 +1171,28 @@ extension PipelineQueue {
                     speakerNames: speakerNames,
                     configuration: configuration,
                     savedLocally: savedLocally,
+                    template: usedTemplate,
                 ),
                 jobID: jobID,
             )
         }
+    }
+
+    /// What `job`'s meeting notes are asked for with: its template, or the
+    /// current default for a job from a snapshot written before templates, with
+    /// a warning on the job when the template fell back to the built-in one.
+    /// Also returns the template the instructions came from, which decides
+    /// whether the notes' first heading is a meeting title.
+    private func protocolInstructions(
+        for job: PipelineJob,
+    ) -> (instructions: ProtocolInstructions, used: ProtocolTemplateID) {
+        let templateID = job.protocolTemplate ?? defaultProtocolTemplateProvider()
+        let (instructions, usedTemplate, templateWarning) = protocolTemplateStore.instructions(for: templateID)
+        if let templateWarning { addWarning(id: job.id, templateWarning) }
+        logger.info(
+            "[\(job.shortID, privacy: .public)] protocol_template template=\(templateID.storedValue, privacy: .private) fallback=\(templateWarning != nil, privacy: .public)",
+        )
+        return (instructions, usedTemplate)
     }
 
     /// Reads the export configuration and, when the export is on but cannot run

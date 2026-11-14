@@ -395,13 +395,6 @@ final class MockDiarization: DiarizationProvider, @unchecked Sendable {
     }
 }
 
-/// Test-only convenience for generators whose meeting time is irrelevant to a test.
-extension ProtocolGenerating {
-    func generate(transcript: String, title: String, diarized: Bool) async throws -> String {
-        try await generate(transcript: transcript, title: title, diarized: diarized, meetingStartTime: nil)
-    }
-}
-
 /// Mock transcription engine for pipeline tests.
 @MainActor
 class MockEngine: TranscribingEngine {

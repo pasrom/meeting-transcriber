@@ -86,4 +86,34 @@ final class PipelineSnapshotTests: XCTestCase {
         let loaded = try XCTUnwrap(try PipelineSnapshot.load(from: dir))
         XCTAssertTrue(loaded.isEmpty)
     }
+
+    // MARK: - Meeting-notes template
+
+    func testTheTemplateSurvivesARoundTrip() throws {
+        let dir = try makeTempDirectory(prefix: "pipeline-snapshot")
+        let job = PipelineJob(
+            meetingTitle: "Board", appName: "Teams", mixPath: nil, appPath: nil, micPath: nil, micDelay: 0,
+            protocolTemplate: .file(name: "Board"),
+        )
+
+        try PipelineSnapshot.save([job], to: dir)
+
+        let loaded = try XCTUnwrap(try PipelineSnapshot.load(from: dir)?.first)
+        XCTAssertEqual(loaded.protocolTemplate, .file(name: "Board"))
+    }
+
+    /// A snapshot an older build wrote has no template key; it must still decode.
+    func testASnapshotWithoutTheTemplateKeyDecodes() throws {
+        let dir = try makeTempDirectory(prefix: "pipeline-snapshot")
+        let json = """
+        [{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","meetingTitle":"Sync","appName":"Zoom","micDelay":0,
+          "participants":[],"enqueuedAt":0,"state":"waiting","warnings":[]}]
+        """
+        try Data(json.utf8).write(to: dir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let loaded = try XCTUnwrap(try PipelineSnapshot.load(from: dir)?.first)
+
+        XCTAssertEqual(loaded.meetingTitle, "Sync")
+        XCTAssertNil(loaded.protocolTemplate)
+    }
 }

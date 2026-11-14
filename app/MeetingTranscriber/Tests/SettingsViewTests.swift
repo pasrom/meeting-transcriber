@@ -479,24 +479,20 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         XCTAssertTrue(button.isDisabled())
     }
 
-    func testEditPromptButtonExists() throws {
-        let body = try makeOutput().inspect()
-        XCTAssertNoThrow(try body.find(button: "Edit Prompt"))
-    }
-
-    func testImportPromptButtonExists() throws {
-        let body = try makeOutput().inspect()
-        XCTAssertNoThrow(try body.find(button: "Import Prompt"))
-    }
-
-    func testResetToDefaultButtonExists() throws {
-        let body = try makeOutput().inspect()
-        XCTAssertNoThrow(try body.find(button: "Reset to Default"))
-    }
-
-    func testDefaultPromptStatusShown() throws {
-        let body = try makeOutput().inspect()
-        XCTAssertNoThrow(try body.find(text: "Using default prompt"))
+    /// The single custom prompt's controls gave way to the templates section.
+    func testOutputShowsMeetingNotesTemplatesInsteadOfThePromptControls() throws {
+        let store = try ProtocolTemplateStore(directory: makeTempDirectory(prefix: "settings-templates"))
+        let body = try OutputSettingsView(settings: makeSettings(), templateStore: store).inspect()
+        for identifier in [A11yID.protocolTemplateDefaultPicker, A11yID.protocolTemplatesOpenFolderButton] {
+            XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: identifier), identifier)
+        }
+        XCTAssertNoThrow(try body.find(text: "Meeting Notes Templates"))
+        for label in ["Edit Prompt", "Import Prompt", "Reset to Default"] {
+            XCTAssertThrowsError(try body.find(button: label), label)
+        }
+        for label in ["Custom prompt active", "Using default prompt"] {
+            XCTAssertThrowsError(try body.find(text: label), label)
+        }
     }
 
     func testOpenAIAPIKeyCaptionShown() throws {

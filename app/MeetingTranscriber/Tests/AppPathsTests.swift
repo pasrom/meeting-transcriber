@@ -47,6 +47,10 @@ final class AppPathsTests: XCTestCase {
         XCTAssertTrue(AppPaths.customPromptFile.path.hasPrefix(AppPaths.dataDir.path))
     }
 
+    func testProtocolTemplatesDirIsUnderDataDir() {
+        XCTAssertTrue(AppPaths.protocolTemplatesDir.path.hasPrefix(AppPaths.dataDir.path))
+    }
+
     // MARK: - migrateIfNeeded
 
     // Both run on temp folders: with the defaults the migration reads the

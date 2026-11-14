@@ -86,6 +86,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
                 speakersDB: logDir.appendingPathComponent("speakers.json"),
                 recognitionStatsLog: logDir.appendingPathComponent("recognition_log.jsonl"),
                 stageTimingLog: logDir.appendingPathComponent("stage_timing.jsonl"),
+                protocolTemplateStore: ProtocolTemplateStore(directory: logDir.appendingPathComponent("Protocol Templates")),
                 securityScope: recorder.access,
                 recoverStagedRecordings: { _ in recorder.recoveries += 1 },
                 resolveOutputDir: { resolver in

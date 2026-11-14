@@ -12,15 +12,12 @@ final class MeetingPromptMetadataTests: XCTestCase {
         XCTAssertEqual(result, "German Unknown Unknown")
     }
 
-    func testBuildSystemPromptWithoutMeetingStartDoesNotAddAuthority() throws {
-        let url = makeTempFile(suffix: ".md")
-        try "Date: {MEETING_DATE}; Time: {MEETING_TIME}.".write(to: url, atomically: true, encoding: .utf8)
-
+    func testBuildSystemPromptWithoutMeetingStartDoesNotAddAuthority() {
         let prompt = ProtocolGenerator.buildSystemPrompt(
             diarized: false,
             language: "German",
             meetingStartTime: nil,
-            promptURL: url,
+            instructions: ProtocolInstructions(template: "Date: {MEETING_DATE}; Time: {MEETING_TIME}."),
         )
 
         XCTAssertEqual(prompt, "Date: Unknown; Time: Unknown.")

@@ -13,6 +13,7 @@ extension PipelineController.QueueEnvironment {
             speakersDB: AppPaths.speakersDB,
             recognitionStatsLog: RecognitionStatsLog.defaultPath,
             stageTimingLog: StageTimingLog.defaultPath,
+            protocolTemplateStore: .production,
             recoverStagedRecordings: PipelineController.recoverStagedRecordings(into:),
         )
     }

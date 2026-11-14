@@ -148,6 +148,20 @@
 
         // MARK: - Output projection
 
+        /// `hasCustomPrompt` keeps its key and now says whether the default
+        /// template is one of the user's own rather than the built-in one.
+        func test_snapshot_output_hasCustomPromptFollowsTheDefaultTemplate() {
+            XCTAssertFalse(settings.rpcSettingsSnapshot().output.hasCustomPrompt)
+
+            settings.defaultProtocolTemplate = .file(name: "Board")
+
+            XCTAssertTrue(settings.rpcSettingsSnapshot().output.hasCustomPrompt)
+            XCTAssertEqual(
+                AppSettings(defaults: defaults).defaultProtocolTemplate, .file(name: "Board"),
+                "the default template did not persist",
+            )
+        }
+
         func test_snapshot_output_reflectsDefaultDirAndNoCustomBookmark() {
             let s = settings.rpcSettingsSnapshot()
             // Fresh suite → no custom bookmark → effective dir is the default.

@@ -156,4 +156,37 @@ final class ProtocolGeneratorTitleTests: XCTestCase {
         let text = "Just plain text without any markdown headings."
         XCTAssertNil(ProtocolGenerator.extractTitle(from: text))
     }
+
+    /// Notes from a template that writes only section headings have no title:
+    /// a `## ` heading is a section, never the meeting's name.
+    func testExtractTitleIgnoresSectionHeadings() {
+        let notes = """
+        ## Action items
+        - Alice sends the budget
+
+        ### Decisions
+        Ship on Friday.
+        """
+        XCTAssertNil(ProtocolGenerator.extractTitle(from: notes))
+    }
+
+    // MARK: - The title against the template the notes came from
+
+    /// Only the built-in template asks for a `# <label> - <title>` heading; a
+    /// custom template's first heading is a section as often as a title.
+    func testAITitleIsTakenOnlyFromNotesOfTheBuiltInTemplate() {
+        let notes = "# Meeting Protocol - Sprint Planning\n\n## Decisions\n"
+
+        XCTAssertEqual(ProtocolGenerator.aiTitle(from: notes, template: .builtIn), "Sprint Planning")
+        XCTAssertNil(ProtocolGenerator.aiTitle(from: "# Action items\n", template: .file(name: "Board")))
+        XCTAssertNil(ProtocolGenerator.aiTitle(from: notes, template: .file(name: "Board")))
+    }
+
+    func testFileTitleSlugNeedsTheSettingAndTheBuiltInTemplate() {
+        let notes = "# Meeting Protocol - Sprint Planning\n"
+
+        XCTAssertEqual(ProtocolGenerator.fileTitleSlug(from: notes, enabled: true, template: .builtIn), "sprint_planning")
+        XCTAssertNil(ProtocolGenerator.fileTitleSlug(from: notes, enabled: false, template: .builtIn))
+        XCTAssertNil(ProtocolGenerator.fileTitleSlug(from: notes, enabled: true, template: .file(name: "Board")))
+    }
 }

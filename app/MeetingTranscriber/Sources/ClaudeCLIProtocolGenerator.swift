@@ -76,8 +76,11 @@
             title _: String,
             diarized: Bool,
             meetingStartTime: Date?,
+            instructions: ProtocolInstructions,
         ) async throws -> String {
-            let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language, meetingStartTime: meetingStartTime) + transcript
+            let prompt = ProtocolGenerator.buildSystemPrompt(
+                diarized: diarized, language: language, meetingStartTime: meetingStartTime, instructions: instructions,
+            ) + transcript
             let launch = await launchConfiguration()
             try Task.checkCancellation()
             do {

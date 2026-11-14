@@ -76,11 +76,13 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         title _: String,
         diarized: Bool,
         meetingStartTime: Date?,
+        instructions: ProtocolInstructions,
     ) async throws -> String {
         let systemPrompt = ProtocolGenerator.buildSystemPrompt(
             diarized: diarized,
             language: language,
             meetingStartTime: meetingStartTime,
+            instructions: instructions,
         )
 
         let messages: [[String: Any]] = [

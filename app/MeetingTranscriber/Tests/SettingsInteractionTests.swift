@@ -291,6 +291,17 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertTrue(settings.useAITitleForFilenames)
     }
 
+    /// The toggle says that only notes from the built-in template rename the files.
+    func testUseAITitleForFilenamesToggleExplainsTheTemplateRule() throws {
+        let view = OutputSettingsView(settings: makeSettings())
+
+        let badge = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.useAITitleForFilenamesToggle)
+            .find(HelpBadge.self)
+
+        XCTAssertEqual(try badge.actualView().text, SettingsHelp.aiTitleForFilenames)
+    }
+
     func testRecordingRetentionToggleWritesBackToSettings() throws {
         let settings = makeSettings()
         settings.recordingRetentionEnabled = false

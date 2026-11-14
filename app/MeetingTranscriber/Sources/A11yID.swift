@@ -76,6 +76,46 @@ enum A11yID {
     }
 
     static let protocolSection = "protocolSection"
+    static let protocolTemplateDefaultPicker = "protocolTemplateDefaultPicker"
+    /// New Template… opens a sheet, so it stays off the `/ui/press` allowlist.
+    static let protocolTemplateNewButton = "protocolTemplateNewButton"
+    static let protocolTemplateNewNameField = "protocolTemplateNewNameField"
+    static let protocolTemplateNewCancelButton = "protocolTemplateNewCancelButton"
+    static let protocolTemplateNewCreateButton = "protocolTemplateNewCreateButton"
+    static let protocolTemplatesOpenFolderButton = "protocolTemplatesOpenFolderButton"
+
+    /// A template row's split button Edit, addressed by ROW INDEX, never by
+    /// template name: the name is user input, for the reason on
+    /// `consentDeniedAppRemove`. Its arrow opens a menu, so it and the items
+    /// below stay off the `/ui/press` allowlist.
+    static func protocolTemplateEdit(_ index: Int) -> String {
+        "protocolTemplateEdit.\(index)"
+    }
+
+    /// Edit's menu item "Open in <app>", addressed like `protocolTemplateEdit`.
+    static func protocolTemplateOpenInEditor(_ index: Int) -> String {
+        "protocolTemplateOpenInEditor.\(index)"
+    }
+
+    /// An app in the Open With submenu of row `index`, by its position there.
+    static func protocolTemplateOpenWithApp(_ index: Int, _ position: Int) -> String {
+        "protocolTemplateOpenWithApp.\(index).\(position)"
+    }
+
+    /// "Other…" in the Open With submenu of row `index`; it opens a panel.
+    static func protocolTemplateOpenWithOther(_ index: Int) -> String {
+        "protocolTemplateOpenWithOther.\(index)"
+    }
+
+    static func protocolTemplateShowInFinder(_ index: Int) -> String {
+        "protocolTemplateShowInFinder.\(index)"
+    }
+
+    /// A template row's Delete button, addressed like `protocolTemplateEdit`.
+    static func protocolTemplateDelete(_ index: Int) -> String {
+        "protocolTemplateDelete.\(index)"
+    }
+
     static let includeFullTranscriptToggle = "includeFullTranscriptToggle"
     static let saveRawTranscriptToggle = "saveRawTranscriptToggle"
     static let useAITitleForFilenamesToggle = "useAITitleForFilenamesToggle"

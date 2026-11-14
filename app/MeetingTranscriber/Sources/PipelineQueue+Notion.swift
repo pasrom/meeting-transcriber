@@ -71,6 +71,9 @@ struct PendingNotionExport {
     let speakerNames: [String]
     let configuration: NotionExportConfiguration
     let savedLocally: Bool
+    /// The template the notes were made from, which decides whether the page
+    /// takes the title the model wrote (`ProtocolGenerator.aiTitle`).
+    var template: ProtocolTemplateID = .builtIn
 }
 
 /// A job's chain of exports, which run one after another. `task`, `token` and
@@ -128,7 +131,7 @@ extension PipelineQueue {
             let succeeded = await exportToNotion(
                 jobID: jobID, protocolMD: export.protocolMD, transcript: export.transcript,
                 speakerNames: export.speakerNames, configuration: export.configuration,
-                localBackupSaved: export.savedLocally,
+                localBackupSaved: export.savedLocally, template: export.template,
             )
             if succeeded {
                 if export.configuration.skipLocalMarkdown { removeLocalProtocol(jobID: jobID) }
@@ -235,11 +238,13 @@ extension PipelineQueue {
     }
 
     /// Export finished Markdown independently of generation and local saving.
-    /// A failed export leaves the local-save decision to the caller.
+    /// A failed export leaves the local-save decision to the caller. The page
+    /// is titled after the meeting title the model wrote, which only notes
+    /// from the built-in `template` carry, else after the job's title.
     func exportToNotion(
         jobID: UUID, protocolMD: String, transcript: String?,
         speakerNames: [String], configuration: NotionExportConfiguration?,
-        localBackupSaved: Bool = false,
+        localBackupSaved: Bool = false, template: ProtocolTemplateID = .builtIn,
     ) async -> Bool {
         guard let configuration, let index = liveJobIndex(of: jobID) else { return false }
         jobs[index].beginNotionExport(speakerNames: speakerNames, localBackupSaved: localBackupSaved)
@@ -252,7 +257,7 @@ extension PipelineQueue {
                 await self?.recordNotionPageExport(jobID: jobID, databaseID: databaseID, page: page)
             }
             let exporter = configuration.exporter
-            let title = ProtocolGenerator.extractTitle(from: protocolMD) ?? job.meetingTitle
+            let title = ProtocolGenerator.aiTitle(from: protocolMD, template: template) ?? job.meetingTitle
             let date = job.meetingStartTime
             let tags = configuration.speakerTagsEnabled ? NotionTagFilter.confirmedNames(speakerNames) : []
             let pageResult = try await NotionExportDeadline.run(limit: configuration.deadline) {
@@ -348,9 +353,14 @@ extension PipelineQueue {
             persistNotionExportChange(jobID: id)
             return false
         }
+        // The template the job asked for, not the one it ran, which nothing
+        // records: they differ only when a missing template fell back to the
+        // built-in one, and then the page keeps the job's title instead of the
+        // model's, which is never a section heading.
         let succeeded = await exportToNotion(
             jobID: id, protocolMD: markdown, transcript: nil,
             speakerNames: job.notionExportSpeakerNames ?? [], configuration: configuration,
+            template: job.protocolTemplate ?? defaultProtocolTemplateProvider(),
         )
         if succeeded {
             if configuration.skipLocalMarkdown { removeLocalProtocol(jobID: id) }

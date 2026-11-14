@@ -1,21 +1,9 @@
 import AppKit
-import OSLog
 import SwiftUI
-import UniformTypeIdentifiers
-
-private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "OutputSettingsView")
 
 /// Pure derivations used by `OutputSettingsView`. Extracted so the wrapping
 /// logic can be unit-tested without instantiating a SwiftUI host.
 enum OutputSettingsLogic {
-    /// Install `source` as the custom prompt at `dest`, replacing any prompt
-    /// already there. The picked file is the user's and must survive.
-    static func importPrompt(from source: URL, to dest: URL) throws {
-        // Read and write rather than `replaceItemAt`, which moves the
-        // replacement into place and so removed the file the user picked.
-        try Data(contentsOf: source).write(to: dest, options: .atomic)
-    }
-
     /// Abbreviate `url` for display by replacing the home-directory prefix
     /// with `~` so paths inside the user's home stay compact. Falls back to
     /// the full path when `url` is outside `home`. Matches at the path-
@@ -67,14 +55,21 @@ struct OutputSettingsView: View {
     @State private var connectionTestResult: ConnectionTestResult?
     @State private var availableModels: [String] = []
     @State private var didAttemptConnectionTest = false
-    @State private var showResetPromptConfirmation = false
-    @State private var hasCustomPrompt = false
+    /// What the Meeting Notes Templates section shows, over the templates
+    /// folder this view was handed.
+    @State private var templatesModel: ProtocolTemplatesModel
     /// The API key fields type into these, not into the Keychain.
     @StateObject private var apiKeyDrafts: ProtocolAPIKeyDrafts
 
-    // swiftlint:disable:next unneeded_escaping
-    init(settings: AppSettings, apiKeyDrafts: @autoclosure @escaping () -> ProtocolAPIKeyDrafts? = nil) {
+    /// `templateStore` is the templates folder; tests hand in a temp folder.
+    init(
+        settings: AppSettings,
+        templateStore: ProtocolTemplateStore = .production,
+        // swiftlint:disable:next unneeded_escaping
+        apiKeyDrafts: @autoclosure @escaping () -> ProtocolAPIKeyDrafts? = nil,
+    ) {
         self.settings = settings
+        _templatesModel = State(initialValue: ProtocolTemplatesModel(store: templateStore, settings: settings))
         _apiKeyDrafts = StateObject(wrappedValue: apiKeyDrafts() ?? ProtocolAPIKeyDrafts(settings: settings))
     }
 
@@ -120,8 +115,12 @@ struct OutputSettingsView: View {
                     .accessibilityIdentifier(A11yID.includeFullTranscriptToggle)
                 Toggle("Save raw transcript separately", isOn: $settings.saveRawTranscriptSeparately)
                     .accessibilityIdentifier(A11yID.saveRawTranscriptToggle)
-                Toggle("Use AI meeting title for filenames", isOn: $settings.useAITitleForFilenames)
-                    .accessibilityIdentifier(A11yID.useAITitleForFilenamesToggle)
+                HelpfulToggle(
+                    title: "Use AI meeting title for filenames",
+                    help: SettingsHelp.aiTitleForFilenames,
+                    isOn: $settings.useAITitleForFilenames,
+                )
+                .accessibilityIdentifier(A11yID.useAITitleForFilenamesToggle)
 
                 Picker("LLM Provider", selection: $settings.protocolProvider) {
                     ForEach(ProtocolProvider.allCases, id: \.self) { provider in
@@ -136,18 +135,18 @@ struct OutputSettingsView: View {
                         Text(lang).tag(lang)
                     }
                 }
-
-                promptControls
             }
             .accessibilityIdentifier(A11yID.protocolSection)
             .recordOnlyDisabled(settings.recordOnly)
+
+            ProtocolTemplatesSettingsView(model: templatesModel)
+                .recordOnlyDisabled(settings.recordOnly)
         }
         .formStyle(.grouped)
         .onAppear {
             #if !APPSTORE
                 claudeBinaries = ClaudeCLIProtocolGenerator.availableClaudeBinaries()
             #endif
-            refreshCustomPromptState()
         }
         // A hidden Settings window and a quit reach neither a focus change nor
         // `onDisappear`, so an edited key is handed over here as well.
@@ -352,53 +351,7 @@ struct OutputSettingsView: View {
         }
     }
 
-    private var promptControls: some View {
-        // swiftlint:disable:next closure_body_length
-        HStack {
-            Button("Edit Prompt") {
-                openCustomPrompt()
-                refreshCustomPromptState()
-            }
-
-            Button("Import Prompt") {
-                importCustomPrompt()
-                refreshCustomPromptState()
-            }
-
-            Button("Reset to Default") {
-                showResetPromptConfirmation = true
-            }
-            .disabled(!hasCustomPrompt)
-            .confirmationDialog(
-                "Reset meeting notes prompt to the built-in default?",
-                isPresented: $showResetPromptConfirmation,
-                titleVisibility: .visible,
-            ) {
-                Button("Reset", role: .destructive) {
-                    try? FileManager.default.removeItem(at: AppPaths.customPromptFile)
-                    refreshCustomPromptState()
-                }
-            }
-
-            Spacer()
-
-            if hasCustomPrompt {
-                Label("Custom prompt active", systemImage: "doc.text.fill")
-                    .foregroundStyle(.blue)
-                    .font(.caption)
-            } else {
-                Label("Using default prompt", systemImage: "doc.text")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-            }
-        }
-    }
-
     // MARK: - Helpers
-
-    private func refreshCustomPromptState() {
-        hasCustomPrompt = FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path)
-    }
 
     func testConnection() {
         testingConnection = true
@@ -439,37 +392,6 @@ struct OutputSettingsView: View {
 
     private var modelPickerOptions: [String] {
         OutputSettingsLogic.mergePickerOptions(available: availableModels, selected: settings.openAIModel)
-    }
-
-    private func ensurePromptDirectory() {
-        try? FileManager.default.createDirectory(
-            at: AppPaths.customPromptFile.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-        )
-    }
-
-    private func openCustomPrompt() {
-        let url = AppPaths.customPromptFile
-        if !FileManager.default.fileExists(atPath: url.path) {
-            ensurePromptDirectory()
-            try? ProtocolGenerator.protocolPrompt.write(to: url, atomically: true, encoding: .utf8)
-        }
-        NSWorkspace.shared.open(url)
-    }
-
-    private func importCustomPrompt() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.plainText, .init(filenameExtension: "md")].compactMap(\.self)
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = "Select a prompt file to import"
-        guard panel.runModal() == .OK, let source = panel.url else { return }
-        ensurePromptDirectory()
-        do {
-            try OutputSettingsLogic.importPrompt(from: source, to: AppPaths.customPromptFile)
-        } catch {
-            logger.error("prompt_import_failed error=\(error.localizedDescription, privacy: .public)")
-        }
     }
 
     private var outputDirDisplay: String {

@@ -317,6 +317,25 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         )
     }
 
+    /// The job's template goes to the provider in the system message, with its
+    /// placeholders filled in; the transcript stays the user message on its own.
+    func testGenerateSendsTheTemplateInTheSystemMessage() async throws {
+        let sent = expectation(description: "the request reached the endpoint")
+        MockURLProtocol.handler = { request in
+            let messages = self.requestBody(request)["messages"] as? [[String: Any]] ?? []
+            XCTAssertEqual(messages.first?["content"] as? String, "Board template in German.")
+            XCTAssertEqual(messages.last?["content"] as? String, "Speaker 1: hello")
+            sent.fulfill()
+            return self.mockResponse(request, body: Data(Self.okSSE.utf8))
+        }
+
+        _ = try await makeGenerator(session: makeMockSession()).generate(
+            transcript: "Speaker 1: hello", title: "t", diarized: false, meetingStartTime: nil,
+            instructions: ProtocolInstructions(template: "Board template in {LANGUAGE}."),
+        )
+        await fulfillment(of: [sent], timeout: 5)
+    }
+
     func testGenerateTimesOutWhenStreamNeverCompletes() async {
         // Endpoint delivers a chunk then stalls forever (the struggling-LLM
         // case). request.timeoutInterval is an idle timeout and would never fire

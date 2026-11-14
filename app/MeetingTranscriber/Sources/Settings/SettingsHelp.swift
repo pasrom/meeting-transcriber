@@ -103,6 +103,13 @@ enum SettingsHelp {
     static let customVocabulary =
         "Helps transcription recognize the names and terms listed in your vocabulary file."
 
+    static let aiTitleForFilenames =
+        """
+        Names the files after the meeting title the AI writes into the meeting \
+        notes, but only for notes made with the built-in template; notes from \
+        your own template keep the date-based name.
+        """
+
     static let customVocabularyWhisperKit = customVocabulary + "\n\n"
         + "Experimental with WhisperKit: on busy audio it can leave out whole sentences. "
         + "Parakeet is the better engine for vocabulary."
