@@ -2691,6 +2691,7 @@ await_new_sidecar() {
 # `RecordingSidecar.currentVersion`: a consumer on another machine reads these
 # files, so a bump should be seen here. Version 3 added `micMuteIntervals`,
 # which the writer always emits (empty when the mic was never muted).
+# scripts/tests/test_sidecar_schema_version.sh fails when the two differ.
 assert_sidecar_common() {
     local label="$1" sidecar="$2" check
     check="$(jq -r '
