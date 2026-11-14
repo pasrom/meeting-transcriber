@@ -356,6 +356,7 @@ final class SpeakerNamingSession {
             },
             participants: participants,
             isDualSource: isDualSource,
+            tracks: isDualSource ? .persisted(in: outputDir, slug: slug, micDelay: delegate?.job(withID: jobID)?.micDelay) : nil,
         )
 
         // Persist naming data and set slug + mode early.

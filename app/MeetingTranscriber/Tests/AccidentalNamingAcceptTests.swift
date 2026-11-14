@@ -375,6 +375,43 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         XCTAssertEqual(rows.first?.source, .headless)
     }
 
+    // MARK: - Speaker samples
+
+    /// A dual-source job's naming data names both persisted tracks and the
+    /// job's microphone delay, so the dialog can play each speaker from their
+    /// own track.
+    func testDualSourceNamingDataRecordsTheTracks() throws {
+        let tmp = try makeTempDirectory(prefix: "AccidentalNamingAcceptTests")
+        let session = makeSession(outputDir: tmp, statsLog: RecognitionStatsLog(path: tmp.appendingPathComponent("log.jsonl")))
+        let mock = MockDelegate()
+        session.delegate = mock
+        var job = PipelineJob(
+            meetingTitle: "Standup", appName: "Test",
+            mixPath: nil, appPath: nil, micPath: nil, micDelay: 0.3,
+        )
+        job.state = .diarizing
+        mock.jobs[job.id] = job
+
+        let diarization = DiarizationResult(
+            segments: [.init(start: 0, end: 12, speaker: "M_SPEAKER_0")],
+            speakingTimes: ["M_SPEAKER_0": 12],
+            autoNames: ["M_SPEAKER_0": "M_SPEAKER_0"],
+            embeddings: ["M_SPEAKER_0": [0.1, 0.2, 0.3]],
+        )
+        _ = session.resolveSpeakerNames(
+            diarization: diarization,
+            job: (jobID: job.id, title: "Standup", slug: "standup_abcd1234", participants: []),
+            diarizeProcess: MockDiarization(),
+            isDualSource: true, outputDir: tmp,
+        )
+
+        let tracks = try XCTUnwrap(session.speakerNamingDataByJob[job.id]?.tracks)
+        let recordings = tmp.appendingPathComponent("recordings")
+        XCTAssertEqual(tracks.app, recordings.appendingPathComponent("standup_abcd1234_app_16k.wav"))
+        XCTAssertEqual(tracks.mic, recordings.appendingPathComponent("standup_abcd1234_mic_16k.wav"))
+        XCTAssertEqual(tracks.micDelay, 0.3)
+    }
+
     // MARK: - Log schema stays backward compatible
 
     /// Rows written before `source` existed must still decode, and must read as
