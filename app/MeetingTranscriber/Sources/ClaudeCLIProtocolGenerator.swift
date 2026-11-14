@@ -123,7 +123,8 @@
         /// error `generate()` throws on a nonzero exit — pulled out of
         /// `generate()` itself to keep that function's body short. A run
         /// with `arguments` that the CLI refused `noSessionPersistenceFlag`
-        /// gets its error wrapped as `NoSessionPersistenceRejected`.
+        /// gets its error wrapped as `NoSessionPersistenceRejected`; one that
+        /// refused the tool restriction gets a message asking for a newer CLI.
         static func handleFailure(
             exitCode: Int32, stderrData: Data, text: String, resultEvent: ResultEventInfo?, arguments: [String],
         ) -> any Error {
@@ -148,6 +149,12 @@
             logger.error(
                 "claude_cli_failed_reason exit=\(exitCode, privacy: .public) reason=\(publicMessage, privacy: .public)",
             )
+            // Checked first and never retried: a CLI that refuses the tool
+            // restriction gets no run at all (see `noToolsArguments`).
+            if rejectedToolRestriction(stderr: stderrText, message: publicMessage, arguments: arguments) {
+                logger.error("claude_cli_rejected_tool_restriction exit=\(exitCode, privacy: .public)")
+                return makeFailureError(exitCode: exitCode, stderrText: toolRestrictionRejectedMessage(publicMessage))
+            }
             let error = makeFailureError(exitCode: exitCode, stderrText: publicMessage)
             let rejected = rejectedNoSessionPersistence(stderr: stderrText, message: publicMessage, arguments: arguments)
             return rejected ? NoSessionPersistenceRejected(error: error) : error
@@ -373,11 +380,12 @@
 
         /// Build the CLI argument vector. When `resolvedBin` is the
         /// `/usr/bin/env` fallback, prepend `claudeBin` so env can resolve
-        /// it from PATH. `noSessionPersistence` adds
+        /// it from PATH. `noToolsArguments` are always there, after the
+        /// prompt marker. `noSessionPersistence` adds
         /// `noSessionPersistenceFlag`; pass what
         /// the CLI's `--help` lists it (see `launchConfiguration`).
         static func buildSubprocessArgs(claudeBin: String, resolvedBin: String, noSessionPersistence: Bool) -> [String] {
-            var args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", "sonnet"]
+            var args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", "sonnet"] + noToolsArguments
             if noSessionPersistence {
                 args.append(noSessionPersistenceFlag)
             }

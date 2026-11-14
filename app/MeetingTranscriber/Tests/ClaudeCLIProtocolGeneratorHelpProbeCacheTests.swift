@@ -41,6 +41,7 @@
             let result = try await generate(claudeBin: cli)
 
             XCTAssertFalse(result.contains(Self.flag), "arguments were: \(result)")
+            XCTAssertTrue(result.contains("--strict-mcp-config"), "the retry must keep the tool restriction: \(result)")
             XCTAssertEqual(try calls(), ["help", "run+flag", "run+flag", "help", "run-flag"])
         }
 
