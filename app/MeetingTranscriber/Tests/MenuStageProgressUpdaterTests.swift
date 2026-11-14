@@ -108,7 +108,7 @@ final class MenuStageProgressUpdaterTests: XCTestCase {
 
     func testOnlyMatchingMenuEndFlushesExpiredCompletedJob() async throws {
         let dir = try makeTempDirectory(prefix: "menu_progress_expiry_test")
-        let queue = PipelineQueue(logDir: dir, completedJobLifetime: 0.2)
+        let queue = PipelineQueue(logDir: dir, completedJobLifetime: Self.expiryLifetime)
         var job = PipelineJob(
             meetingTitle: "Sprint", appName: "Zoom",
             mixPath: dir.appendingPathComponent("mix.wav"),
@@ -117,29 +117,32 @@ final class MenuStageProgressUpdaterTests: XCTestCase {
         job.beginNotionExport(speakerNames: [])
         job.finishNotionExport(succeeded: true)
         queue.enqueue(job)
-        queue.updateJobState(id: job.id, to: .done)
 
         let trackedMenu = NSMenu()
         let unrelatedMenu = NSMenu()
         let updater = MenuStageProgressUpdater()
         updater.observe { queue }
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: trackedMenu)
+        await letUpdaterHandlePostedNotifications()
+        // Done only once the menu counts as open: the lifetime is short, and a
+        // timer that fired before the updater saw the menu would remove the job.
+        queue.updateJobState(id: job.id, to: .done)
 
-        try await Task.sleep(for: .milliseconds(400))
+        await awaitArmedExpiryTimers(of: queue, timeout: Self.expiryCeiling)
         XCTAssertEqual(queue.completedJobs.map(\.id), [job.id])
 
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: unrelatedMenu)
-        try await Task.sleep(for: .milliseconds(20))
+        await letUpdaterHandlePostedNotifications()
         XCTAssertEqual(queue.completedJobs.map(\.id), [job.id])
 
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: trackedMenu)
-        try await Task.sleep(for: .milliseconds(20))
+        await letUpdaterHandlePostedNotifications()
         XCTAssertTrue(queue.completedJobs.isEmpty)
     }
 
     func testExpiredJobWithoutAnExportIsRemovedWhileAMenuIsOpen() async throws {
         let dir = try makeTempDirectory(prefix: "menu_progress_plain_expiry_test")
-        let queue = PipelineQueue(logDir: dir, completedJobLifetime: 0.2)
+        let queue = PipelineQueue(logDir: dir, completedJobLifetime: Self.expiryLifetime)
         let job = PipelineJob(
             meetingTitle: "Sprint", appName: "Zoom",
             mixPath: dir.appendingPathComponent("mix.wav"),
@@ -152,8 +155,9 @@ final class MenuStageProgressUpdaterTests: XCTestCase {
         let updater = MenuStageProgressUpdater()
         updater.observe { queue }
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: trackedMenu)
+        await letUpdaterHandlePostedNotifications()
 
-        try await Task.sleep(for: .milliseconds(400))
+        await waitFor({ queue.completedJobs.isEmpty }, timeout: Self.expiryCeiling)
         XCTAssertTrue(queue.completedJobs.isEmpty)
 
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: trackedMenu)
@@ -458,6 +462,25 @@ final class MenuStageProgressUpdaterTests: XCTestCase {
 
     private func waitForTitleChange(_ item: NSMenuItem, from initial: String) async {
         await waitFor({ item.title != initial }, timeout: .seconds(3))
+    }
+
+    /// Completed-job lifetime for the expiry tests.
+    private static let expiryLifetime: TimeInterval = 0.05
+
+    /// How long an expiry test waits for a timer: far above the lifetime, so a
+    /// loaded machine does not trip it, and far below the one-minute default,
+    /// so a lifetime not taken from the parameter still fails.
+    private static let expiryCeiling: Duration = .seconds(1)
+
+    /// Returns once the updater has handled every menu notification posted so
+    /// far. Its observers hand each one to a `Task { @MainActor in }`, and the
+    /// task awaited here is enqueued after theirs at the same priority. The
+    /// main actor drains the main queue, which runs such jobs in the order
+    /// they were enqueued: how the runtime behaves, not a language rule. It holds
+    /// for a notification with no effect to observe too, an unrelated menu's
+    /// end among them, which no poll could wait for.
+    private func letUpdaterHandlePostedNotifications() async {
+        await Task { @MainActor in }.value
     }
 }
 
