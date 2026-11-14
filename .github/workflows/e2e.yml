@@ -116,8 +116,19 @@ jobs:
         env:
           CFFIXED_USER_HOME: ${{ steps.home.outputs.home }}
         run: |
+          set -o pipefail
           cd app/MeetingTranscriber
-          swift test --filter '${{ steps.filter.outputs.filter }}|RunnerHomeIsolationTests'
+          swift test --filter '${{ steps.filter.outputs.filter }}|RunnerHomeIsolationTests' 2>&1 \
+            | tee "$RUNNER_TEMP/e2e-test.log"
+
+      # The lane's model tests sit behind XCTSkip gates and `swift test` exits
+      # 0 on a skip, so a test that stops running here would keep the run
+      # green. SortformerEmbeddingsE2ETests matches the filter by name but
+      # is gated on RUN_QUALITY_TESTS and runs in quality-and-safety.yml.
+      - name: Fail on skipped tests
+        run: |
+          bash scripts/ci/fail-on-skipped-tests.sh "$RUNNER_TEMP/e2e-test.log" \
+            SortformerEmbeddingsE2ETests
 
       # E2EMicFaultTests exists only in a -DE2E_FAULT_INJECTION build, like the
       # type it tests, so no other `swift test` in CI ever compiled it: the
