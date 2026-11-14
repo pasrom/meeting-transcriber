@@ -86,22 +86,30 @@ final class MicMutePipelineIntegrationTests: XCTestCase {
         XCTAssertTrue(transcript.contains("straddling"))
     }
 
-    func testOrphanRecoveryAttachesTheMuteLogAndConsumesIt() async throws {
-        let recDir = tmpDir.appendingPathComponent("recordings")
+    /// What a recording that crashed with the mic muted leaves in `folder`: a
+    /// two-second mix and mic track, and the log of a mute that never closed.
+    private func stageMutedOrphan(stem: String, in folder: String = "recordings") throws -> (recDir: URL, log: URL) {
+        let recDir = tmpDir.appendingPathComponent(folder)
         try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
-        let stem = "20260311_100000"
         for suffix in [RecordingFileSuffix.mix, RecordingFileSuffix.mic] {
             try FileManager.default.moveItem(at: track("\(stem)\(suffix)", seconds: 2), to: recDir.appendingPathComponent(stem + suffix))
         }
         var timeline = MicMuteTimeline()
         timeline.setMuted(true)
         MicMuteLog.write(timeline, stem: stem, in: recDir)
+        return (recDir, recDir.appendingPathComponent(stem + RecordingFileSuffix.micMuteLog))
+    }
+
+    /// The adopted job carries the mute times, and the log stays beside the
+    /// recording: the job is in memory only until its snapshot write lands.
+    func testOrphanRecoveryAttachesTheMuteLogAndLeavesItBesideTheRecording() async throws {
+        let (recDir, log) = try stageMutedOrphan(stem: "20260311_100000")
 
         let queue = PipelineQueue(logDir: tmpDir)
         await queue.recoverOrphanedRecordings(recordingsDir: recDir)
 
         XCTAssertEqual(queue.jobs.first?.micMuteSpansOnTranscript, [MicMuteInterval(start: 0, end: 2)])
-        XCTAssertFalse(FileManager.default.fileExists(atPath: recDir.appendingPathComponent(stem + RecordingFileSuffix.micMuteLog).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: log.path))
     }
 
     /// A finished stem the scan skips (here, one already processed) would keep its
@@ -125,6 +133,69 @@ final class MicMutePipelineIntegrationTests: XCTestCase {
 
         XCTAssertTrue(queue.jobs.isEmpty, "test premise: the recording was skipped")
         XCTAssertFalse(FileManager.default.fileExists(atPath: recDir.appendingPathComponent(stem + RecordingFileSuffix.micMuteLog).path))
+    }
+
+    /// A process that dies before the snapshot holding the adopted job lands
+    /// finds the recording in staging again on the next launch, in neither the
+    /// snapshot nor the ledger, and adopts it a second time. The log has to
+    /// be there for that second adoption.
+    func testTheMuteLogSurvivesACrashBeforeTheAdoptedJobIsSaved() async throws {
+        let (recDir, _) = try stageMutedOrphan(stem: "20260311_120000")
+        let logDir = tmpDir.appendingPathComponent("ipc")
+        try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        // What the next launch finds when no write of the first run landed: the
+        // folder as it was before the adoption.
+        let logDirAfterCrash = tmpDir.appendingPathComponent("ipc_after_crash")
+        try FileManager.default.copyItem(at: logDir, to: logDirAfterCrash)
+
+        let crashed = PipelineQueue(logDir: logDir, inFlightRuns: InFlightRunRegistry())
+        await crashed.recoverOrphanedRecordings(recordingsDir: recDir)
+        XCTAssertEqual(
+            crashed.jobs.first?.micMuteSpansOnTranscript, [MicMuteInterval(start: 0, end: 2)],
+            "test premise: the first adoption carried the mute times",
+        )
+
+        let relaunched = PipelineQueue(logDir: logDirAfterCrash, inFlightRuns: InFlightRunRegistry())
+        relaunched.loadSnapshot()
+        XCTAssertTrue(relaunched.jobs.isEmpty, "test premise: the next launch restores no job for the recording")
+        await relaunched.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertEqual(
+            relaunched.jobs.first?.micMuteSpansOnTranscript, [MicMuteInterval(start: 0, end: 2)],
+            "the second adoption lost the mute times: the log was gone before the first job was saved",
+        )
+    }
+
+    /// A scan skips a recording a job already has, and deletes the log of a
+    /// finished recording it skips. A recording with a job is not finished.
+    func testALaterScanKeepsTheMuteLogOfARecordingAJobHas() async throws {
+        let (recDir, log) = try stageMutedOrphan(stem: "20260311_130000")
+        let queue = PipelineQueue(logDir: tmpDir, inFlightRuns: InFlightRunRegistry())
+        await queue.recoverOrphanedRecordings(recordingsDir: recDir)
+        XCTAssertEqual(queue.jobs.count, 1, "test premise: the recording was adopted")
+
+        let rescanned = await queue.scanForOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertTrue(rescanned.isEmpty, "test premise: the job accounts for the recording")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: log.path))
+    }
+
+    /// Once the job has moved the recording out of staging, the scan no longer
+    /// looks at the log (no mix beside it), so the move takes the log with it.
+    func testTheMuteLogGoesWhenTheRecordingLeavesStaging() async throws {
+        let stem = "20260311_140000"
+        let (staging, log) = try stageMutedOrphan(stem: stem, in: "staging")
+        let mix = staging.appendingPathComponent(stem + RecordingFileSuffix.mix)
+        let job = PipelineJob(meetingTitle: "m", appName: "Unknown", mixPath: mix, appPath: nil, micPath: nil, micDelay: 0)
+
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 1, text: "spoken")]
+
+        let result = try await run(job, engine: engine)
+
+        XCTAssertEqual(result.job?.state, .done, result.job?.error ?? "")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: mix.path), "test premise: the mix was moved out of staging")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: log.path))
     }
 
     func testMutedThroughoutSkipsTheMicWithoutAWarning() async throws {
