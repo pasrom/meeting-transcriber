@@ -305,6 +305,70 @@ final class FluidDiarizerSortformerTests: XCTestCase {
         XCTAssertEqual(plans.count, 1)
     }
 
+    // The same 12 s clip at Nemotron 3's rate: 1200 frames of 160 samples,
+    // one full chunk, then a 2 s tail (frames 1000...1199, tail frames
+    // 0...199). In the tail target j starts on sample
+    // floor(j * 160 000 / 589) and reads tail frame floor(that / 160); 118
+    // targets start inside the 32 000 samples of audio.
+    private static func planNemotronTwelveSeconds(_ masks: [[Float]]) -> [FluidDiarizer.EmbeddingChunkPlan] {
+        FluidDiarizer.planEmbeddingChunks(
+            audioSampleCount: 192_000, masks: masks, samplesPerMaskFrame: 160, weSpeakerFrameCount: 589,
+        )
+    }
+
+    func testPlanNemotronTailEmbedsFromItsOwnActivity() throws {
+        // Speaker 1 talks in the first 5 s, speaker 0 only in the last
+        // second (frames 1100...1199, tail frames 100...199, from sample
+        // 16 000). Target 58 starts on 15 755 (tail frame 98), target 59
+        // on 16 027 (tail frame 100).
+        let plans = Self.planNemotronTwelveSeconds([
+            Self.mask(count: 1200, active: 1100 ..< 1200),
+            Self.mask(count: 1200, active: 0 ..< 500),
+        ])
+        XCTAssertEqual(plans.map(\.sampleRange), [0 ..< 160_000, 160_000 ..< 192_000])
+        guard plans.count == 2 else { return }
+        XCTAssertEqual(plans[0].slots, [1])
+        XCTAssertEqual(plans[0].masks.first?.reduce(0, +), 295)
+        XCTAssertEqual(plans[1].slots, [0])
+        let tail = try XCTUnwrap(plans[1].masks.first)
+        XCTAssertEqual(tail.count, 589)
+        XCTAssertEqual(tail[0 ..< 59].reduce(0, +), 0)
+        XCTAssertEqual(tail[59 ..< 118].reduce(0, +), 59, "activity must sit under the tail's own audio")
+    }
+
+    func testPlanNemotronGatesTailSlotsOnActivityInsideTheAudio() {
+        // In the tail, speaker 0 has 50 ms, shorter than one Sortformer
+        // frame (tail frames 0...4, samples up to 800: targets 0...2, three)
+        // and speaker 1 has 300 ms (tail frames 0...29, samples up to 4800:
+        // targets 0...17, eighteen). The bar is ten frames inside the audio.
+        // The window repeats the 2 s tail five times, so counted over the
+        // whole window the 50 ms blip would reach 15 frames and pass.
+        let plans = Self.planNemotronTwelveSeconds([
+            Self.mask(count: 1200, active: 1000 ..< 1005),
+            Self.mask(count: 1200, active: 0 ..< 500).enumerated().map { $0 >= 1000 && $0 < 1030 ? 1 : $1 },
+        ])
+        XCTAssertEqual(plans.map(\.slots), [[1], [1]])
+    }
+
+    func testPlanTailNeedsTenWeSpeakerFramesOfAudio() {
+        // A tail voiced from start to end is embedded once ten WeSpeaker
+        // frames start inside it: ceil(n * 589 / 160 000) >= 10 from
+        // n = 2445 samples (about 153 ms). One sample less gives nine. The
+        // bound does not depend on the diarizer's frame rate; 1016 mask
+        // frames cover both tails without the mask's end cutting them.
+        func tailPlanned(sampleCount: Int) -> Bool {
+            let plans = FluidDiarizer.planEmbeddingChunks(
+                audioSampleCount: 160_000 + sampleCount,
+                masks: [Self.mask(count: 1016, active: 0 ..< 1016)],
+                samplesPerMaskFrame: 160,
+                weSpeakerFrameCount: 589,
+            )
+            return plans.map(\.sampleRange) == [0 ..< 160_000, 160_000 ..< 160_000 + sampleCount]
+        }
+        XCTAssertFalse(tailPlanned(sampleCount: 2444))
+        XCTAssertTrue(tailPlanned(sampleCount: 2445))
+    }
+
     func testAggregateCentroidsL2NormalisesMean() {
         // Two chunks for speaker A: [1,0,0,0] + [0,1,0,0] = mean [0.5, 0.5, 0, 0]
         // L2-normalised: [√0.5, √0.5, 0, 0] ≈ [0.707, 0.707, 0, 0]
