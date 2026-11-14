@@ -114,17 +114,23 @@
             let error: ProtocolError
         }
 
-        /// Whether a run given the flag was refused it: a line of its stderr
-        /// or reported message names the flag together with unknown-option
+        /// Whether a run given the flag was refused it.
+        static func rejectedNoSessionPersistence(stderr: String, message: String, arguments: [String]) -> Bool {
+            rejectedOption(noSessionPersistenceFlag, stderr: stderr, message: message, arguments: arguments)
+        }
+
+        /// Whether a run given `option` was refused it: a line of its stderr
+        /// or reported message names the option together with unknown-option
         /// wording, ignoring case. Both are read because the message prefers
         /// a result event's reason over stderr.
-        static func rejectedNoSessionPersistence(stderr: String, message: String, arguments: [String]) -> Bool {
-            guard arguments.contains(noSessionPersistenceFlag) else { return false }
+        static func rejectedOption(_ option: String, stderr: String, message: String, arguments: [String]) -> Bool {
+            guard arguments.contains(option) else { return false }
+            let option = option.lowercased()
             let wordings = ["unknown option", "unrecognized option", "unrecognised option", "invalid option"]
             return [stderr, message].contains { text in
                 text.split(whereSeparator: \.isNewline).contains { line in
                     let line = line.lowercased()
-                    return line.contains(noSessionPersistenceFlag) && wordings.contains { line.contains($0) }
+                    return line.contains(option) && wordings.contains { line.contains($0) }
                 }
             }
         }
