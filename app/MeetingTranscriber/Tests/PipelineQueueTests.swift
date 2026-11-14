@@ -4819,6 +4819,61 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// The naming data of a dual-source job names the track files the job
+    /// kept, so the dialog can play each speaker from their own track. A late
+    /// re-run names the tracks it read, so naming data saved before the
+    /// tracks were recorded gains them too, and a microphone speaker is cut
+    /// from the microphone file where the diarizer found them there.
+    func testDualSourceNamingDataNamesTheKeptTracksAlsoAfterALateRerun() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let mockDiar = MockDiarization()
+        // Both tracks diarize the same raw [0,5] segment (the mock ignores the
+        // audio path); the microphone's copy is shifted by +micDelay.
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+
+        try pQueue.enqueue(makeDualSourceJob(title: "Sample Tracks", micDelay: 100))
+        let jobID = try XCTUnwrap(pQueue.jobs.first?.id)
+        let pending = XCTestExpectation(description: "speakerNamingPending")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .speakerNamingPending { pending.fulfill() }
+        }
+        await pQueue.processNext()
+        await fulfillment(of: [pending], timeout: 10)
+
+        let tracks = try XCTUnwrap(pQueue.speakerNamingDataByJob[jobID]?.tracks)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tracks.app.path), "no app track at \(tracks.app.path)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tracks.mic.path), "no mic track at \(tracks.mic.path)")
+        XCTAssertEqual(tracks.micDelay, 100)
+
+        // As naming data saved before the tracks were recorded.
+        pQueue.speakerNamingDataByJob[jobID]?.tracks = nil
+        var rerunData: PipelineQueue.SpeakerNamingData?
+        let handlerCalled = XCTestExpectation(description: "naming handler called on re-run")
+        pQueue.speakerNamingHandler = { data in
+            rerunData = data
+            handlerCalled.fulfill()
+            return .confirmed([:])
+        }
+        pQueue.completeSpeakerNaming(jobID: jobID, result: .rerun(2))
+        await fulfillment(of: [handlerCalled], timeout: 10)
+
+        let rerun = try XCTUnwrap(rerunData)
+        XCTAssertEqual(rerun.tracks, tracks)
+        let micSegment = try XCTUnwrap(rerun.segments.first { $0.speaker.hasPrefix("M_") })
+        XCTAssertEqual(rerun.sampleSources(for: micSegment).first, .init(url: tracks.mic, start: 0, end: 5))
+    }
+
     /// An unavailable diarizer refuses the re-run before anything changes:
     /// the job stays parked, no diarization runs, and the caller is told why,
     /// so the dialog can say so rather than wait for a re-run that never starts.

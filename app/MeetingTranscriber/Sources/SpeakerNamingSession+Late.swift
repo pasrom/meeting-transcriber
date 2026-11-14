@@ -341,9 +341,16 @@ extension SpeakerNamingSession {
             // app-only / mic-only single-track fallback); single-source sets it
             // directly. Only a both-track failure throws before a run exists.
             guard let combined = run.combined else { throw DiarizationError.notAvailable }
+            // The tracks this run read. Naming data saved before the tracks
+            // were recorded gains them here.
+            let tracks = plan.namingData.isDualSource
+                ? SpeakerNamingData.TrackAudio.persisted(
+                    inRecordings: plan.recordingsDir, slug: plan.slug, micDelay: plan.job.micDelay,
+                )
+                : nil
             guard let newNamingData = buildNamingData(
                 jobID: jobID, title: title,
-                diarization: combined, prior: plan.namingData,
+                diarization: combined, prior: plan.namingData, tracks: tracks,
             ) else {
                 logger.warning("Late re-diarization produced no embeddings")
                 returnToNaming(jobID: jobID, delegate: delegate, failure: .rerunFoundNoVoices)
@@ -490,6 +497,7 @@ extension SpeakerNamingSession {
     private func buildNamingData(
         jobID: UUID, title: String,
         diarization: DiarizationResult, prior: SpeakerNamingData,
+        tracks: SpeakerNamingData.TrackAudio?,
     ) -> SpeakerNamingData? {
         guard let embeddings = diarization.embeddings else { return nil }
 
@@ -512,7 +520,7 @@ extension SpeakerNamingSession {
             },
             participants: prior.participants, isDualSource: prior.isDualSource,
         )
-        data.tracks = prior.tracks
+        data.tracks = tracks
         return data
     }
 

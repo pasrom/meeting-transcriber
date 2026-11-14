@@ -46,16 +46,16 @@ extension PipelineQueue {
             let mic: URL
             let micDelay: TimeInterval
 
-            /// The per-track files a dual-source job persists next to its mix
-            /// (same slug) for late re-diarization. They live as long as the
+            /// The per-track files a dual-source job keeps in its recordings
+            /// folder (same slug as the mix) for late re-diarization, named
+            /// as `SpeakerNamingStore` names them. They live as long as the
             /// naming data does. Nil without the job's microphone delay, which
             /// the cut of a microphone sample needs.
-            static func persisted(in outputDir: URL, slug: String, micDelay: TimeInterval?) -> Self? {
+            static func persisted(inRecordings recordings: URL, slug: String, micDelay: TimeInterval?) -> Self? {
                 guard let micDelay else { return nil }
-                let recordings = outputDir.appendingPathComponent("recordings")
                 return Self(
-                    app: recordings.appendingPathComponent("\(slug)_app_16k.wav"),
-                    mic: recordings.appendingPathComponent("\(slug)_mic_16k.wav"),
+                    app: recordings.appendingPathComponent("\(slug)\(SpeakerNamingStore.appTrackSuffix)"),
+                    mic: recordings.appendingPathComponent("\(slug)\(SpeakerNamingStore.micTrackSuffix)"),
                     micDelay: micDelay,
                 )
             }

@@ -268,8 +268,9 @@ final class SpeakerNamingSession {
         }
 
         // Use persisted 16kHz path (survives workDir cleanup).
-        let persistedAudioPath = outputDir.appendingPathComponent("recordings")
-            .appendingPathComponent("\(slug)_16k.wav")
+        let recordings = outputDir.appendingPathComponent("recordings")
+        let persistedAudioPath = recordings.appendingPathComponent("\(slug)_16k.wav")
+        let micDelay = delegate?.job(withID: jobID)?.micDelay
         let namingData = SpeakerNamingData(
             jobID: jobID,
             meetingTitle: title,
@@ -282,7 +283,7 @@ final class SpeakerNamingSession {
             },
             participants: participants,
             isDualSource: isDualSource,
-            tracks: isDualSource ? .persisted(in: outputDir, slug: slug, micDelay: delegate?.job(withID: jobID)?.micDelay) : nil,
+            tracks: isDualSource ? .persisted(inRecordings: recordings, slug: slug, micDelay: micDelay) : nil,
         )
 
         // Persist naming data and set slug + mode early.
