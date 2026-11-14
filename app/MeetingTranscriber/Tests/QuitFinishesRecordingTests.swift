@@ -34,35 +34,46 @@ final class QuitFinishesRecordingTests: XCTestCase {
         func tearDownBeforeExit() {}
     }
 
-    /// A recorder whose stop does what the real one does at the end of a long
-    /// meeting: seconds of mixing. `stop()` does it on the caller's thread,
-    /// which on the quit path is the main thread; `stopOffMain()` does it on
-    /// a thread of its own, as `DualSourceRecorder` does.
-    private final class SlowMixRecorder: RecordingProvider {
-        let mixSeconds: TimeInterval
-        private(set) var mixesFinished = 0
+    /// The mix of a long meeting, held open until the test lets it finish.
+    /// A thread blocked in `wait()` stands for one busy mixing. The wait
+    /// also ends on its own after `deadline`, so that a mix wrongly run on
+    /// the main thread, where the test can no longer reach `release()`,
+    /// cannot hang the suite: the test then fails instead.
+    private final class MixGate: Sendable {
+        static let deadline: Duration = .seconds(5)
+        private let semaphore = DispatchSemaphore(value: 0)
 
-        init(mixSeconds: TimeInterval) {
-            self.mixSeconds = mixSeconds
+        func wait() {
+            _ = semaphore.wait(timeout: .now() + .seconds(Int(Self.deadline.components.seconds)))
         }
+
+        func release() {
+            semaphore.signal()
+        }
+    }
+
+    /// A recorder whose stop does what the real one does at the end of a long
+    /// meeting: a mix that takes as long as it takes, here until the test
+    /// releases `gate`. `stop()` does it on the caller's thread, which on the
+    /// quit path is the main thread; `stopOffMain()` does it on a thread of
+    /// its own, as `DualSourceRecorder` does.
+    private final class SlowMixRecorder: RecordingProvider {
+        let gate = MixGate()
+        private(set) var mixesFinished = 0
 
         func start(source _: RecordingSource, micDeviceUID _: String?, debugLogging _: Bool) {}
 
         func stop() -> RecordingResult {
-            Thread.sleep(forTimeInterval: mixSeconds)
+            gate.wait()
             mixesFinished += 1
             return result()
         }
 
         func stopOffMain() async -> RecordingResult {
-            let seconds = mixSeconds
-            await Task.detached { Self.mix(seconds: seconds) }.value
+            let gate = gate
+            await Task.detached { gate.wait() }.value
             mixesFinished += 1
             return result()
-        }
-
-        nonisolated private static func mix(seconds: TimeInterval) {
-            Thread.sleep(forTimeInterval: seconds)
         }
 
         private func result() -> RecordingResult {
@@ -169,25 +180,48 @@ final class QuitFinishesRecordingTests: XCTestCase {
         delegate.termination = LoopAndPipeline(loop: loop, pipeline: pipeline)
         let sender = QuitTestSender()
         let replied = expectation(description: "reply")
-        sender.onReply = { replied.fulfill() }
+        var mixesFinishedAtReply: Int?
+        sender.onReply = {
+            mixesFinishedAtReply = recorder.mixesFinished
+            replied.fulfill()
+        }
         let start = ContinuousClock.now
 
         XCTAssertEqual(delegate.shouldTerminate(replyingTo: sender), .terminateLater, file: file, line: line)
         await fulfillment(of: [replied], timeout: 10)
 
+        // The gate is still closed here, so a mix that had finished before
+        // the reply can only have been cut short by its own deadline, which
+        // is what happens when it holds the main thread.
+        XCTAssertEqual(
+            mixesFinishedAtReply, 0,
+            "the quit was answered only after the mix finished, so it waited for it", file: file, line: line,
+        )
+        // The verdict above is the event. This bound only catches a reply held
+        // up by something other than the mix, so it sits well clear of the
+        // budget and below the gate's own deadline, where a loaded machine
+        // cannot trip it.
         let elapsed = ContinuousClock.now - start
         XCTAssertLessThan(
-            elapsed, .seconds(1.5),
-            "the quit waited \(elapsed) for a mix the budget should have cut off", file: file, line: line,
+            elapsed, MixGate.deadline - .seconds(1),
+            "the quit took \(elapsed) to answer", file: file, line: line,
         )
         // Let the mix the quit left behind finish, so it cannot run into the
-        // next test.
+        // next test. That it does finish is also what shows a mix was in
+        // flight when the budget ran out: a quit that never stopped the
+        // recorder would have nothing to cut off and would pass the checks
+        // above just as well.
+        recorder.gate.release()
         await waitFor(recorder.mixesFinished == 1, timeout: .seconds(10))
+        XCTAssertEqual(
+            recorder.mixesFinished, 1,
+            "the quit never stopped the recorder, so there was no mix for the budget to cut off", file: file, line: line,
+        )
     }
 
     func testAManualRecordingsMixDoesNotHoldTheQuitPastItsBudget() async throws {
         let queue = try PipelineQueue(logDir: makeTempDirectory(prefix: "quit_slow_mix_manual"))
-        let recorder = SlowMixRecorder(mixSeconds: 3)
+        let recorder = SlowMixRecorder()
         let loop = makeLoop(recorder: recorder, detector: makeSilentDetector(), queue: queue)
         try await loop.startMicrophoneRecording()
 
@@ -196,7 +230,7 @@ final class QuitFinishesRecordingTests: XCTestCase {
 
     func testAnAutoRecordingsMixDoesNotHoldTheQuitPastItsBudget() async throws {
         let queue = try PipelineQueue(logDir: makeTempDirectory(prefix: "quit_slow_mix_auto"))
-        let recorder = SlowMixRecorder(mixSeconds: 3)
+        let recorder = SlowMixRecorder()
         let loop = makeLoop(recorder: recorder, detector: FixedMeetingDetector(), queue: queue)
         loop.start()
         await waitFor(loop.state == .recording, timeout: .seconds(3))

@@ -20,10 +20,13 @@
         }
 
         override func tearDown() async throws {
-            // Listener cancellation is fire-and-forget — give Network.framework
-            // a beat to release the port before the next test binds.
+            // Listener cancellation is fire-and-forget, but no wait is needed
+            // for it: every server here binds port 0 and gets a fresh port from
+            // the OS, and the tests that rebind a specific port take it from a
+            // port-0 server of their own and poll until the rebind serves. A
+            // listener still winding down from the previous test holds only its
+            // own port, which no later test asks for.
             server = nil
-            try await Task.sleep(for: .milliseconds(50))
             try await super.tearDown()
         }
 
