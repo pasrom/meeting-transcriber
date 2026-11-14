@@ -122,7 +122,7 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         // unit tests + the batch-pipeline E2Es that already exercise the
         // same CoreML model. Returns canned names so `recentFinals[].speaker`
         // has a deterministic value the test can assert on.
-        let matcher = FakeLiveSpeakerMatcher(canned: ["Roman", "Anna"])
+        let matcher = FakeLiveSpeakerMatcher(canned: ["Speaker A", "Anna"])
         let controller = LiveTranscriptionController(
             engine: engine, vad: vad, captions: captions, speakerMatcher: matcher,
             // The fixture is burst-delivered (~80 ms of audio per 2 ms wall time).

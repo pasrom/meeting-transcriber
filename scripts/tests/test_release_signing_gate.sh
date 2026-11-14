@@ -77,7 +77,7 @@ _preflight() {
 
 # --- the preflight ----------------------------------------------------------
 
-# The decision Roman took: a tag build with no certificate must not fall back.
+# The decision taken: a tag build with no certificate must not fall back.
 test_a_tag_build_without_a_certificate_is_refused() {
     local rc=0 out
     out="$(_preflight refs/tags/v1.2.3 homebrew "")"
