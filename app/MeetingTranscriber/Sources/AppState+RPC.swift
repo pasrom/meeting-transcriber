@@ -244,6 +244,16 @@
             return (status, confirm, skip)
         }
 
+        /// The `/v1` meeting-notes retry seams. Read the queue on every call:
+        /// a rebuilt queue replaces the one the server was built next to.
+        func meetingNotesRPCActions() -> MeetingNotesActions {
+            MeetingNotesActions(
+                retry: { [weak self] id in self?.pipeline.queue.retryMeetingNotes(id: id) ?? false },
+                retryAll: { [weak self] in self?.pipeline.queue.retryAllMeetingNotes() ?? [] },
+                generate: { [weak self] urls in self?.pipeline.generateNotes(fromTranscripts: urls) },
+            )
+        }
+
         /// Project the pinning-relevant properties of each named scene window.
         /// Only windows carrying a scene identifier (settings, speaker-naming,
         /// record-app) are included; transient/system windows are skipped.

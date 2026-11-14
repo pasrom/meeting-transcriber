@@ -228,6 +228,12 @@ extension PipelineQueue {
         // a job that only wants one LLM call until the marking dies with the
         // session.
         if await resumeProtocolOnly(job) { return true }
+        // A job made from a picked transcript has no audio to run on, and the
+        // same reason holds: it needs neither the engine nor the output folder.
+        if job.generatesNotesOnly == true {
+            await generateNotesOnly(job)
+            return true
+        }
 
         guard let engine, let outputDir else {
             logger.warning("Processing dependencies not configured — skipping")
@@ -1109,7 +1115,8 @@ extension PipelineQueue {
             // restores the visibility traded away in PR #692's 4th commit.
             logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .public)")
             // Matched by /v1 clients and persisted jobs; keep the text stable.
-            addWarning(id: jobID, "Protocol generation failed — transcript saved")
+            addWarning(id: jobID, Self.protocolGenerationFailedWarning)
+            recordProtocolFailure(id: jobID, reason: error.localizedDescription)
             resolveNotionExport(jobID: jobID)
             return
         }

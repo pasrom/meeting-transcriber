@@ -35,6 +35,8 @@ struct MenuBarView: View {
     /// before the setting was turned off still falls back to it when no local
     /// file exists; `JobOpenTarget` owns that rule.
     var notionExportEnabled: Bool = false
+    /// Picks transcripts and queues meeting notes for each.
+    var onGenerateNotesFromTranscripts: () -> Void = {}
 
     private var state: TranscriberState {
         status?.state ?? .idle
@@ -204,6 +206,13 @@ struct MenuBarView: View {
             Label("Process Audio/Video Files...", systemImage: "doc.badge.plus")
         }
         .keyboardShortcut("p")
+
+        Button {
+            onGenerateNotesFromTranscripts()
+        } label: {
+            Label("Generate Meeting Notes from Transcript...", systemImage: "doc.text")
+        }
+        .accessibilityIdentifier(A11yID.generateNotesFromTranscriptButton)
     }
 
     private var queueHeader: QueueHeader {
@@ -214,6 +223,7 @@ struct MenuBarView: View {
         if !pipelineQueue.jobs.isEmpty {
             Divider()
             Label(queueHeader.title, systemImage: queueHeader.systemImage)
+            retryAllMeetingNotesButton
 
             ForEach(Array(pipelineQueue.jobs.enumerated()), id: \.element.id) { index, job in
                 // A native separator, not a grouping view: each job is a run of
@@ -313,6 +323,7 @@ struct MenuBarView: View {
             Button("Cancel") { pipelineQueue.cancelJob(id: job.id) }
         }
         retryButton(job, index: index)
+        notesRetryButton(job, index: index)
         notionRetryButton(job, index: index)
         if job.state == .done || job.state == .error || job.state == .speakerNamingPending {
             Button(job.notionExportStatus == .failed ? "Discard Notion Retry" : "Dismiss") { onDismissJob(job.id) }
@@ -327,6 +338,26 @@ struct MenuBarView: View {
         if pipelineQueue.canRetryJob(id: job.id) {
             Button("Retry") { pipelineQueue.retryJob(id: job.id) }
                 .accessibilityIdentifier(A11yID.jobRetryButton(index))
+        }
+    }
+
+    /// Generates failed meeting notes again from the saved transcript.
+    @ViewBuilder
+    private func notesRetryButton(_ job: PipelineJob, index: Int) -> some View {
+        if job.hasRetryableMeetingNotes {
+            Button("Retry Meeting Notes") { pipelineQueue.retryMeetingNotes(id: job.id) }
+                .accessibilityIdentifier(A11yID.jobNotesRetryButton(index))
+        }
+    }
+
+    /// Offered once more than one meeting is waiting for a retry; with one, the
+    /// job's own row does the same. Enabled, so `MenuStageProgressUpdater`
+    /// never takes it for a job title.
+    @ViewBuilder private var retryAllMeetingNotesButton: some View {
+        let count = pipelineQueue.jobsWithRetryableMeetingNotes.count
+        if count > 1 {
+            Button("Retry All Meeting Notes (\(count))") { pipelineQueue.retryAllMeetingNotes() }
+                .accessibilityIdentifier(A11yID.retryAllMeetingNotesButton)
         }
     }
 

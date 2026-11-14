@@ -642,6 +642,14 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(protocolLanguage, forKey: "protocolLanguage") }
     }
 
+    /// Post a notification when the meeting notes for a meeting could not be
+    /// generated (the provider failed), instead of the plain "Transcript Saved".
+    /// On by default: a failure that only shows as a warning in the menu went
+    /// unnoticed for weeks when the Claude CLI was signed out.
+    var notifyOnMeetingNotesFailure: Bool {
+        didSet { defaults.set(notifyOnMeetingNotesFailure, forKey: "notifyOnMeetingNotesFailure") }
+    }
+
     /// Append the verbatim transcript to generated Markdown meeting minutes.
     /// Defaults to `true` to preserve the output format used before this option
     /// was introduced.
@@ -949,6 +957,7 @@ final class AppSettings { // swiftlint:disable:this type_body_length
             claudeBin = defaults.object(forKey: "claudeBin") as? String ?? "claude"
         #endif
         protocolLanguage = defaults.string(forKey: "protocolLanguage") ?? "German"
+        notifyOnMeetingNotesFailure = defaults.bool(forKey: "notifyOnMeetingNotesFailure", default: true)
         includeFullTranscriptInProtocol = defaults.bool(forKey: "includeFullTranscriptInProtocol", default: true)
         saveRawTranscriptSeparately = defaults.bool(forKey: "saveRawTranscriptSeparately", default: true)
         useAITitleForFilenames = defaults.bool(forKey: "useAITitleForFilenames", default: false)

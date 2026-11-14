@@ -92,6 +92,7 @@
         let watchControl: (WatchAction) async -> WatchControlOutcome // POST /v1/watch
         let recordStatus: () -> RecordStatusDTO // GET /v1/record
         let recordControl: (RecordAction) async -> RecordControlOutcome // POST /v1/record
+        let meetingNotes: MeetingNotesActions // POST /v1/jobs/<id>/notes/retry, /v1/jobs/notes/retry
         var idempotency = IdempotencyStore() // Idempotency-Key -> job IDs; internal for the +V1 extension
         private let expectedAuth: String
         private var listener: NWListener?
@@ -122,6 +123,7 @@
             watchControl: @escaping (WatchAction) async -> WatchControlOutcome = { _ in .failed },
             recordStatus: @escaping () -> RecordStatusDTO = { .notRecording },
             recordControl: @escaping (RecordAction) async -> RecordControlOutcome = { _ in .failed },
+            meetingNotes: MeetingNotesActions = MeetingNotesActions(),
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.expectedAuth = "Bearer \(token)"
@@ -141,6 +143,7 @@
             self.watchControl = watchControl
             self.recordStatus = recordStatus
             self.recordControl = recordControl
+            self.meetingNotes = meetingNotes
         }
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
@@ -555,46 +558,6 @@
         static func closeSettings() {
             NotificationCenter.default.post(name: .closeSettings, object: nil)
         }
-    }
-
-    // MARK: - Speaker DB action types
-
-    enum SpeakerActionOutcome: String {
-        case ok
-        case noop
-        case merged
-        case notFound
-        case invalid
-        /// The speaker DB could not be read or written, so nothing changed.
-        /// Not `notFound`: a DB that was never read says nothing about whether
-        /// the speaker is in it.
-        case notSaved
-        /// The speaker DB was damaged, set aside and replaced by the profiles
-        /// that could still be read (none, if it did not decode at all), and
-        /// the action found nothing to act on among them. Not `notFound`
-        /// either: the name may well be in the set-aside copy.
-        case dbReset
-    }
-
-    /// Default `.noop` rejects every request so tests and dry-launches can't
-    /// accidentally mutate state — wire real closures explicitly when starting.
-    /// `@MainActor`-isolated closures so the struct is `Sendable` (every
-    /// invocation happens on MainActor anyway — RPC routing is itself
-    /// MainActor-bound — so the isolation doesn't change call-site semantics).
-    struct SpeakerDBActions {
-        let rename: @MainActor (String, String) -> SpeakerActionOutcome
-        let delete: @MainActor (String) -> SpeakerActionOutcome
-        let merge: @MainActor (String, String) -> SpeakerActionOutcome
-        /// Insert a synthetic speaker with a random embedding. Test-only path
-        /// — production never calls this.
-        let seed: @MainActor (String) -> SpeakerActionOutcome
-
-        static let noop = Self(
-            rename: { _, _ in .invalid },
-            delete: { _ in .invalid },
-            merge: { _, _ in .invalid },
-            seed: { _ in .invalid },
-        )
     }
 
 #endif

@@ -30,8 +30,9 @@ final class PipelineController {
     /// by `installQueueForTesting`.
     private(set) var queue: PipelineQueue
 
-    private let settings: AppSettings
-    private let notifier: any AppNotifying
+    // Internal, not private: the `+MeetingNotes` extension reads both.
+    let settings: AppSettings
+    let notifier: any AppNotifying
 
     /// Decides the folder a new queue writes into, and tells the user when it is
     /// not the one they chose (see `OutputDirectoryResolver`). Built from the
@@ -396,10 +397,11 @@ final class PipelineController {
     func configureCallbacks(on target: PipelineQueue? = nil) {
         let queue = target ?? queue
         queue.onNotionExportFinished = { [notifier] in notifier.notifyNotionExport(job: $0, failureReason: $1) }
-        queue.onJobStateChange = { [notifier] job, _, newState in
+        queue.onJobStateChange = { [notifier, settings] job, _, newState in
             switch newState {
             case .done:
-                notifier.notify(title: job.hasSavedProtocol ? "Meeting Notes Ready" : "Transcript Saved", body: job.meetingTitle)
+                let note = PipelineQueue.doneNotification(for: job, announceNotesFailure: settings.notifyOnMeetingNotesFailure)
+                notifier.notify(title: note.title, body: note.body, urgency: note.urgency)
 
             case .error:
                 if let err = job.error {

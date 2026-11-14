@@ -52,6 +52,13 @@ enum A11yID {
         "jobNotionRetryButton.\(index)"
     }
 
+    static func jobNotesRetryButton(_ index: Int) -> String {
+        "jobNotesRetryButton.\(index)"
+    }
+
+    static let retryAllMeetingNotesButton = "retryAllMeetingNotesButton"
+    static let generateNotesFromTranscriptButton = "generateNotesFromTranscriptButton"
+
     /// Menu bar items that answer an open browser consent prompt.
     static let menuRecordPendingConsent = "menuRecordPendingConsent"
     static let menuDeclinePendingConsent = "menuDeclinePendingConsent"
@@ -73,6 +80,7 @@ enum A11yID {
     }
 
     static let protocolSection = "protocolSection"
+    static let notifyOnMeetingNotesFailureToggle = "notifyOnMeetingNotesFailureToggle"
     static let includeFullTranscriptToggle = "includeFullTranscriptToggle"
     static let saveRawTranscriptToggle = "saveRawTranscriptToggle"
     static let useAITitleForFilenamesToggle = "useAITitleForFilenamesToggle"

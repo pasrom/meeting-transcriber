@@ -72,6 +72,7 @@
         /// - `GET  /v1/jobs/<id>/naming` — pending speaker-naming choice
         /// - `POST /v1/jobs/<id>/naming` — confirm speaker names `{mapping}`
         /// - `POST /v1/jobs/<id>/naming/skip` — skip naming for one job
+        /// - `POST /v1/jobs/<id>/notes/retry`, `POST /v1/jobs/notes/retry` — see `+MeetingNotes`
         /// - `GET  /v1/watch` — watching status
         /// - `POST /v1/watch` — start/stop/toggle watching `{action}`
         /// - `GET  /v1/record` — microphone-recording status
@@ -90,6 +91,7 @@
             // operation is already idempotent, and that header exists here only
             // to stop duplicate *job creation*.
             if let response = await controlResourceResponse(request, path: path) { return response }
+            if let response = meetingNotesResponse(request, path: path) { return response }
             // The caller (DebugRPCServer.route) already gated on the `/v1/jobs`
             // prefix, so comps[0..1] are always ["v1", "jobs"]; the count checks
             // below just keep indexing safe.

@@ -448,6 +448,7 @@ final class AppState {
                 watchControl: watch.control,
                 recordStatus: record.status,
                 recordControl: record.control,
+                meetingNotes: meetingNotesRPCActions(),
             )
         }
     #endif

@@ -68,6 +68,9 @@ per connection; exceeding it closes the connection without sending a response.
 | `GET`  | `/v1/jobs/<id>/naming` | Read the pending speaker-naming choice for a job. |
 | `POST` | `/v1/jobs/<id>/naming` | Confirm speaker names for a job. |
 | `POST` | `/v1/jobs/<id>/naming/skip` | Skip naming for a job (accept auto-assigned names). |
+| `POST` | `/v1/jobs/<id>/notes/retry` | Generate a job's failed meeting notes again from its transcript. |
+| `POST` | `/v1/jobs/notes/retry` | The same for every job whose meeting notes failed. |
+| `POST` | `/v1/jobs/notes/generate` | Generate meeting notes for saved transcripts (`.txt`), one job per file. |
 | `GET`  | `/v1/watch` | Read whether the app is watching for meetings. |
 | `POST` | `/v1/watch` | Start, stop or toggle meeting watching. |
 | `GET`  | `/v1/record` | Read whether a microphone-only recording is running. |
@@ -223,6 +226,82 @@ Responses:
 - `200 OK` on success.
 - `409 Conflict` if the job exists but is not awaiting naming.
 - `404 Not Found` if the id is unknown.
+
+### POST /v1/jobs/&lt;id&gt;/notes/retry
+
+Generate the meeting notes of a finished job again, when the first attempt
+failed (the job is `done` with the warning "Protocol generation failed —
+transcript saved"). Runs from the saved transcript only: no transcription, no
+diarization. The job goes back to `waiting` under the **same id** and runs in
+turn with the rest of the queue, so poll `GET /v1/jobs/<id>` until it is `done`
+again; `protocolPath` is set once the notes are saved. A second failure leaves
+it retryable. Nothing retries by itself.
+
+Such a job stays in the queue, past the 60-second cleanup and across a restart,
+until it is retried or dismissed in the menu.
+
+Responses:
+
+- `200 OK` with the job's [JobStatusDTO](#jobstatusdto) (`state: waiting`).
+- `409 Conflict` if the job exists but has no failed notes to retry, or the
+  retry was refused. A refusal adds a warning to the job: notes already exist
+  next to the transcript (they are never overwritten, and the job stops
+  offering the retry), or the transcript could not be read (the job keeps
+  offering it).
+- `404 Not Found` if the id is unknown.
+
+```bash
+curl -sS -X POST "$BASE/v1/jobs/<id>/notes/retry" -H "Authorization: Bearer $TOKEN"
+```
+
+### POST /v1/jobs/notes/retry
+
+The same for every job whose meeting notes failed, in queue order. They run one
+after another.
+
+Responses:
+
+- `200 OK` with `{"jobIDs":[...]}`, the jobs whose retry started; empty when
+  there were none.
+
+```bash
+curl -sS -X POST "$BASE/v1/jobs/notes/retry" -H "Authorization: Bearer $TOKEN"
+```
+
+### POST /v1/jobs/notes/generate
+
+Generate meeting notes for transcripts already on disk, such as meetings from
+before the notes were set up, or whose notes failed and whose job is gone. The
+counterpart of the menu's **Generate Meeting Notes from Transcript…**. One job
+per file, run in turn with the rest of the queue: notes only, no transcription.
+The notes are saved next to each transcript as `<name>.md`. The transcript
+itself is never moved, renamed or removed. A name that starts with the app's
+`yyyyMMdd_HHmm` stamp gives the notes their meeting date.
+
+Request body:
+
+```json
+{ "paths": ["/abs/20261030_0900_standup.txt", "/abs/20261031_1400_review.txt"] }
+```
+
+Responses:
+
+- `200 OK` with `{ "jobIDs": [...], "notesExist": [...], "unreadable": [...] }`:
+  the jobs created, in the order given, and the paths left out. `notesExist`
+  are transcripts with a `.md` of the same name next to them (never
+  overwritten); `unreadable` are paths that are not a `.txt`, missing, empty or
+  unreadable. Poll each job with `GET /v1/jobs/<id>`. A job whose transcript
+  gains notes or disappears while it waits ends in `error`.
+- `400 Bad Request` if `paths` is missing/empty or the body is undecodable.
+- `409 Conflict` if the meeting notes provider is None (Settings → Output):
+  nothing is queued.
+
+```bash
+curl -sS -X POST "$BASE/v1/jobs/notes/generate" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"paths":["/Users/me/Documents/MeetingTranscriber/protocols/20261030_0900_standup.txt"]}'
+```
 
 ### GET /v1/watch
 
@@ -634,7 +713,7 @@ as `null`, following the same convention as the other DTOs.
 | `401` | Missing or wrong bearer token. |
 | `403` | Rejected by the Origin or Host guard. |
 | `404` | Unknown job id. Also `GET /v1/jobs/<id>/naming` when the job is not awaiting naming (the GET folds wrong-state into `404`; the POST naming routes use `409` instead). |
-| `409` | Confirm/skip naming on a job that exists but is not awaiting naming. Also `POST /v1/watch` while a manual recording owns the watch loop, and `POST /v1/record` while any other recording owns it. |
+| `409` | Confirm/skip naming on a job that exists but is not awaiting naming. Also `POST /v1/jobs/<id>/notes/retry` on a job with no failed notes to retry, or whose retry was refused, and `POST /v1/jobs/notes/generate` while the notes provider is None. Also `POST /v1/watch` while a manual recording owns the watch loop, and `POST /v1/record` while any other recording owns it. |
 | `412` | `POST /v1/record` only: nothing would be captured ("No Microphone" is set, or the mic permission is denied/broken). Stable until a setting changes, so do not retry. |
 | `503` | `POST /v1/watch` and `POST /v1/record`: the action was attempted and did not take. On `/v1/watch` that means the state did not settle within 20 seconds; on `/v1/record` also a recorder that would not start, or a stop whose audio could not be handed to the pipeline. Retryable, unlike `412`. On `/v1/watch` a *denied* microphone gives `200`, not this; on `/v1/record` it gives `412`. |
 
