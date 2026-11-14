@@ -1012,6 +1012,23 @@ final class PipelineQueueTests: XCTestCase {
 
     // MARK: - Auto-Removal Tests
 
+    /// Completed-job lifetime for the expiry tests below.
+    private static let expiryLifetime: TimeInterval = 0.05
+
+    /// How long an expiry test sleeps when it cannot wait on a condition:
+    /// either it asserts that a job is still there once the lifetime has
+    /// passed, or it needs the timer to have fired while its effect (a job
+    /// held back for an open menu) leaves nothing to observe. The 200 ms past
+    /// the lifetime is the room a late timer has, the same these tests had
+    /// with a 0.2 s lifetime and a 0.4 s sleep.
+    private static let pastExpiry: Duration = .seconds(expiryLifetime) + .milliseconds(200)
+
+    /// How long an expiry test waits for a job to go. Far above the lifetime,
+    /// so a loaded machine does not trip it, and low enough that a lifetime
+    /// taken ten times too long, or not from the parameter at all, still
+    /// fails: the default is a minute.
+    private static let expiryCeiling: Duration = .seconds(1)
+
     func testDismissCannotRemoveAJobDuringNotionExport() {
         var job = makeJob()
         job.state = .done
@@ -1028,46 +1045,46 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(queue.jobs.isEmpty)
     }
 
-    func testCompletedJobAutoRemovedAfterDelay() async throws {
-        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+    func testCompletedJobAutoRemovedAfterDelay() async {
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: Self.expiryLifetime)
         let job = makeJob()
         queue.enqueue(job)
         queue.updateJobState(id: job.id, to: .done)
         XCTAssertEqual(queue.jobs.count, 1)
 
-        try await Task.sleep(for: .milliseconds(400))
+        await waitFor({ queue.jobs.isEmpty }, timeout: Self.expiryCeiling)
         XCTAssertEqual(queue.jobs.count, 0, "Done job should be auto-removed")
     }
 
     func testFailedNotionExportJobIsRetainedPastCompletedLifetime() async throws {
-        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: Self.expiryLifetime)
         var job = makeJob()
         job.beginNotionExport(speakerNames: [])
         job.finishNotionExport(succeeded: false)
         queue.enqueue(job)
         queue.updateJobState(id: job.id, to: .done)
 
-        try await Task.sleep(for: .milliseconds(400))
+        try await Task.sleep(for: Self.pastExpiry)
 
         XCTAssertEqual(queue.jobs.first?.id, job.id)
         XCTAssertEqual(queue.jobs.first?.notionExportStatus, .failed)
     }
 
-    func testJobWithoutAnExportExpiresWhileAMenuIsOpen() async throws {
-        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+    func testJobWithoutAnExportExpiresWhileAMenuIsOpen() async {
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: Self.expiryLifetime)
         let job = makeJob()
         queue.enqueue(job)
         queue.updateJobState(id: job.id, to: .done)
         queue.beginMenuTracking()
 
-        try await Task.sleep(for: .milliseconds(400))
+        await waitFor({ queue.completedJobs.isEmpty }, timeout: Self.expiryCeiling)
 
         XCTAssertTrue(queue.completedJobs.isEmpty)
         queue.endMenuTracking()
     }
 
     func testCompletedJobExpiryWaitsForMenuTrackingToEnd() async throws {
-        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: Self.expiryLifetime)
         let job = makeJob()
         var exported = job
         exported.beginNotionExport(speakerNames: [])
@@ -1076,7 +1093,7 @@ final class PipelineQueueTests: XCTestCase {
         queue.updateJobState(id: job.id, to: .done)
         queue.beginMenuTracking()
 
-        try await Task.sleep(for: .milliseconds(400))
+        try await Task.sleep(for: Self.pastExpiry)
         XCTAssertEqual(queue.completedJobs.map(\.id), [job.id])
 
         queue.endMenuTracking()
@@ -1084,7 +1101,7 @@ final class PipelineQueueTests: XCTestCase {
     }
 
     func testMenuEndRetainsJobThatNeedsNotionRetryAfterItsTimerExpired() async throws {
-        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: Self.expiryLifetime)
         let job = makeJob()
         var exported = job
         exported.beginNotionExport(speakerNames: [])
@@ -1092,7 +1109,7 @@ final class PipelineQueueTests: XCTestCase {
         queue.enqueue(exported)
         queue.updateJobState(id: job.id, to: .done)
         queue.beginMenuTracking()
-        try await Task.sleep(for: .milliseconds(400))
+        try await Task.sleep(for: Self.pastExpiry)
 
         queue.jobs[0].beginNotionExport(speakerNames: [])
         queue.jobs[0].finishNotionExport(succeeded: false)
@@ -1103,7 +1120,7 @@ final class PipelineQueueTests: XCTestCase {
     }
 
     func testCompletedJobExpiryWaitsForFinalNestedMenuTrackingEnd() async throws {
-        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: Self.expiryLifetime)
         let job = makeJob()
         var exported = job
         exported.beginNotionExport(speakerNames: [])
@@ -1113,7 +1130,7 @@ final class PipelineQueueTests: XCTestCase {
         queue.beginMenuTracking()
         queue.beginMenuTracking()
 
-        try await Task.sleep(for: .milliseconds(400))
+        try await Task.sleep(for: Self.pastExpiry)
         queue.endMenuTracking()
         XCTAssertEqual(queue.completedJobs.map(\.id), [job.id])
 
@@ -1139,12 +1156,12 @@ final class PipelineQueueTests: XCTestCase {
     }
 
     func testErrorJobNotAutoRemoved() async throws {
-        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: Self.expiryLifetime)
         let job = makeJob()
         queue.enqueue(job)
         queue.updateJobState(id: job.id, to: .error, error: "Test error")
 
-        try await Task.sleep(for: .milliseconds(400))
+        try await Task.sleep(for: Self.pastExpiry)
         XCTAssertEqual(queue.jobs.count, 1, "Error job should NOT be auto-removed")
     }
 
