@@ -76,6 +76,20 @@ final class PipelineControllerNotionRestoreTests: XCTestCase {
         XCTAssertEqual(controller.queue.jobs.first?.notionExportStatus, .failed)
     }
 
+    /// The retry row of meeting notes that failed has to be there after a
+    /// relaunch too, without the user first starting something.
+    func testLaunchRestoresMeetingNotesThatFailed() throws {
+        var job = makeSavedJob(state: .done)
+        job.transcriptPath = tmpDir.appendingPathComponent("saved.txt")
+        job.protocolFailure = "Claude CLI exited with code 1: Not logged in"
+        try saveSnapshot([job])
+        let controller = try makeLaunchedController()
+
+        controller.restorePendingNotionExports()
+
+        XCTAssertTrue(controller.queue.canRetryMeetingNotes(id: job.id))
+    }
+
     func testLaunchLeavesTheQueueUnbuiltWhenASavedJobWouldResume() throws {
         try saveSnapshot([
             makeSavedJob(state: .done, exportInProgress: true),

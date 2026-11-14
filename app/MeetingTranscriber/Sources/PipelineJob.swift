@@ -171,6 +171,19 @@ struct PipelineJob: Identifiable, Codable {
         notionExportStatus == .inProgress || notionExportStatus == .failed
     }
 
+    /// A finished meeting whose notes failed, with a transcript recorded to
+    /// make them from. State only, never the file system, so a view body can
+    /// ask it; the retry checks the transcript itself.
+    var hasRetryableMeetingNotes: Bool {
+        state == .done && protocolFailure != nil && transcriptPath != nil
+    }
+
+    /// A finished job that stays listed, and in the snapshot, until the user
+    /// acts on it: an export to retry or discard, or notes to retry or dismiss.
+    var isHeldAfterCompletion: Bool {
+        hasPendingNotionExport || hasRetryableMeetingNotes
+    }
+
     var artifactStartTime: Date {
         meetingStartTime ?? enqueuedAt
     }
@@ -196,6 +209,11 @@ struct PipelineJob: Identifiable, Codable {
     var echo: EchoDetectionDTO?
     var transcriptPath: URL?
     var protocolPath: URL?
+    /// Why the meeting notes could not be generated, when they could not: the
+    /// provider's error message, which never carries meeting content (see the
+    /// catch in `PipelineQueue.generateProtocol`). Nil when they were generated,
+    /// were not asked for, or for snapshots written before this field existed.
+    var protocolFailure: String?
     /// The Notion page this job created, kept so a retry updates that page
     /// instead of creating a duplicate. Optional so snapshots written before
     /// this field existed still decode.

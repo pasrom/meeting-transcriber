@@ -511,6 +511,26 @@ class PipelineQueue {
         onUnusableVoices?(job, newlyUnusable)
     }
 
+    /// The notification for a finished job. With meeting notes that failed and
+    /// `announceNotesFailure` on (`AppSettings.notifyOnMeetingNotesFailure`),
+    /// it says so with the reason, breaking through Focus since the user can
+    /// still act on it; otherwise "Meeting Notes Ready" or "Transcript Saved".
+    static func doneNotification(
+        for job: PipelineJob,
+        announceNotesFailure: Bool,
+    ) -> (title: String, body: String, urgency: NotificationUrgency) {
+        guard let reason = job.protocolFailure, announceNotesFailure else {
+            return (job.hasSavedProtocol ? "Meeting Notes Ready" : "Transcript Saved", job.meetingTitle, .standard)
+        }
+        let cause = reason.hasSuffix(".") ? String(reason.dropLast()) : reason
+        var body = "\"\(job.meetingTitle)\": \(cause). The transcript is saved."
+        let lowered = reason.lowercased()
+        if lowered.contains("login") || lowered.contains("logged in") || lowered.contains("authenticat") {
+            body += " Run claude in Terminal and sign in with /login."
+        }
+        return ("Meeting Notes Failed", body, .timeSensitive)
+    }
+
     /// Notification text for `onUnusableVoices`.
     static func unusableVoicesMessage(_ names: [String], in job: PipelineJob) -> String {
         "No usable voice sample for \(names.joined(separator: ", ")) in \"\(job.meetingTitle)\": too short "
@@ -819,7 +839,7 @@ class PipelineQueue {
     }
 
     private func expireCompletedJob(id: UUID) {
-        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.hasPendingNotionExport }) else { return }
+        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.isHeldAfterCompletion }) else { return }
         // Native menus update in place. Removing a finished export's row while
         // the menu is open moves its actions underneath the pointer.
         if menuTrackingDepth > 0, jobs.contains(where: { $0.id == id && $0.notionExportStatus != nil }) {
@@ -908,7 +928,7 @@ class PipelineQueue {
     }
 
     func scheduleCompletedJobRemoval(id: UUID) {
-        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.hasPendingNotionExport }) else { return }
+        guard jobs.contains(where: { $0.id == id && $0.state == .done && !$0.isHeldAfterCompletion }) else { return }
         let token = UUID()
         completedJobRemovalTokens[id] = token
         expiredCompletedJobIDs.remove(id)
@@ -978,6 +998,13 @@ class PipelineQueue {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         guard !jobs[index].warnings.contains(message) else { return }
         jobs[index].warnings.append(message)
+    }
+
+    /// Record why this job's meeting notes could not be generated
+    /// (`PipelineJob.protocolFailure`).
+    func recordProtocolFailure(id: UUID, reason: String) {
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        jobs[index].protocolFailure = reason
     }
 
     /// Record which tracks of this job's recording had audio. Read back through
