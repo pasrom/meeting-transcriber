@@ -71,7 +71,7 @@ extension PipelineQueue {
                 }
                 return true
             }
-            return MicMuteLog.forRecovery(recoverable, among: entries, in: recordingsDir)
+            return MicMuteLog.forRecovery(recoverable, among: entries, in: recordingsDir, keepingLogsOf: accountedFor)
         }.value
     }
 
@@ -108,7 +108,11 @@ extension PipelineQueue {
                 mixPath: mixURL, appPath: group.app, micPath: group.mic,
                 micDelay: 0, micMuteIntervals: micMuted,
             )
-            MicMuteLog.remove(stem: group.stem, in: mixURL.deletingLastPathComponent())
+            // The mute log stays beside the recording. This job is not on
+            // disk yet (`saveSnapshot()` only schedules the write), so a
+            // process that dies now adopts the recording again and needs the
+            // log again. It goes when the recording leaves staging
+            // (`persistAudioToOutput`).
             stampTranscriptOutputOptions(on: &job)
             jobs.append(job)
             eventLog.append(jobID: job.id, event: "recovered", from: nil, to: .waiting)
