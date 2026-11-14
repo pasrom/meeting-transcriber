@@ -148,25 +148,25 @@
 
         func testRedactUITreeStringAbbreviatesHomeAtPathBoundary() {
             XCTAssertEqual(
-                DebugRPCServer.redactUITreeString("/Users/roman/Documents/out.md", homeDirectory: "/Users/roman"),
+                DebugRPCServer.redactUITreeString("/Users/speaker/Documents/out.md", homeDirectory: "/Users/speaker"),
                 "~/Documents/out.md",
             )
             // A displayed path mid-string is abbreviated too.
             XCTAssertEqual(
-                DebugRPCServer.redactUITreeString("Saving to /Users/roman/x", homeDirectory: "/Users/roman"),
+                DebugRPCServer.redactUITreeString("Saving to /Users/speaker/x", homeDirectory: "/Users/speaker"),
                 "Saving to ~/x",
             )
             // The bare home path collapses to "~".
-            XCTAssertEqual(DebugRPCServer.redactUITreeString("/Users/roman", homeDirectory: "/Users/roman"), "~")
+            XCTAssertEqual(DebugRPCServer.redactUITreeString("/Users/speaker", homeDirectory: "/Users/speaker"), "~")
             // A longer sibling must NOT be mangled (path-boundary guard).
             XCTAssertEqual(
-                DebugRPCServer.redactUITreeString("/Users/romantic/file", homeDirectory: "/Users/roman"),
-                "/Users/romantic/file",
+                DebugRPCServer.redactUITreeString("/Users/speakerphone/file", homeDirectory: "/Users/speaker"),
+                "/Users/speakerphone/file",
             )
-            XCTAssertNil(DebugRPCServer.redactUITreeString(nil, homeDirectory: "/Users/roman"))
+            XCTAssertNil(DebugRPCServer.redactUITreeString(nil, homeDirectory: "/Users/speaker"))
             XCTAssertEqual(
-                DebugRPCServer.redactUITreeString("/Users/roman/x", homeDirectory: ""),
-                "/Users/roman/x",
+                DebugRPCServer.redactUITreeString("/Users/speaker/x", homeDirectory: ""),
+                "/Users/speaker/x",
                 "an empty home directory must leave the string untouched",
             )
         }

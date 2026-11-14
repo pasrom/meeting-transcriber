@@ -12,7 +12,7 @@ extension String {
         return "speaker_\(prefix)"
     }
 
-    /// First-and-last-char redaction: "Roman" → "R***n", "Tom" → "T**", "Li" → "L*".
+    /// First-and-last-char redaction: "Speaker A" → "S*******A", "Tom" → "T**", "Li" → "L*".
     /// Less privacy-preserving than `pseudonymized` (length leaks); use for UI-adjacent
     /// logs where the user actively benefits from recognising "their" name. For
     /// machine-readable forensic logs, prefer `pseudonymized`.

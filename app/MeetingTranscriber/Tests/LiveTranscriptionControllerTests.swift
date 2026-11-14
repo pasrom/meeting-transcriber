@@ -85,7 +85,7 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         let captions = LiveCaptionsState()
         let engine = MockStreamingEngine()
         engine.samplesToTranscribe = "hello world"
-        let matcher = FakeLiveSpeakerMatcher(canned: ["mic": "Roman", "app": "Anna"])
+        let matcher = FakeLiveSpeakerMatcher(canned: ["mic": "Speaker A", "app": "Anna"])
         let controller = LiveTranscriptionController(
             engine: engine,
             vad: FluidVAD(threshold: 0.5),
@@ -99,7 +99,7 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         // name, the controller calls captions with it.
         await controller.prepare()
         let micName = await matcher.match(audio: [0.0, 0.1])
-        XCTAssertEqual(micName, "Roman", "fake matcher must return canned mic name")
+        XCTAssertEqual(micName, "Speaker A", "fake matcher must return canned mic name")
         let appName = await matcher.match(audio: [0.2, 0.3])
         XCTAssertEqual(appName, "Anna", "fake matcher must return canned app name")
     }
