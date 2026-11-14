@@ -251,6 +251,27 @@ final class MicCaptureProgressWatchdogTests: XCTestCase {
         XCTAssertEqual(try Double(AVAudioFile(forReading: url).length), expected, accuracy: 40)
     }
 
+    /// The first-frame stamp is when the first buffer's callback ran, not the
+    /// host time the buffer carries. The microphone delay is the difference of
+    /// two such stamps, so it compares callback arrivals: a tap that hands its
+    /// first buffer over late shifts the track by that latency. Pinned so that
+    /// changing where the stamp comes from is a deliberate step; it moves the
+    /// alignment of every new recording.
+    func testTheFirstFrameStampIsTheCallbackArrivalNotTheBuffersHostTime() throws {
+        let handler = try harness.makeHandler()
+        let session = try XCTUnwrap(harness.sessions.last)
+
+        // A buffer captured 85 ms before its callback runs, which is what a
+        // 4096-frame tap at 48 kHz amounts to.
+        let before = mach_absolute_time()
+        session.deliver(hostTime: before - secondsToMachTicks(0.085))
+        let after = mach_absolute_time()
+        handler.stop()
+
+        XCTAssertGreaterThanOrEqual(handler.firstFrameTime, before)
+        XCTAssertLessThanOrEqual(handler.firstFrameTime, after)
+    }
+
     /// A storm that settles in the budget's last seconds keeps the engine it
     /// settled on: every engine gets its first deadline to deliver, even when
     /// the budget runs out inside it. A storm that goes on is ended at its
