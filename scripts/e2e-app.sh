@@ -2686,10 +2686,16 @@ await_new_sidecar() {
 }
 
 # The lane-independent half of the schema: shape and timestamps.
+#
+# The version is pinned on purpose, and so has to move with
+# `RecordingSidecar.currentVersion`: a consumer on another machine reads these
+# files, so a bump should be seen here. Version 3 added `micMuteIntervals`,
+# which the writer always emits (empty when the mic was never muted).
 assert_sidecar_common() {
     local label="$1" sidecar="$2" check
     check="$(jq -r '
-        if .version != 2 then "version != 2 (got: \(.version))"
+        if .version != 3 then "version != 3 (got: \(.version))"
+        elif (.micMuteIntervals | type) != "array" then "micMuteIntervals not array"
         elif (.startedAt | type) != "string" then "startedAt not string"
         elif (.stoppedAt | type) != "string" then "stoppedAt not string"
         elif (.startedAt | fromdateiso8601? // -1) < 0 then "startedAt not ISO8601"
