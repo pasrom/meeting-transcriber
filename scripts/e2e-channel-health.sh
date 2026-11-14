@@ -182,8 +182,11 @@ if [ "$TAKE_SCREENSHOT" = true ]; then
                 "$ROOT/scripts/assert-red-pixels.swift" "$OUT"
                 break
             fi
-            if "$ROOT/scripts/assert-red-pixels.swift" "$OUT" >/dev/null 2>&1; then
+            # Captured rather than discarded: a pass prints the count it
+            # measured, so the log shows how far above the threshold it was.
+            if check_output="$("$ROOT/scripts/assert-red-pixels.swift" "$OUT" 2>&1)"; then
                 echo "▸ Menubar screenshot saved to $OUT (attempt $attempt/$max_attempts)"
+                echo "$check_output"
                 break
             fi
             attempt=$((attempt + 1))
