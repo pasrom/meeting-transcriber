@@ -684,10 +684,11 @@ always use the default handler.
 ### Claude CLI Invocation
 
 ```bash
-/usr/bin/env claude -p - --output-format stream-json --verbose --model sonnet
+/usr/bin/env claude -p - --output-format stream-json --verbose --model sonnet --tools "" --strict-mcp-config
 ```
 
 - **Input:** Meeting metadata + protocol prompt (with variables substituted) + transcript piped to stdin
+- **No tools:** `--tools ""` and `--strict-mcp-config` start the session without built-in tools or MCP servers, since the transcript is untrusted text. A CLI too old for these options fails the protocol with a message asking for an update; it is never run without them
 - **Output:** Stream-json parsed line-by-line (content_block_delta + assistant message)
 - **Environment:** `CLAUDECODE` env var stripped to allow nested invocation
 - **Timeout:** 10 minutes
