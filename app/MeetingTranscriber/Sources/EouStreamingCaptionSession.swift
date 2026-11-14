@@ -93,11 +93,14 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
 
     /// Parallel copy of every sample fed to the manager, sliced per utterance.
     private var ring = UtteranceRingBuffer()
-    /// Absolute ms of the last EOU (start of the next utterance's audio slice).
-    private var lastEouMs = 0
+    /// Start of unassigned speaker audio, advanced by real EOU or text-only finals.
+    private var audioCursorMs = 0
     /// Transcript prefix already finalized — stripped from later callback texts
     /// because the manager's accumulated transcript grows across utterances.
     private var lastFinalizedPrefix = ""
+    private var runningTranscript = ""
+    private var lastEmittedPartial = ""
+    private var splitter: StreamingCaptionSplitter
     /// Total samples ingested so far (16 kHz). Doubles as the absolute-ms cursor
     /// (`/ 16`) for the flush tail slice and an EOU-timestamp fallback. The
     /// integer `/ 16` truncates at most 15 samples (≤0.9 ms) off the tail end —
@@ -115,10 +118,12 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
     init(
         asr: any EouStreamingAsrManaging,
         channelLabel: String,
+        splitter: StreamingCaptionSplitter = StreamingCaptionSplitter(),
         onEvent: @escaping StreamingTranscriber.EventSink,
     ) {
         self.asr = asr
         self.channelLabel = channelLabel
+        self.splitter = splitter
         self.onEvent = onEvent
     }
 
@@ -167,6 +172,8 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         }
 
         await drainCollector()
+        // Callbacks fire only for new tokens, so silence must also advance the audio clock.
+        emit(splitter.update(runningTranscript, audioTime: audioTime), throughMs: ingestedSamples / Self.samplesPerMs)
     }
 
     /// Recording stopped — commit the trailing utterance via `finish()`
@@ -181,11 +188,10 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
 
         do {
             let transcript = try await asr.finish()
-            let delta = strippingPrefix(from: transcript)
-            if !delta.isEmpty {
-                let audio = ring.extract(fromMs: lastEouMs, toMs: ingestedSamples / Self.samplesPerMs)
-                onEvent(.finalized(text: delta, audio: audio))
-            }
+            emit(
+                splitter.update(strippingPrefix(from: transcript), audioTime: audioTime, finalize: true),
+                throughMs: ingestedSamples / Self.samplesPerMs,
+            )
         } catch {
             // Never throw out of flush — log and still reset below so the next
             // recording starts clean. Transcript text is never logged.
@@ -193,13 +199,17 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         }
 
         await asr.reset()
+        _ = collector.drain()
         resetSessionState()
     }
 
     private func resetSessionState() {
         ring = UtteranceRingBuffer()
-        lastEouMs = 0
+        audioCursorMs = 0
         lastFinalizedPrefix = ""
+        runningTranscript = ""
+        lastEmittedPartial = ""
+        splitter.reset()
         ingestedSamples = 0
     }
 
@@ -230,31 +240,42 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         }
     }
 
+    private var audioTime: TimeInterval {
+        Double(ingestedSamples) / 16000
+    }
+
     private func handlePartial(_ text: String) {
-        let delta = strippingPrefix(from: text)
-        if !delta.isEmpty {
-            onEvent(.partial(delta))
-        }
+        runningTranscript = strippingPrefix(from: text)
+        emit(splitter.update(runningTranscript, audioTime: audioTime), throughMs: ingestedSamples / Self.samplesPerMs)
     }
 
     private func handleEou(_ text: String) async {
-        let delta = strippingPrefix(from: text)
-        // The manager appends EOU timestamps as it confirms them; the last one is
-        // this utterance's end. Fall back to the ingested-ms cursor if absent.
-        // The vendored manager appends the EOU timestamp and fires the EOU
-        // callback within the same chunk block, so this `text` and `.last`
-        // timestamp are produced atomically per chunk — the coupling the
-        // fallback relies on (a missing timestamp means this chunk produced no
-        // confirmed EOU time, so the ingested-ms cursor is the right end).
         let eouMs = await asr.getEouTimestampsMs().last ?? (ingestedSamples / Self.samplesPerMs)
-        let audio = ring.extract(fromMs: lastEouMs, toMs: eouMs)
-        if !delta.isEmpty {
-            onEvent(.finalized(text: delta, audio: audio))
-        }
-        // Advance the prefix + slice cursor even when the delta is empty, so a
-        // later utterance strips the right prefix and slices from the right point.
+        emit(
+            splitter.update(strippingPrefix(from: text), audioTime: audioTime, finalize: true),
+            throughMs: eouMs,
+        )
+        // EOU text is still cumulative in FluidAudio; rebase the text-only offset here.
         lastFinalizedPrefix = text
-        lastEouMs = eouMs
+        audioCursorMs = max(audioCursorMs, eouMs)
+        runningTranscript = ""
+        lastEmittedPartial = ""
+        splitter.reset()
+    }
+
+    private func emit(_ update: StreamingCaptionSplitter.Update, throughMs: Int) {
+        for text in update.finals {
+            // Text-only boundaries lack word timestamps. Use unassigned audio once;
+            // additional lines in the same callback have no separate speaker sample.
+            let audio = ring.extract(fromMs: audioCursorMs, toMs: throughMs)
+            audioCursorMs = max(audioCursorMs, throughMs)
+            onEvent(.finalized(text: text, audio: audio))
+            lastEmittedPartial = ""
+        }
+        if !update.hypothesis.isEmpty, update.hypothesis != lastEmittedPartial {
+            lastEmittedPartial = update.hypothesis
+            onEvent(.partial(update.hypothesis))
+        }
     }
 
     /// Strips `lastFinalizedPrefix` from the front of `text` (the manager's

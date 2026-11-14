@@ -58,6 +58,9 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
         private var autoEouStepMs = 0
         private var autoEouCallCount = 0
 
+        /// Callbacks `finish()` fires while it decodes the tail.
+        private var finishCallbacks: [ScriptedCallback] = []
+
         private var partialCallback: (@Sendable (String) -> Void)?
         private var eouCallback: (@Sendable (String) -> Void)?
 
@@ -72,6 +75,10 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
 
         func setFinishReturn(_ value: String) {
             finishReturn = value
+        }
+
+        func setFinishCallbacks(_ callbacks: [ScriptedCallback]) {
+            finishCallbacks = callbacks
         }
 
         func setLoadModelsError(_ error: any Error) {
@@ -128,6 +135,12 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
 
         func finish() -> String {
             finishCount += 1
+            for callback in finishCallbacks {
+                switch callback {
+                case let .partial(text): partialCallback?(text)
+                case let .eou(text): eouCallback?(text)
+                }
+            }
             return finishReturn
         }
 
@@ -460,6 +473,92 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
             let expected = (k * segment ..< (k + 1) * segment).map { Float($0) }
             XCTAssertEqual(final.audio, expected, "the k-th EOU must slice exactly the k-th ring block")
         }
+    }
+
+    func testContinuousSpeechSplitsAndRealEouDoesNotRepeatCommittedWords() async {
+        let asr = MockEouStreamingAsrManaging()
+        let recorder = EventRecorder()
+        let session = makeSession(asr: asr, recorder: recorder)
+        let words = (1 ... 30).map { "word\($0)" }
+        await asr.enqueueBatch([.partial(words.joined(separator: " "))])
+        await session.ingest(rampBuffer(base: 0, count: 16000))
+        XCTAssertEqual(recorder.finals.map(\.text), [words[0 ..< 14].joined(separator: " "), words[14 ..< 28].joined(separator: " ")])
+        XCTAssertEqual(recorder.partials.last?.text, "word29 word30")
+        XCTAssertEqual(recorder.finals.map(\.audio.count), [16000, 0], "two lines from one update share one audio slice")
+        let resets = await asr.resetCount
+        let finishes = await asr.finishCount
+        XCTAssertEqual(resets, 0)
+        XCTAssertEqual(finishes, 0)
+
+        await asr.setEouTimestampsMs([1100])
+        await asr.enqueueBatch([.eou(words.joined(separator: " "))])
+        await session.ingest(rampBuffer(base: 16000, count: 1600))
+        await asr.setFinishReturn(words.joined(separator: " ") + " next utterance")
+        await session.flush()
+        XCTAssertEqual(recorder.finals.map(\.text).joined(separator: " "), words.joined(separator: " ") + " next utterance")
+    }
+
+    func testPauseFinalizesWithoutAnotherCallbackAndContinuationIsOnlyNewText() async {
+        let asr = MockEouStreamingAsrManaging()
+        let recorder = EventRecorder()
+        let session = makeSession(asr: asr, recorder: recorder)
+        await asr.enqueueBatch([.partial("a short phrase")])
+        await session.ingest(rampBuffer(base: 0, count: 1600))
+        await session.ingest(rampBuffer(base: 1600, count: 12800))
+        XCTAssertEqual(recorder.finals.map(\.text), ["a short phrase"])
+        await asr.enqueueBatch([.partial("a short phrase continues")])
+        await session.ingest(rampBuffer(base: 14400, count: 1600))
+        XCTAssertEqual(recorder.partials.last?.text, "continues")
+        await asr.setFinishReturn("a short phrase continues")
+        await session.flush()
+        XCTAssertEqual(recorder.finals.map(\.text), ["a short phrase", "continues"])
+    }
+
+    func testEouStampedBeforeTheLastSplitDoesNotRewindTheAudioCursor() async {
+        let asr = MockEouStreamingAsrManaging()
+        let recorder = EventRecorder()
+        let session = makeSession(asr: asr, recorder: recorder)
+        let transcript = (1 ... 15).map { "word\($0)" }.joined(separator: " ")
+        await asr.enqueueBatch([.partial(transcript)])
+        await session.ingest(rampBuffer(base: 0, count: 16000))
+
+        // The split took the audio up to 1000 ms; the EOU is stamped before it.
+        await asr.setEouTimestampsMs([900])
+        await asr.enqueueBatch([.eou(transcript)])
+        await session.ingest(rampBuffer(base: 16000, count: 1600))
+        await asr.setFinishReturn(transcript + " tail")
+        await session.flush()
+
+        XCTAssertEqual(recorder.finals.map(\.text).last, "tail")
+        XCTAssertEqual(recorder.finals.map(\.audio.count), [16000, 0, 1600])
+        XCTAssertEqual(recorder.finals.last?.audio.first, 16000, "the tail starts where the split stopped, not at the EOU")
+    }
+
+    func testHypothesisEqualToTheLineJustFinalizedIsShownAgain() async {
+        let asr = MockEouStreamingAsrManaging()
+        let recorder = EventRecorder()
+        let session = makeSession(asr: asr, recorder: recorder)
+        await asr.enqueueBatch([.partial("hello")])
+        await session.ingest(rampBuffer(base: 0, count: 1600))
+        await session.ingest(rampBuffer(base: 1600, count: 12800))
+        XCTAssertEqual(recorder.finals.map(\.text), ["hello"])
+
+        await asr.enqueueBatch([.partial("hello hello")])
+        await session.ingest(rampBuffer(base: 14400, count: 1600))
+        XCTAssertEqual(recorder.partials.map(\.text), ["hello", "hello"])
+    }
+
+    func testCallbackFiredByFinishDoesNotReachTheNextRecording() async {
+        let asr = MockEouStreamingAsrManaging()
+        let recorder = EventRecorder()
+        let session = makeSession(asr: asr, recorder: recorder)
+        await session.ingest(rampBuffer(base: 0, count: 1600))
+        await asr.setFinishCallbacks([.partial("stale tail")])
+        await session.flush()
+        await asr.setFinishCallbacks([])
+
+        await session.ingest(rampBuffer(base: 0, count: 1600))
+        XCTAssertTrue(recorder.partials.isEmpty, "got: \(recorder.partials.map(\.text))")
     }
 
     private static let samplesPerMs = 16

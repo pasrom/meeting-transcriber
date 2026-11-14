@@ -125,6 +125,51 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertEqual(state.recentFinals.map(\.speaker), ["Me", "Remote"])
     }
 
+    func testLateSpeakerMatchUpdatesOnlyItsRetainedFinal() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        let first = state.applyFinalized("first", channel: .app)
+        let second = state.applyFinalized("second", channel: .app)
+        state.applyPartial("newest words", channel: .app)
+
+        state.updateSpeaker("Bob", forFinal: second)
+        state.updateSpeaker("Alice", forFinal: first)
+
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Alice", "Bob"])
+        XCTAssertEqual(state.recentFinals.map(\.text), ["first", "second"])
+        XCTAssertEqual(state.hypothesisApp, "newest words")
+    }
+
+    func testSpeakerMatchCannotRelabelEvictedOrClearedFinal() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        let evicted = state.applyFinalized("same words", channel: .app)
+        state.applyFinalized("middle", channel: .app)
+        let cleared = state.applyFinalized("same words", channel: .app)
+        state.updateSpeaker("old speaker", forFinal: evicted)
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Remote", "Remote"])
+
+        state.clear()
+        let fresh = state.applyFinalized("same words", channel: .app)
+        state.updateSpeaker("old speaker", forFinal: cleared)
+        state.updateSpeaker("fresh speaker", forFinal: fresh)
+        XCTAssertEqual(state.recentFinals.first?.speaker, "fresh speaker")
+    }
+
+    func testSpeakerMatchDoesNotRestartReadingHoldOrFade() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        let token = state.applyFinalized("hello", channel: .app)
+        await clock.advance(by: .seconds(4))
+        await assertEventually { state.faded }
+        state.updateSpeaker("Alice", forFinal: token)
+        XCTAssertEqual(state.recentFinals.first?.speaker, "Alice")
+        XCTAssertTrue(state.faded)
+        await clock.advance(by: .seconds(2))
+        await assertEventually { !state.hasContent }
+    }
+
     // MARK: - Silence deadlines
 
     func testFinalReadingHoldHasFourSecondFloor() async {

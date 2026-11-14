@@ -443,8 +443,8 @@ final class LiveTranscriptionController {
     }
 
     /// Shared partial/final sink for both pipeline strategies: applies the
-    /// partial as ghost text, resolves the speaker via the live matcher on each
-    /// final, and routes both into `LiveCaptionsState`. Caption text is gated +
+    /// partial as ghost text and each final immediately, then resolves its speaker
+    /// without delaying newer text. Caption text is gated +
     /// `.private` so spoken content never lands in the unified log by default.
     ///
     /// Log prefix uses the raw channel id, not the user-visible speaker label:
@@ -473,9 +473,10 @@ final class LiveTranscriptionController {
                     if self.verboseDiagnostics() {
                         logger.info("[\(logChannel, privacy: .public)] final: \(text, privacy: .private)")
                     }
-                    let matched = await self.speakerMatcher.match(audio: audio)
-                    let speaker = matched ?? self.captions.label(for: channel)
-                    self.captions.applyFinalized(text, channel: channel, speaker: speaker)
+                    let sequence = self.captions.applyFinalized(text, channel: channel)
+                    guard !audio.isEmpty,
+                          let speaker = await self.speakerMatcher.match(audio: audio) else { return }
+                    self.captions.updateSpeaker(speaker, forFinal: sequence)
                 }
             }
         }

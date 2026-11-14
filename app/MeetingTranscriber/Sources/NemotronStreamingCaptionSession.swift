@@ -9,8 +9,9 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Nemotro
 /// The slice of `StreamingNemotronMultilingualAsrManager` the caption session
 /// drives, behind a protocol so the session is unit-testable without loading
 /// the real CoreML models. `latestTranscript()` returns the manager's full
-/// running transcript since the previous call (nil if no new partial fired);
-/// the real implementation drains a callback FIFO, so the session reads it once
+/// settled running transcript since the previous call (nil if no new partial fired).
+/// FluidAudio's callback only extends prior text, including with blank rescue;
+/// the implementation drains a callback FIFO, so the session reads it once
 /// per chunk and caches the value for the partial + final reads.
 protocol NemotronStreamingAsrManaging: Actor {
     /// Bind to the shared models + language (real impl: `loadFromShared` + `setLanguage`).
@@ -74,6 +75,9 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
 
     private var inputAccumulator: [Float] = []
     private var speechSamples: [Float] = []
+    private var emittedAudioSamples = 0
+    // Nemotron decodes every ~2.24 s; unchanged text is not a pause signal here.
+    private var splitter = StreamingCaptionSplitter(pauseSeconds: .infinity)
     private var isSpeaking = false
     /// Cached in-progress partial for the current utterance. The manager's
     /// `latestTranscript()` drains its callback FIFO (nil when no new partial
@@ -184,40 +188,58 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
     }
 
     private func emitPartial() {
-        let text = runningTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, text != lastEmittedPartial else { return }
-        lastEmittedPartial = text
-        onEvent(.partial(text))
+        let update = splitter.update(runningTranscript, audioTime: speechSeconds)
+        emitFinals(update.finals)
+        guard !update.hypothesis.isEmpty, update.hypothesis != lastEmittedPartial else { return }
+        lastEmittedPartial = update.hypothesis
+        onEvent(.partial(update.hypothesis))
     }
 
     /// Finalize the current utterance: `finish()` force-decodes the buffered tail
     /// and returns the complete transcript, clearing the manager's token
-    /// accumulation while keeping encoder state (so the next utterance starts
-    /// fresh — no prefix bookkeeping). `finish()` runs even when the utterance is
-    /// dropped as sub-second noise, so its text can't leak into the next final.
-    /// Emits only when the utterance cleared the 1 s minimum and decoded to text.
+    /// accumulation while keeping encoder state. Text already committed at a
+    /// word boundary is stripped before resetting the splitter. `finish()` runs
+    /// even for sub-second noise, so its text cannot leak into the next final.
+    /// The 1 s gate uses the whole utterance, not just a split line's audio.
     private func commitFinal() async {
-        let audio = speechSamples
-        speechSamples = []
+        defer {
+            speechSamples = []
+            resetUtteranceState()
+        }
         let transcript: String
         do {
             transcript = try await manager.finish()
         } catch {
             logger.warning("[\(self.channelLabel, privacy: .public)] finish error: \(error.localizedDescription, privacy: .public)")
-            resetUtteranceState()
             return
         }
         // `finish()` decodes the padded tail and can push one last partial into
         // the manager's FIFO; drain + discard it so it can't surface as the next
         // utterance's first partial.
         _ = await manager.latestTranscript()
-        resetUtteranceState()
-        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard audio.count >= Self.minFinalSamples, !text.isEmpty else { return }
-        onEvent(.finalized(text: text, audio: audio))
+        guard speechSamples.count >= Self.minFinalSamples || emittedAudioSamples > 0 else { return }
+        emitFinals(splitter.update(transcript, audioTime: speechSeconds, finalize: true).finals)
+    }
+
+    private func emitFinals(_ texts: [String]) {
+        for text in texts {
+            // Text boundaries have no word timestamps; consume the available
+            // acoustic slice once, rather than reusing it for later lines.
+            let audio = Array(speechSamples.dropFirst(emittedAudioSamples))
+            emittedAudioSamples = speechSamples.count
+            onEvent(.finalized(text: text, audio: audio))
+            // The sink clears the shown hypothesis on a final; let the remainder show again.
+            lastEmittedPartial = ""
+        }
+    }
+
+    private var speechSeconds: TimeInterval {
+        Double(speechSamples.count) / 16000
     }
 
     private func resetUtteranceState() {
+        splitter.reset()
+        emittedAudioSamples = 0
         runningTranscript = ""
         lastEmittedPartial = ""
     }
