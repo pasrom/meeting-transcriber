@@ -14,7 +14,7 @@ extension PipelineQueue {
         let mapping: [String: String] // label → auto-matched name or label
         let speakingTimes: [String: TimeInterval]
         let embeddings: [String: [Float]]
-        let audioPath: URL? // 16kHz mix for playback
+        let audioPath: URL? // 16kHz mix; the sample's fallback (`sampleSources`)
         let segments: [Segment] // for extracting speaker snippets
         let participants: [String] // Teams participant names as suggestions
         let isDualSource: Bool
@@ -61,33 +61,43 @@ extension PipelineQueue {
             }
         }
 
-        /// The file and time span to play for `segment`: the speaker's own
-        /// track for an `R_` (app) or `M_` (microphone) label when the tracks
-        /// are known, else the mix. The mix carries both sides at once, and
-        /// mixing also lowers the microphone while the app track is loud
-        /// (`AudioMixer.suppressEcho`), so a local speaker's sample from it
-        /// was quiet and choppy and had the far end over it. An unprefixed
-        /// label (single-source, or a dual-source job whose one track failed)
-        /// has no track to choose, and a track file that is not there falls
-        /// back to the mix too.
-        func sampleSource(
-            for segment: Segment,
-            fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) },
-        ) -> (url: URL, start: TimeInterval, end: TimeInterval)? {
+        /// A file and the span of it that holds a speaker's sample.
+        struct SampleSource: Equatable, Sendable {
+            let url: URL
+            let start: TimeInterval
+            let end: TimeInterval
+        }
+
+        /// The files and spans to try for `segment`'s sample, best first: the
+        /// speaker's own track for an `R_` (app) or `M_` (microphone) label
+        /// when the tracks are known, then the mix. The mix carries both sides
+        /// at once, and mixing also lowers the microphone while the app track
+        /// is loud (`AudioMixer.suppressEcho`), so a local speaker's sample
+        /// from it was quiet and choppy and had the far end over it. An
+        /// unprefixed label (single-source, or a dual-source job whose one
+        /// track failed) has no track to choose. The mix stays in the list so
+        /// that a track file that is missing, unreadable or shorter than the
+        /// span still plays what it played before.
+        func sampleSources(for segment: Segment) -> [SampleSource] {
+            var sources: [SampleSource] = []
             if let tracks {
                 switch SpeakerKey(encoded: segment.speaker).track {
-                case .app where fileExists(tracks.app):
-                    return (tracks.app, segment.start, segment.end)
+                case .app:
+                    sources.append(SampleSource(url: tracks.app, start: segment.start, end: segment.end))
 
-                case .mic where fileExists(tracks.mic):
-                    return (tracks.mic, segment.start - tracks.micDelay, segment.end - tracks.micDelay)
+                case .mic:
+                    sources.append(SampleSource(
+                        url: tracks.mic, start: segment.start - tracks.micDelay, end: segment.end - tracks.micDelay,
+                    ))
 
-                default:
+                case .single:
                     break
                 }
             }
-            guard let audioPath else { return nil }
-            return (audioPath, segment.start, segment.end)
+            if let audioPath {
+                sources.append(SampleSource(url: audioPath, start: segment.start, end: segment.end))
+            }
+            return sources
         }
 
         struct Segment: Codable {

@@ -50,6 +50,13 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
 
     let gracePeriod: TimeInterval
 
+    /// Reads the WAV a play button plays from the files and spans to try, best
+    /// first. Replaced only by the tests that check which file and span a
+    /// button asks for; it runs off the main thread.
+    var sampleLoader: @Sendable ([PipelineQueue.SpeakerNamingData.SampleSource]) -> Data? = { sources in
+        Self.sampleWAVData(from: sources)
+    }
+
     init(
         data: PipelineQueue.SpeakerNamingData,
         knownSpeakerNames: [String] = [],
@@ -596,15 +603,14 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
 
         // Pick the longest pure segment to avoid cross-voice contamination,
         // and play it from the speaker's own track where there is one.
-        guard let chosen = Self.selectSampleSegment(for: label, in: data.segments),
-              let source = data.sampleSource(for: chosen) else { return }
+        guard let chosen = Self.selectSampleSegment(for: label, in: data.segments) else { return }
+        let sources = data.sampleSources(for: chosen)
+        let loadSample = sampleLoader
 
         // Perform file I/O off the main thread
-        Task.detached { [source] in
+        Task.detached { [sources, loadSample] in
             do {
-                guard let snippet = try Self.snippetWAVData(
-                    audioPath: source.url, start: source.start, end: source.end,
-                ) else { return }
+                guard let snippet = loadSample(sources) else { return }
 
                 let newPlayer = try AVAudioPlayer(data: snippet)
                 let duration = newPlayer.duration

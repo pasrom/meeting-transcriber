@@ -6,10 +6,10 @@ extension SpeakerNamingView {
     /// The samples of `start..<end` seconds of `audioPath`, or nil when that
     /// span holds no audio.
     ///
-    /// Reads only the span's frames. The file is the meeting's 16 kHz mix, so
-    /// decoding all of it to cut a few seconds cost about 230 MB of samples per
-    /// click for an hour-long meeting. Takes the first channel; the mix is
-    /// mono.
+    /// Reads only the span's frames. The file is one of the meeting's 16 kHz
+    /// recordings (the mix, or the speaker's own track), so decoding all of it
+    /// to cut a few seconds cost about 230 MB of samples per click for an
+    /// hour-long meeting. Takes the first channel; the recordings are mono.
     nonisolated static func snippetSamples(
         audioPath: URL, start: TimeInterval, end: TimeInterval,
     ) throws -> (samples: [Float], sampleRate: Int)? {
@@ -42,5 +42,23 @@ extension SpeakerNamingView {
         defer { try? FileManager.default.removeItem(at: wav) }
         try AudioMixer.saveWAV(samples: samples, sampleRate: rate, url: wav)
         return try Data(contentsOf: wav)
+    }
+
+    /// The sample of the first of `sources` that has audio for its span, as a
+    /// playable WAV, or nil when none has. A speaker's own track that is
+    /// missing, cannot be read or ends before the span gives way to the next
+    /// source, the mix, so the button plays what it played before the tracks.
+    nonisolated static func sampleWAVData(
+        from sources: [PipelineQueue.SpeakerNamingData.SampleSource],
+        scratchDir: URL = FileManager.default.temporaryDirectory,
+    ) -> Data? {
+        for source in sources {
+            if let wav = try? snippetWAVData(
+                audioPath: source.url, start: source.start, end: source.end, scratchDir: scratchDir,
+            ) {
+                return wav
+            }
+        }
+        return nil
     }
 }

@@ -25,52 +25,49 @@ final class SpeakerSampleTrackTests: XCTestCase {
         .init(start: 10, end: 14, speaker: speaker)
     }
 
-    private let allExist: (URL) -> Bool = { _ in true }
+    private typealias Source = NamingData.SampleSource
 
-    func testRemoteSpeakerPlaysFromTheAppTrackAtTheSameTime() throws {
+    func testRemoteSpeakerPlaysFromTheAppTrackAtTheSameTimeThenTheMix() {
         let tracks = NamingData.TrackAudio(app: app, mic: mic, micDelay: 0.25)
-        let source = try XCTUnwrap(data(tracks: tracks).sampleSource(for: segment("R_SPEAKER_0"), fileExists: allExist))
-        XCTAssertEqual(source.url, app)
-        XCTAssertEqual(source.start, 10)
-        XCTAssertEqual(source.end, 14)
+        XCTAssertEqual(
+            data(tracks: tracks).sampleSources(for: segment("R_SPEAKER_0")),
+            [Source(url: app, start: 10, end: 14), Source(url: mix, start: 10, end: 14)],
+        )
     }
 
-    /// The pipeline shifts the microphone's segments by `+micDelay` onto the
-    /// app timeline, so the microphone file holds the same speech `micDelay`
-    /// earlier.
-    func testLocalSpeakerPlaysFromTheMicTrackShiftedBackByTheMicDelay() throws {
-        let tracks = NamingData.TrackAudio(app: app, mic: mic, micDelay: 0.25)
-        let source = try XCTUnwrap(data(tracks: tracks).sampleSource(for: segment("M_SPEAKER_1"), fileExists: allExist))
-        XCTAssertEqual(source.url, mic)
-        XCTAssertEqual(source.start, 9.75, accuracy: 1e-9)
-        XCTAssertEqual(source.end, 13.75, accuracy: 1e-9)
+    /// The pipeline moves the microphone's diarization onto the app timeline
+    /// with `DiarizationProcess.shiftSegments(_:by: micDelay)`, so a
+    /// microphone sample is cut where the diarizer found the speech in the
+    /// microphone file. The mix, the fallback, keeps the shifted time.
+    func testLocalSpeakerPlaysFromTheMicTrackWhereTheDiarizerFoundThem() throws {
+        let raw = DiarizationResult(
+            segments: [.init(start: 9.75, end: 13.75, speaker: "SPEAKER_1")],
+            speakingTimes: [:], autoNames: [:], embeddings: nil,
+        )
+        for micDelay in [0.25, -0.4, 100] {
+            let shifted = try XCTUnwrap(DiarizationProcess.shiftSegments(raw, by: micDelay).segments.first)
+            let tracks = NamingData.TrackAudio(app: app, mic: mic, micDelay: micDelay)
+            let sources = data(tracks: tracks).sampleSources(
+                for: .init(start: shifted.start, end: shifted.end, speaker: "M_SPEAKER_1"),
+            )
 
-        let negative = NamingData.TrackAudio(app: app, mic: mic, micDelay: -0.4)
-        let shifted = try XCTUnwrap(data(tracks: negative).sampleSource(for: segment("M_SPEAKER_1"), fileExists: allExist))
-        XCTAssertEqual(shifted.start, 10.4, accuracy: 1e-9)
+            XCTAssertEqual(sources.count, 2, "micDelay \(micDelay)")
+            XCTAssertEqual(sources.first?.url, mic, "micDelay \(micDelay)")
+            XCTAssertEqual(try XCTUnwrap(sources.first).start, 9.75, accuracy: 1e-9, "micDelay \(micDelay)")
+            XCTAssertEqual(try XCTUnwrap(sources.first).end, 13.75, accuracy: 1e-9, "micDelay \(micDelay)")
+            XCTAssertEqual(sources.last, Source(url: mix, start: shifted.start, end: shifted.end))
+        }
     }
 
     /// One track failed and the other was diarized alone: the labels carry no
     /// prefix, so which track they came from is unknown.
-    func testUnprefixedLabelPlaysFromTheMix() throws {
+    func testUnprefixedLabelPlaysFromTheMix() {
         let tracks = NamingData.TrackAudio(app: app, mic: mic, micDelay: 0.25)
-        let source = try XCTUnwrap(data(tracks: tracks).sampleSource(for: segment("SPEAKER_0"), fileExists: allExist))
-        XCTAssertEqual(source.url, mix)
-        XCTAssertEqual(source.start, 10)
+        XCTAssertEqual(data(tracks: tracks).sampleSources(for: segment("SPEAKER_0")), [Source(url: mix, start: 10, end: 14)])
     }
 
-    func testWithoutTracksEverySpeakerPlaysFromTheMix() throws {
-        let source = try XCTUnwrap(data(tracks: nil).sampleSource(for: segment("M_SPEAKER_1"), fileExists: allExist))
-        XCTAssertEqual(source.url, mix)
-        XCTAssertEqual(source.start, 10)
-    }
-
-    func testAMissingTrackFileFallsBackToTheMix() throws {
-        let tracks = NamingData.TrackAudio(app: app, mic: mic, micDelay: 0.25)
-        let micPath = mic
-        let source = try XCTUnwrap(data(tracks: tracks).sampleSource(for: segment("M_SPEAKER_1")) { $0 != micPath })
-        XCTAssertEqual(source.url, mix)
-        XCTAssertEqual(source.start, 10)
+    func testWithoutTracksEverySpeakerPlaysFromTheMix() {
+        XCTAssertEqual(data(tracks: nil).sampleSources(for: segment("M_SPEAKER_1")), [Source(url: mix, start: 10, end: 14)])
     }
 
     // MARK: - Stored naming data
