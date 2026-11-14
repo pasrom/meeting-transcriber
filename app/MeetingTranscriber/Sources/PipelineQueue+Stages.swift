@@ -1110,6 +1110,7 @@ extension PipelineQueue {
             logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .public)")
             // Matched by /v1 clients and persisted jobs; keep the text stable.
             addWarning(id: jobID, "Protocol generation failed — transcript saved")
+            recordProtocolFailure(id: jobID, reason: error.localizedDescription)
             resolveNotionExport(jobID: jobID)
             return
         }

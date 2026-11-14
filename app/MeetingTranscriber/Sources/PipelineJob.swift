@@ -196,6 +196,11 @@ struct PipelineJob: Identifiable, Codable {
     var echo: EchoDetectionDTO?
     var transcriptPath: URL?
     var protocolPath: URL?
+    /// Why the meeting notes could not be generated, when they could not: the
+    /// provider's error message, which never carries meeting content (see the
+    /// catch in `PipelineQueue.generateProtocol`). Nil when they were generated,
+    /// were not asked for, or for snapshots written before this field existed.
+    var protocolFailure: String?
     /// The Notion page this job created, kept so a retry updates that page
     /// instead of creating a duplicate. Optional so snapshots written before
     /// this field existed still decode.

@@ -613,6 +613,17 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertFalse(h.queue.jobs.first?.warnings.isEmpty ?? true)
     }
 
+    /// The reason travels with the job, so the done notification can say why.
+    func testWorkflowProtocolGenerationFailureRecordsTheReason() async throws {
+        let (h, _) = try makeHarness()
+        h.protocolGen.shouldThrow = true
+
+        h.queue.enqueue(makeJob(audioPath: h.audioPath))
+        await h.queue.processNext()
+
+        XCTAssertEqual(h.queue.jobs.first?.protocolFailure, "Mock protocol error")
+    }
+
     func testWorkflowProtocolFailureRetainsRawOutputWhenDisabled() async throws {
         let (h, _) = try makeHarness(saveRawTranscriptSeparately: false)
         h.protocolGen.shouldThrow = true
