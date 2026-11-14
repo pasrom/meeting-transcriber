@@ -613,7 +613,7 @@
             let id = UUID()
             let dto = NamingStatusDTO(
                 jobID: id.uuidString, meetingTitle: "Q3 Sync",
-                speakers: [.init(label: "Speaker 1", suggested: "Roman", speakingSeconds: 42)],
+                speakers: [.init(label: "Speaker 1", suggested: "Speaker A", speakingSeconds: 42)],
                 participants: ["Alice"],
             )
             let lookup: (UUID) -> NamingStatusDTO? = { $0 == id ? dto : nil }
@@ -627,7 +627,7 @@
             XCTAssertEqual(decoded.meetingTitle, "Q3 Sync")
             XCTAssertEqual(decoded.participants, ["Alice"])
             XCTAssertEqual(decoded.speakers.first?.label, "Speaker 1")
-            XCTAssertEqual(decoded.speakers.first?.suggested, "Roman")
+            XCTAssertEqual(decoded.speakers.first?.suggested, "Speaker A")
             XCTAssertEqual(decoded.speakers.first?.speakingSeconds, 42)
         }
 
@@ -655,7 +655,7 @@
             let base = try await startServer(confirmNaming: confirm)
 
             var req = request("POST", base.appendingPathComponent("v1/jobs/\(id.uuidString)/naming"), headers: authHeader)
-            req.httpBody = Data(#"{"mapping":{"Speaker 1":"Roman"}}"#.utf8)
+            req.httpBody = Data(#"{"mapping":{"Speaker 1":"Speaker A"}}"#.utf8)
             let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
 
@@ -665,7 +665,7 @@
                 if !received.isEmpty { break }
                 try await Task.sleep(for: .milliseconds(25))
             }
-            XCTAssertEqual(received, ["Speaker 1": "Roman"])
+            XCTAssertEqual(received, ["Speaker 1": "Speaker A"])
         }
 
         func testV1ConfirmNamingUnknownReturns404() async throws {

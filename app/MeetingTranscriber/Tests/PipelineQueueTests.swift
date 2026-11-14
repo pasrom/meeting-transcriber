@@ -4091,7 +4091,7 @@ final class PipelineQueueTests: XCTestCase {
         let protocolsDir = tmpDir.appendingPathComponent("protocols")
         try FileManager.default.createDirectory(at: protocolsDir, withIntermediateDirectories: true)
         let transcriptPath = protocolsDir.appendingPathComponent("dualsource_transcript.txt")
-        let originalTranscript = "[00:00] Roman Passler: Morgen.\n[00:30] R_S2: Hallo\n[00:42] R_S3: Hi\n[09:55] M_S0: Da kenne ich mich nicht aus."
+        let originalTranscript = "[00:00] Speaker A: Morgen.\n[00:30] R_S2: Hallo\n[00:42] R_S3: Hi\n[09:55] M_S0: Da kenne ich mich nicht aus."
         try originalTranscript.write(to: transcriptPath, atomically: true, encoding: .utf8)
 
         let queue = PipelineQueue(logDir: tmpDir)
@@ -4108,7 +4108,7 @@ final class PipelineQueueTests: XCTestCase {
         let namingData = PipelineQueue.SpeakerNamingData(
             jobID: job.id,
             meetingTitle: "Dual Source Test",
-            mapping: ["R_S2": "R_S2", "R_S3": "R_S3", "M_S0": "Roman Passler"],
+            mapping: ["R_S2": "R_S2", "R_S3": "R_S3", "M_S0": "Speaker A"],
             speakingTimes: ["R_S2": 5, "R_S3": 5, "M_S0": 5],
             embeddings: ["R_S2": [1, 0], "R_S3": [0, 1], "M_S0": [0, 0]],
             audioPath: nil,
@@ -4135,7 +4135,7 @@ final class PipelineQueueTests: XCTestCase {
         let rewritten = try String(contentsOf: transcriptPath, encoding: .utf8)
         XCTAssertTrue(rewritten.contains("] Lennart: Hallo"), "R_S2 should be renamed to Lennart")
         XCTAssertTrue(rewritten.contains("] Diana: Hi"), "R_S3 should be renamed to Diana")
-        XCTAssertTrue(rewritten.contains("] Roman Passler: Morgen."), "Already-named speaker should be untouched")
+        XCTAssertTrue(rewritten.contains("] Speaker A: Morgen."), "Already-named speaker should be untouched")
         XCTAssertFalse(rewritten.contains("R_S2:"), "R_S2 label should be gone")
         XCTAssertFalse(rewritten.contains("R_S3:"), "R_S3 label should be gone")
     }

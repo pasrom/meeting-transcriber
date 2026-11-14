@@ -464,7 +464,7 @@ final class PipelineControllerTests: XCTestCase {
         let pc = makeWiredController()
         let id = seedPendingNaming(
             on: pc,
-            mapping: ["Speaker 1": "Roman", "Speaker 2": "Speaker 2"],
+            mapping: ["Speaker 1": "Speaker A", "Speaker 2": "Speaker 2"],
             speakingTimes: ["Speaker 1": 42, "Speaker 2": 7],
             participants: ["Alice"],
         )
@@ -474,7 +474,7 @@ final class PipelineControllerTests: XCTestCase {
         XCTAssertEqual(dto?.meetingTitle, "Q3 Sync")
         XCTAssertEqual(dto?.participants, ["Alice"])
         XCTAssertEqual(dto?.speakers.map(\.label), ["Speaker 1", "Speaker 2"], "speakers sorted by label")
-        XCTAssertEqual(dto?.speakers.first?.suggested, "Roman")
+        XCTAssertEqual(dto?.speakers.first?.suggested, "Speaker A")
         XCTAssertEqual(dto?.speakers.first?.speakingSeconds, 42)
     }
 
@@ -486,7 +486,7 @@ final class PipelineControllerTests: XCTestCase {
         let pc = makeWiredController()
         let id = seedPendingNaming(on: pc, mapping: ["Speaker 1": "Speaker 1"])
 
-        XCTAssertTrue(pc.confirmNaming(jobID: id, mapping: ["Speaker 1": "Roman"]))
+        XCTAssertTrue(pc.confirmNaming(jobID: id, mapping: ["Speaker 1": "Speaker A"]))
         XCTAssertFalse(pc.confirmNaming(jobID: UUID(), mapping: [:]), "no pending naming → false")
     }
 
@@ -494,10 +494,10 @@ final class PipelineControllerTests: XCTestCase {
         let pc = makeWiredController()
         let id = seedPendingNaming(on: pc, mapping: ["Speaker 1": "Speaker 1"])
 
-        XCTAssertTrue(pc.confirmNaming(jobID: id, mapping: ["Speaker 1": "Roman"]))
+        XCTAssertTrue(pc.confirmNaming(jobID: id, mapping: ["Speaker 1": "Speaker A"]))
         // Confirming transitions the job out of .speakerNamingPending, so a
         // duplicate call (automation retry) is rejected — no double-processing.
-        XCTAssertFalse(pc.confirmNaming(jobID: id, mapping: ["Speaker 1": "Roman"]), "retry rejected")
+        XCTAssertFalse(pc.confirmNaming(jobID: id, mapping: ["Speaker 1": "Speaker A"]), "retry rejected")
     }
 
     func testSkipNamingResolvesPendingJobAndRejectsUnknown() {
