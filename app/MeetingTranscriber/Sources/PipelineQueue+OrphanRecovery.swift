@@ -30,7 +30,7 @@ extension PipelineQueue {
     func scanForOrphanedRecordings(
         recordingsDir: URL,
         maxAge: TimeInterval = 86400,
-    ) async -> [PairedRecordingResolver.Group] {
+    ) async -> [MicMuteLog.RecoveryCandidate] {
         // One-time migration: seed processed list with existing recordings
         // Only for the default recordings directory (not test overrides)
         if recordingsDir == AppPaths.recordingsDir {
@@ -53,7 +53,7 @@ extension PipelineQueue {
             ) else { return [] }
             let processedPaths = ledger.load()
             let now = Date()
-            return PairedRecordingResolver.resolve(urls: entries).paired.filter { group in
+            let recoverable = PairedRecordingResolver.resolve(urls: entries).paired.filter { group in
                 // Groups without a real mix file (app+mic-only paired imports)
                 // aren't recoverable from the dir scan alone.
                 guard let mixURL = group.mix else { return false }
@@ -71,6 +71,7 @@ extension PipelineQueue {
                 }
                 return true
             }
+            return MicMuteLog.forRecovery(recoverable, among: entries, in: recordingsDir)
         }.value
     }
 
@@ -81,7 +82,7 @@ extension PipelineQueue {
     }
 
     /// Give each scanned orphan a job of its own.
-    func adoptOrphanedRecordings(_ scanned: [PairedRecordingResolver.Group]) {
+    func adoptOrphanedRecordings(_ scanned: [MicMuteLog.RecoveryCandidate]) {
         // Asked again, because the scan was out on another task: a recording
         // the watch loop enqueued, or another queue started, meanwhile was in
         // neither set the scan checked, and a second job for it would end in
@@ -89,8 +90,8 @@ extension PipelineQueue {
         // is in the ledger. The ledger read is on the main actor, so it is
         // skipped when the scan found nothing, the usual answer.
         let accountedFor = scanned.isEmpty ? [] : accountedForMixPaths().union(processedLedger.load())
-        let candidates = scanned.filter { group in
-            group.mix.map { !accountedFor.contains($0.standardizedFileURL.path) } ?? false
+        let candidates = scanned.filter { candidate in
+            candidate.group.mix.map { !accountedFor.contains($0.standardizedFileURL.path) } ?? false
         }
 
         // Left in staging for the active queue's next recovery: the one its
@@ -99,16 +100,15 @@ extension PipelineQueue {
         // one on a queue nobody sees, and a second time on the active one.
         guard !candidates.isEmpty, !isRetired else { return }
 
-        for group in candidates {
+        for (group, micMuted) in candidates {
             guard let mixURL = group.mix else { continue }
             var job = PipelineJob(
                 meetingTitle: "Recovered Recording (\(group.stem))",
                 appName: "Unknown",
-                mixPath: mixURL,
-                appPath: group.app,
-                micPath: group.mic,
-                micDelay: 0,
+                mixPath: mixURL, appPath: group.app, micPath: group.mic,
+                micDelay: 0, micMuteIntervals: micMuted,
             )
+            MicMuteLog.remove(stem: group.stem, in: mixURL.deletingLastPathComponent())
             stampTranscriptOutputOptions(on: &job)
             jobs.append(job)
             eventLog.append(jobID: job.id, event: "recovered", from: nil, to: .waiting)

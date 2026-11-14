@@ -228,6 +228,28 @@ final class MicCaptureRevivalTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(frames, (gap - 1) * speechSampleRate, "written with no revived buffer yet")
     }
 
+    /// The bridge is part of the track, so a mute open across it ends where it is
+    /// lifted after the bridge, or at the end of the track, not at the last
+    /// captured buffer before the stall.
+    func testAMuteOpenAcrossTheBridgeRunsToTheEndOfTheTrack() throws {
+        let handler = try harness.makeHandler()
+        let url = try XCTUnwrap(harness.url)
+        try XCTUnwrap(harness.sessions.first).deliver(hostTime: harness.hostTime(secondsAgo: 60))
+        handler.setMuted(true)
+        harness.clock.advance(by: 120) { settle(handler) }
+
+        handler.handleDeviceChange()
+        settle(handler)
+        XCTAssertGreaterThan(try XCTUnwrap(handler.muteIntervals.last).end, 50, "the open mute already spans the bridge")
+        handler.setMuted(false)
+        XCTAssertGreaterThan(try XCTUnwrap(handler.muteIntervals.last).end, 50, "lifted before the next buffer")
+        handler.stop()
+
+        let seconds = try Double(AVAudioFile(forReading: url).length) / speechSampleRate
+        XCTAssertGreaterThan(seconds, 50, "the bridge was written")
+        XCTAssertEqual(try XCTUnwrap(handler.muteIntervals.last).end, seconds, accuracy: 0.001)
+    }
+
     /// A stop while the revival's attempt is writing a chunk of the bridge
     /// returns only once that chunk is in the file and the file is closed:
     /// the recorder opens the microphone track the moment `stop()` returns

@@ -53,6 +53,7 @@ extension XCTestCase {
         makeDetector: @escaping () -> any MeetingDetecting = { makeSilentDetector() },
         makeRecorder: @escaping @MainActor () -> any RecordingProvider = { makeMockRecorder() },
         captionFlushOverride: (@MainActor () -> Void)? = nil,
+        micMuteHotkeyRegistrar: any HotkeyRegistering = GlobalHotkeyRegistrar(),
     ) -> WatchingController {
         // Own defaults suite, like `makeRPCTestState`: `AppSettings()` on
         // `.standard` writes into the test host's real preferences, and
@@ -118,6 +119,7 @@ extension XCTestCase {
             makeDetector: makeDetector,
             makeRecorder: makeRecorder,
             captionFlushOverride: captionFlushOverride,
+            micMuteHotkeyRegistrar: micMuteHotkeyRegistrar,
         )
     }
 }

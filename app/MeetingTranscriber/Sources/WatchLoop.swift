@@ -27,7 +27,19 @@ class WatchLoop {
     /// `appLevelDBFS` / `micLevelDBFS` here at ~10 Hz to drive the asymmetric-silence
     /// indicator. Setter stays private so the recording lifecycle flows through
     /// this class only.
-    private(set) var activeRecorder: (any RecordingProvider)?
+    private(set) var activeRecorder: (any RecordingProvider)? {
+        didSet {
+            isMicMuted = activeRecorder?.isMicMuted ?? false
+            canMuteMic = activeRecorder?.canMuteMic ?? false
+            onMicMuteAvailabilityChange?()
+        }
+    }
+
+    /// Mirrors of the recorder's state, which is not observable, reset by the `didSet`.
+    var isMicMuted = false
+    private(set) var canMuteMic = false
+    var onMicMuteAvailabilityChange: (() -> Void)?
+
     private var manualRecordingTask: Task<Void, Never>?
 
     var isManualRecording: Bool {
@@ -529,6 +541,7 @@ class WatchLoop {
             appPath: recording.appPath,
             micPath: recording.micPath,
             micDelay: recording.micDelay,
+            micMuteIntervals: recording.micMuteIntervals,
             participants: participants,
             meetingStartTime: recording.recordingStartDate,
         )
@@ -564,25 +577,6 @@ class WatchLoop {
         if oldPhase == .recording, next.phase != .recording { recordingSource = nil }
         if oldPhase != next.phase {
             onStateChange?(oldPhase, next.phase, cause)
-        }
-    }
-
-    /// Strip app suffixes from meeting titles for cleaner display.
-    static func cleanTitle(_ title: String) -> String {
-        let suffixes = [" | Microsoft Teams", " - Zoom", " - Webex"]
-        for suffix in suffixes where title.hasSuffix(suffix) {
-            return String(title.dropLast(suffix.count))
-        }
-        return title
-    }
-
-    /// Map WatchLoop state to TranscriberState for compatibility with existing UI.
-    var transcriberState: TranscriberState {
-        switch state {
-        case .idle: .idle
-        case .watching: .watching
-        case .recording: .recording
-        case .error: .error
         }
     }
 }

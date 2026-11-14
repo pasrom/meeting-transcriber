@@ -61,6 +61,12 @@ protocol RecordingProvider {
     /// that does not simulate capture never looks broken.
     var appSignalAges: ChannelSignalAges { get }
     var micSignalAges: ChannelSignalAges { get }
+
+    /// Whether this recording has an open microphone that can be muted. Default
+    /// false, so a double that does not simulate mute offers no control.
+    var canMuteMic: Bool { get }
+    var isMicMuted: Bool { get }
+    func setMicMuted(_ muted: Bool)
 }
 
 extension ChannelSignalAges {
@@ -118,4 +124,14 @@ extension RecordingProvider {
     var micSignalAges: ChannelSignalAges {
         .deliveringSignalNow
     }
+
+    var canMuteMic: Bool {
+        false
+    }
+
+    var isMicMuted: Bool {
+        false
+    }
+
+    func setMicMuted(_: Bool) {}
 }

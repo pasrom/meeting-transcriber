@@ -1,3 +1,4 @@
+import AudioTapLib
 import Foundation
 
 /// Metadata sidecar written next to dual-source recordings when record-only
@@ -11,8 +12,8 @@ struct RecordingSidecar: Codable {
 
     /// Schema version stamped into every new sidecar. Bump when fields are
     /// added/removed/repurposed so downstream consumers can branch on it.
-    /// 2 added `trigger`.
-    static let currentVersion = 2
+    /// 2 added `trigger`. 3 added `micMuteIntervals`.
+    static let currentVersion = 3
 
     /// How the recording was started. Consumers apply different policies to
     /// the two: a very short auto capture is usually a false trigger worth
@@ -33,6 +34,8 @@ struct RecordingSidecar: Codable {
     let stoppedAt: Date
     let participants: [String]
     let micDelaySeconds: TimeInterval
+    /// Seconds of the mic track the user muted. Nil on sidecars before version 3.
+    let micMuteIntervals: [MicMuteInterval]? // swiftlint:disable:this discouraged_optional_collection
     let files: Files
 
     /// Raw storage so an unrecognised value decodes as `nil` instead of
@@ -56,7 +59,7 @@ struct RecordingSidecar: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case version, title, appName, startedAt, stoppedAt
-        case participants, micDelaySeconds, files
+        case participants, micDelaySeconds, micMuteIntervals, files
         case triggerRaw = "trigger"
     }
 
@@ -71,6 +74,7 @@ struct RecordingSidecar: Codable {
         mixFilename: String,
         appFilename: String?,
         micFilename: String?,
+        micMuteIntervals: [MicMuteInterval] = [],
     ) {
         self.version = Self.currentVersion
         self.title = title
@@ -79,8 +83,16 @@ struct RecordingSidecar: Codable {
         self.stoppedAt = stoppedAt
         self.participants = participants
         self.micDelaySeconds = micDelaySeconds
+        self.micMuteIntervals = micMuteIntervals
         self.triggerRaw = trigger.rawValue
         self.files = Files(mix: mixFilename, app: appFilename, mic: micFilename)
+    }
+
+    /// The mute times for a reimport of these tracks. They apply to a mic track
+    /// transcribed on its own: with the app track beside it, or in a recording
+    /// that never had one. Otherwise the mix is transcribed, which holds the far end.
+    func micMuteIntervals(app: URL?, mic: URL?) -> [MicMuteInterval] {
+        mic != nil && (app != nil || files.app == nil) ? micMuteIntervals ?? [] : []
     }
 
     /// Writes the sidecar as `<basename>\(filenameSuffix)` into `directory`.

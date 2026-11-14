@@ -23,6 +23,9 @@ enum A11yID {
     /// Stays off the `/ui/press` allowlist: a live press would add a real login item.
     static let launchAtLoginToggle = "launchAtLoginToggle"
     static let launchAtLoginHint = "launchAtLoginHint"
+    static let startRecordingsMicMutedToggle = "startRecordingsMicMutedToggle"
+    static let micMuteHotkeyButton = "micMuteHotkeyButton"
+    static let micMuteHotkeyConflict = "micMuteHotkeyConflict"
     static let watchBrowserToggle = "watchBrowserToggle"
     static let watchSlackToggle = "watchSlackToggle"
     static let browserConsentWarning = "browserConsentWarning"
