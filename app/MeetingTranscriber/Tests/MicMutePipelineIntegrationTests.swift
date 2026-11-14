@@ -198,6 +198,24 @@ final class MicMutePipelineIntegrationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: log.path))
     }
 
+    /// A replaced queue takes on nothing its late scan finds, so the log has
+    /// to wait in staging with the recording for the active queue's recovery.
+    func testARetiredQueueLeavesTheMuteLogForTheNextRecovery() async throws {
+        let (recDir, log) = try stageMutedOrphan(stem: "20260311_150000")
+        let retired = PipelineQueue(logDir: tmpDir, inFlightRuns: InFlightRunRegistry())
+        retired.retire()
+
+        await retired.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertTrue(retired.jobs.isEmpty, "test premise: the retired queue adopted nothing")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: log.path))
+
+        let active = PipelineQueue(logDir: tmpDir, inFlightRuns: InFlightRunRegistry())
+        await active.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertEqual(active.jobs.first?.micMuteSpansOnTranscript, [MicMuteInterval(start: 0, end: 2)])
+    }
+
     func testMutedThroughoutSkipsTheMicWithoutAWarning() async throws {
         let engine = dualEngine()
         engine.throwingPathSuffixes = ["mic_16k.wav"]
