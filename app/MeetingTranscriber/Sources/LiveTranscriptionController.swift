@@ -533,7 +533,8 @@ final class LiveTranscriptionController {
     }
 
     /// 1 s at 16 kHz. The embedding extractor loops shorter audio up to its
-    /// window, so a short slice could put a wrong name on the line.
+    /// window, so a short slice could put a wrong name on the line; such a line
+    /// takes the speaker of the line before it instead (`inheritSpeaker`).
     static let minSpeakerMatchSamples = 16000
 
     /// Shared partial/final sink for both pipeline strategies: applies the
@@ -569,8 +570,11 @@ final class LiveTranscriptionController {
                         logger.info("[\(logChannel, privacy: .public)] final: \(text, privacy: .private)")
                     }
                     let sequence = self.captions.applyFinalized(text, channel: channel)
-                    guard audio.count >= Self.minSpeakerMatchSamples,
-                          let speaker = await self.speakerMatcher.match(audio: audio) else { return }
+                    guard audio.count >= Self.minSpeakerMatchSamples else {
+                        self.captions.inheritSpeaker(forFinal: sequence)
+                        return
+                    }
+                    guard let speaker = await self.speakerMatcher.match(audio: audio) else { return }
                     self.captions.updateSpeaker(speaker, forFinal: sequence)
                 }
             }
