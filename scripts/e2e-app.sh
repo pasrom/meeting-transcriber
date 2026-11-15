@@ -3252,6 +3252,11 @@ run_naming_escape() {
     [ "$probe_status" -eq 0 ] \
         || fail "$label: the System Events preflight failed for a reason that is not a missing grant (exit $probe_status): $probe"
     log "$label: frontmost process is '$probe'"
+    # After the grants, so a missing one is still named as such: both probes
+    # above answer normally on a locked screen, the Escape then does not land.
+    if host_skip_if_screen_locked naming-escape "the real-Escape assertion"; then
+        return 0
+    fi
 
     local fixture_copy
     _NE_FIXTURE_DIR="$(mktemp -d /tmp/e2e-naming-escape-fixture.XXXXXX)"
@@ -3275,6 +3280,12 @@ run_naming_escape() {
     poll_state 30 2 state_is "$_NAMING_WINDOW_VISIBLE" \
         || fail "$(state_why $? "$label: naming window never became visible")"
     log "$label: naming window open, job parked"
+    # Again, since the pipeline wait above is long enough for the screen to
+    # lock; the job is released so the dialog does not reopen next launch.
+    if host_skip_if_screen_locked naming-escape "the real-Escape assertion"; then
+        _naming_skip "$job_id"
+        return 0
+    fi
 
     # Front the app so the keystroke lands on it, then Escape. No click into the
     # dialog: the point is that dismiss works without a focused field.
@@ -3687,6 +3698,11 @@ run_naming_switch() {
         host_skip naming-switch "This process may not use Accessibility, so no keystroke can reach the dialog and the typing-after-switch assertion did not run. Fix: System Settings → Privacy & Security → Accessibility; it is the same grant the --naming-escape lane needs, for this run to $(tcc_grantee) (see the e2e-architecture skill, runner setup step 6)."
         return 0
     fi
+    # After the grant, so a missing one is still named as such: the trust check
+    # answers true on a locked screen, the app's AX windows are then not found.
+    if host_skip_if_screen_locked naming-switch "the typing-after-switch assertion"; then
+        return 0
+    fi
 
     # The settings the lane depends on, read back from the running process (a
     # blind `defaults read` is unreliable for the dev bundle's container redirect).
@@ -3847,6 +3863,19 @@ run_naming_switch() {
     log "$label: pending naming jobs now: $pending_now"
     [ "$pending_count" -eq 2 ] \
         || log "$label: note: $((pending_count - 2)) pending job(s) are not this lane's (a launch-recovered recording, or one another lane left parked); selecting by identity"
+
+    # Again before the first AX read, since the two pipeline waits above are
+    # long enough for the screen to lock. Both jobs are skipped and waited out
+    # here, as the pass path does for the first: the app is quit before the
+    # exit trap, whose release then finds no app to ask, and a job still
+    # finishing at that point would stay in the persisted queue.
+    if host_skip_if_screen_locked naming-switch "the typing-after-switch assertion"; then
+        _naming_skip "$first"
+        _naming_skip "$second"
+        poll_rpc "/v1/jobs/$first" --each assert_app_alive "$PIPELINE_TIMEOUT_S" 5 rpc_is "$_JOB_TERMINAL" || true
+        poll_rpc "/v1/jobs/$second" --each assert_app_alive "$PIPELINE_TIMEOUT_S" 5 rpc_is "$_JOB_TERMINAL" || true
+        return 0
+    fi
 
     # Show the first job explicitly rather than trusting what opened: the window
     # opens on the first PENDING job, which may be a foreign one. The survivor's

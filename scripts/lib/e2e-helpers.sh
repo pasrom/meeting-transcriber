@@ -189,6 +189,76 @@ fail_on_host_skips() {
     return 1
 }
 
+# --- a screen-locked console session -----------------------------------------
+#
+# With the runner's console session screen-locked, the WindowServer delivers
+# nothing a lane drives from outside the app: a posted Escape does not dismiss
+# the naming window, another process finds none of the app's AX windows, and
+# screencapture writes no image. Measured on the runner: all three failed
+# while the TCC preflight read every grant as given, and each failure message
+# pointed at a product bug or at the wrong grant. So the lanes that need it ask
+# first, after their grant checks (a missing grant stays reported as one).
+
+# _console_lock_from_ioreg <uid> — read `ioreg -n Root -d1 -a` (a plist) on
+# stdin and print `locked`, `unlocked`, or `unknown: <why>`.
+#
+# The entry that counts is the IOConsoleUsers session of <uid> that is on the
+# console: the lanes' app runs in this user's session, and only the session in
+# front gets the WindowServer's events. Another user's lock says nothing about
+# ours, and our session not being in front (Fast User Switching, nobody signed
+# in) is a different fault with its own message (assert_console_user), so both
+# read as unknown here. CGSSessionScreenIsLocked is absent on an unlocked
+# session, so absent and false both mean unlocked. plutil's raw extraction
+# reads single values, which no data or date value elsewhere in the tree can
+# break, unlike a conversion of the whole tree to JSON.
+_console_lock_from_ioreg() {
+    local uid="$1" plist count i found="" locked
+    plist="$(cat)"
+    count="$(plutil -extract IOConsoleUsers raw -o - - <<<"$plist" 2>/dev/null)" || count=""
+    case "$count" in
+        ''|*[!0-9]*) echo "unknown: no IOConsoleUsers array in the ioreg output"; return 0 ;;
+    esac
+    for (( i = 0; i < count; i++ )); do
+        [ "$(plutil -extract "IOConsoleUsers.$i.kCGSSessionUserIDKey" raw -o - - <<<"$plist" 2>/dev/null)" = "$uid" ] || continue
+        [ "$(plutil -extract "IOConsoleUsers.$i.kCGSSessionOnConsoleKey" raw -o - - <<<"$plist" 2>/dev/null)" = true ] || continue
+        [ -z "$found" ] || { echo "unknown: more than one console session for uid $uid"; return 0; }
+        found="$i"
+    done
+    [ -n "$found" ] || { echo "unknown: no console session for uid $uid"; return 0; }
+    locked="$(plutil -extract "IOConsoleUsers.$found.CGSSessionScreenIsLocked" raw -o - - <<<"$plist" 2>/dev/null)" || locked=false
+    case "$locked" in
+        true) echo locked ;;
+        false) echo unlocked ;;
+        *) echo "unknown: CGSSessionScreenIsLocked reads '$locked'" ;;
+    esac
+}
+
+# console_lock_state — _console_lock_from_ioreg for this process's user, over a
+# fresh ioreg read. Always status 0.
+console_lock_state() {
+    { run_bounded 10 ioreg -n Root -d1 -a 2>/dev/null || true; } | _console_lock_from_ioreg "$(id -u)"
+}
+
+# host_skip_if_screen_locked <lane> <assertion> — host_skip <lane> and return 0
+# when this user's console session is screen-locked; return 1 to run the
+# assertion otherwise. Unknown runs it too, with a note: host_skip may only
+# take a cause that is certainly the host's, and a probe that cannot read the
+# lock must neither skip lanes for good (silently green on PR runs) nor fail a
+# healthy one. A locked screen then fails as it did before this check existed.
+host_skip_if_screen_locked() {
+    local lane="$1" what="$2" state user
+    state="$(console_lock_state)"
+    case "$state" in
+        locked)
+            user="$(id -un)"
+            host_skip "$lane" "The runner's screen is locked (ioreg reports CGSSessionScreenIsLocked for the console session of $user), so from outside the app no keystroke lands, no AX window is found and no screenshot is written, and $what did not run. This is not a missing grant. Fix: unlock the runner's screen; to keep it from locking again, set System Settings → Lock Screen → \"Require password after screen saver begins or display is turned off\" to Never for the account $user (see the e2e-architecture skill, runner setup)."
+            return 0 ;;
+        unlocked) return 1 ;;
+    esac
+    echo "[$lane]: could not tell whether the screen is locked ($state); running $what anyway"
+    return 1
+}
+
 # --- Reading the RPC server: an answer, or no answer -------------------------
 #
 # A driver that pipes an RPC read into jq cannot tell an app that answered
