@@ -1168,21 +1168,32 @@ extension PipelineQueue {
         // Checked again after the model call, which can take many minutes.
         if notesAppearedDuringTheCall(of: job, basename: basename, protocolsDir: protocolsDir) { return }
 
-        let markdown = outputOptions.includeFullTranscriptInProtocol
-            ? protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
-            : protocolMD
+        saveGeneratedNotes(
+            protocolMD, transcript: outputOptions.includeFullTranscriptInProtocol ? transcript : nil,
+            basename: basename, jobID: jobID, protocolsDir: protocolsDir, speakerNames: speakerNames,
+        )
+    }
+
+    /// Saves the notes the model wrote and queues their Notion export when one
+    /// is configured. `transcript` is the full transcript to carry along with
+    /// them, nil when the job's output options leave it out.
+    private func saveGeneratedNotes( // swiftlint:disable:this function_parameter_count
+        _ protocolMD: String, transcript: String?, basename: String, jobID: UUID, protocolsDir: URL,
+        speakerNames: [String],
+    ) {
+        let markdown = transcript.map { protocolMD + "\n\n---\n\n## Full Transcript\n\n" + $0 } ?? protocolMD
 
         let configuration = resolveNotionExport(jobID: jobID).configuration
         // Saved first, even for a Notion-only export: the job reaches `.done` and
         // the queue moves on while the export runs, so this is what a quit or a
         // failed export falls back on. A successful Notion-only export removes it.
         let savedLocally = saveProtocolLocally(markdown, basename: basename, jobID: jobID, protocolsDir: protocolsDir)
-        if savedLocally { markOutputWritten(jobID: jobID, output: self.job(withID: jobID)?.protocolPath) }
+        if savedLocally { markOutputWritten(jobID: jobID, output: job(withID: jobID)?.protocolPath) }
         if let configuration {
             queueNotionExport(
                 PendingNotionExport(
                     protocolMD: protocolMD,
-                    transcript: outputOptions.includeFullTranscriptInProtocol ? transcript : nil,
+                    transcript: transcript,
                     speakerNames: speakerNames,
                     configuration: configuration,
                     savedLocally: savedLocally,
