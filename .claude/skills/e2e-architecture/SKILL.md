@@ -15,7 +15,12 @@ the Mac mini): `run-e2e` gates `e2e.yml`, `e2e-app.yml`, and
 `e2e-crash-recovery.yml`; `run-quality` gates `quality-and-safety.yml` (TSan/ASan
 plus WER/DER). Apply with `gh pr edit <n> --add-label run-e2e`. Each lane's
 job-level `if:` guard checks `head.repo.full_name == github.repository`, so fork
-PRs are excluded from the self-hosted runner.
+PRs are excluded from the self-hosted runner. Dependabot PRs are same-repo
+branches, so they get a guard of their own: a label releases a Dependabot PR
+only on a run a person started (`github.triggering_actor`), so its later
+pushes to a labelled branch stay off the runners until a maintainer re-runs
+or re-labels, and its sanitizer legs wait for `run-quality` even where
+another PR would run them unlabelled.
 
 **Fixture-based xctest E2E (`e2e.yml`)**
 - Engine + pipeline tests in `app/MeetingTranscriber/Tests/*E2ETests.swift`

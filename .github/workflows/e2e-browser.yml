@@ -47,11 +47,18 @@ jobs:
     # same-repo branches carrying the `run-e2e` label; fork PRs never reach the
     # runner. The label-name check keeps a `labeled` event for some OTHER label
     # from queueing a duplicate run.
+    # A Dependabot PR (a same-repo branch, so the repo check lets it
+    # through) runs only on a run a person started: the label is applied by a
+    # person, but without the actor check it would stay a standing approval
+    # for every later Dependabot push to the branch, which is dependency code
+    # nobody has read. `triggering_actor`, not `actor`: on a re-run `actor`
+    # stays the bot, so only `triggering_actor` lets a maintainer's re-run in.
     if: |
       github.event_name != 'pull_request' ||
       (
         contains(github.event.pull_request.labels.*.name, 'run-e2e') &&
         github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.pull_request.user.login != 'dependabot[bot]' || github.triggering_actor != 'dependabot[bot]') &&
         (github.event.action != 'labeled' || github.event.label.name == 'run-e2e')
       )
     runs-on: [self-hosted, macOS, ARM64, audio]
