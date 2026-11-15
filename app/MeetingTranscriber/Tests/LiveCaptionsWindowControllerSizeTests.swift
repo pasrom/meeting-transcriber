@@ -90,19 +90,19 @@ final class LiveCaptionsWindowControllerSizeTests: XCTestCase {
     }
 
     /// Content taller than the bar clips the oldest lines at the top; the
-    /// newest line, the one being read, stays inside. Ordinary speech gets
-    /// there: two finals plus a hypothesis that wraps once more than the
-    /// preset budgets for.
+    /// newest line, the one being read, stays inside. A conversation gets
+    /// there: four speaker turns, three of them wrapping onto a second line.
     func testOverflowKeepsTheNewestLineInsideTheBar() throws {
         let state = LiveCaptionsState()
         state.applyFinalized(
             "We moved the release to Thursday because the signing certificate expires on Friday morning.",
-            channel: .app,
+            channel: .app, speaker: "Speaker A",
         )
         state.applyFinalized(
             "That leaves Wednesday for the last round of manual checks on the caption bar and the importer.",
-            channel: .app,
+            channel: .mic,
         )
+        state.applyFinalized("Right.", channel: .app)
         state.applyPartial(
             "Then the beta goes out on Wednesday night and the stable build follows a day later, once the crash reports look quiet",
             channel: .app,
