@@ -11,7 +11,8 @@ import AppKit
 enum UpdateInstallRoute: Equatable {
     /// Upgrade through the installed cask.
     case homebrew(command: String)
-    /// Download the release DMG, or open the release page when it has none.
+    /// Download the release DMG, or open the release page when it has none
+    /// (see `resolve` for the links it accepts).
     case download(URL)
 
     static let stableCask = "meeting-transcriber"
@@ -60,7 +61,32 @@ enum UpdateInstallRoute: Equatable {
         if installedCask == stableCask, !update.prerelease {
             return .homebrew(command: command(for: stableCask))
         }
-        return .download(update.dmgURL ?? update.htmlURL)
+        let candidates = [update.dmgURL, update.htmlURL].compactMap(\.self)
+        return .download(candidates.first(where: isTrustedReleaseURL) ?? releasesPage)
+    }
+
+    /// The repository's releases page, opened when the release offers no link
+    /// that passes `isTrustedReleaseURL`.
+    static let releasesPage = URL(
+        string: "https://github.com/\(GitHubReleaseProvider.owner)/\(GitHubReleaseProvider.repo)/releases",
+    )! // swiftlint:disable:this force_unwrapping
+
+    /// Whether a link from the release JSON may be handed to the workspace:
+    /// `https` on exactly `github.com`, with no userinfo and no explicit port.
+    ///
+    /// The JSON decides what gets opened, and `NSWorkspace.open` launches
+    /// whatever handler the scheme maps to, so a `file:` or custom-scheme link
+    /// would run local code rather than show a page. Both the release page and
+    /// the DMG asset (`/releases/download/...`) live on `github.com`; the
+    /// redirect to the asset CDN happens in the browser, so no other host is
+    /// needed. Userinfo is refused so `https://github.com@evil.example/` cannot
+    /// read as GitHub.
+    static func isTrustedReleaseURL(_ url: URL) -> Bool {
+        guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
+        return parts.scheme?.lowercased() == "https"
+            && parts.host?.lowercased() == "github.com"
+            && parts.user == nil && parts.password == nil
+            && parts.port == nil
     }
 
     /// `brew update` first: the release this app saw is published before the
