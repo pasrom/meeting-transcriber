@@ -17,17 +17,10 @@ enum LiveCaptionChannel: String, Hashable, Codable {
 /// A finalised utterance with its source channel and rendered speaker label.
 /// `speaker` starts as the channel-default fallback and can be replaced by
 /// the live match for this line. Later registry renames do not relabel it.
-/// Not `Hashable`, so the whole line cannot become a row id again: a relabel would change it.
-struct LiveCaptionLine: Equatable, Codable, Identifiable {
+struct LiveCaptionLine: Hashable, Codable {
     let channel: LiveCaptionChannel
     let text: String
     let speaker: String
-    /// Final sequence number: stays the same across a relabel. Not on the wire.
-    var id = 0
-
-    private enum CodingKeys: String, CodingKey {
-        case channel, text, speaker
-    }
 }
 
 /// Observable state powering the live caption-bar overlay.
@@ -101,9 +94,10 @@ final class LiveCaptionsState {
         self.size = size
     }
 
-    /// Cap on `recentFinals` length. 2 keeps the bar at most two prior lines
-    /// plus the two live hypothesis rows on top.
-    static let maxFinalsKept = 2
+    /// Cap on `recentFinals` length. The overlay joins a speaker's lines into one
+    /// row, so past the cap all but the newest line go at once: dropping one line
+    /// at a time would re-wrap that row on every line.
+    static let maxFinalsKept = 6
 
     /// Shortest time a finalized line stays fully visible.
     static let minimumReadingHold: TimeInterval = 4.0
@@ -142,9 +136,9 @@ final class LiveCaptionsState {
         case .app: hypothesisApp = ""
         }
         finalSequence += 1
-        recentFinals.append(LiveCaptionLine(channel: channel, text: text, speaker: speaker, id: finalSequence))
+        recentFinals.append(LiveCaptionLine(channel: channel, text: text, speaker: speaker))
         if recentFinals.count > Self.maxFinalsKept {
-            recentFinals.removeFirst(recentFinals.count - Self.maxFinalsKept)
+            recentFinals.removeFirst(recentFinals.count - 1)
         }
         setReadingDeadline(for: text)
         scheduleSilence()
@@ -157,7 +151,7 @@ final class LiveCaptionsState {
         guard distance >= 0, distance < recentFinals.count else { return }
         let index = recentFinals.count - 1 - distance
         let line = recentFinals[index]
-        recentFinals[index] = LiveCaptionLine(channel: line.channel, text: line.text, speaker: speaker, id: line.id)
+        recentFinals[index] = LiveCaptionLine(channel: line.channel, text: line.text, speaker: speaker)
     }
 
     /// Convenience: speaker defaults to the channel label. Used by tests
