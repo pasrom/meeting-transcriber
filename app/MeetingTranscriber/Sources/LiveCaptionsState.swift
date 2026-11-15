@@ -126,6 +126,8 @@ final class LiveCaptionsState {
     private var scheduledTurnStart = 0
     /// Finals too short to match that take the speaker of the line before them.
     private var inheritingFinals: Set<Int> = []
+    /// Finals whose speaker match is still running; the overlay keeps them in the row before them.
+    private var awaitingSpeaker: Set<Int> = []
     private var remainingReadingTime: (() -> Duration)?
 
     func applyPartial(_ text: String, channel: LiveCaptionChannel) {
@@ -137,7 +139,12 @@ final class LiveCaptionsState {
     }
 
     @discardableResult
-    func applyFinalized(_ text: String, channel: LiveCaptionChannel, speaker: String) -> Int {
+    func applyFinalized(
+        _ text: String,
+        channel: LiveCaptionChannel,
+        speaker: String,
+        awaitingSpeaker awaiting: Bool = false,
+    ) -> Int {
         switch channel {
         case .mic: hypothesisMic = ""
         case .app: hypothesisApp = ""
@@ -147,6 +154,11 @@ final class LiveCaptionsState {
         if recentFinals.count > Self.maxFinalsKept {
             recentFinals.removeFirst(recentFinals.count - 1)
         }
+        let firstKept = finalSequence - (recentFinals.count - 1)
+        awaitingSpeaker = awaitingSpeaker.filter { $0 >= firstKept }
+        if awaiting {
+            awaitingSpeaker.insert(finalSequence)
+        }
         setReadingDeadline(for: text)
         scheduleSilence()
         scheduleTurnExpiry()
@@ -155,6 +167,7 @@ final class LiveCaptionsState {
 
     /// A late match updates retained and inheriting lines without changing hypotheses or the reading deadline.
     func updateSpeaker(_ speaker: String, forFinal sequence: Int) {
+        awaitingSpeaker.remove(sequence)
         guard let start = index(ofFinal: sequence) else { return }
         let channel = recentFinals[start].channel
         setSpeaker(speaker, at: start)
@@ -184,6 +197,24 @@ final class LiveCaptionsState {
         }
     }
 
+    /// No confident match: the line keeps the speaker of the line before it when that voice is also
+    /// its nearest, so a weak slice inside one speaker's turn does not split it under the channel label.
+    func resolveUnmatched(forFinal sequence: Int, nearest: String?) {
+        awaitingSpeaker.remove(sequence)
+        guard let index = index(ofFinal: sequence) else { return }
+        if index > 0, let nearest, recentFinals[index - 1].channel == recentFinals[index].channel,
+           recentFinals[index - 1].speaker == nearest {
+            updateSpeaker(nearest, forFinal: sequence)
+        } else {
+            scheduleTurnExpiry()
+        }
+    }
+
+    /// True while the speaker match of the line at `index` in `recentFinals` is still running.
+    func awaitsSpeaker(lineAt index: Int) -> Bool {
+        awaitingSpeaker.contains(finalSequence - (recentFinals.count - 1 - index))
+    }
+
     private func index(ofFinal sequence: Int) -> Int? {
         let distance = finalSequence - sequence
         guard distance >= 0, distance < recentFinals.count else { return nil }
@@ -208,7 +239,9 @@ final class LiveCaptionsState {
     /// Once a new turn starts, the lines before it leave after `earlierTurnHold`; without this
     /// they stayed until the page turn, above the next speaker's row.
     private func scheduleTurnExpiry() {
+        // A short line can follow a still-unresolved match in the same turn.
         let start = currentTurnStart
+        guard !awaitingSpeaker.contains(where: { $0 >= start }) else { return }
         let firstKept = finalSequence - (recentFinals.count - 1)
         guard start > firstKept, start > scheduledTurnStart else { return }
         scheduledTurnStart = start
@@ -231,8 +264,8 @@ final class LiveCaptionsState {
     /// Convenience: speaker defaults to the channel label. Used by tests
     /// and as a fallback path when the live matcher isn't wired in.
     @discardableResult
-    func applyFinalized(_ text: String, channel: LiveCaptionChannel) -> Int {
-        applyFinalized(text, channel: channel, speaker: label(for: channel))
+    func applyFinalized(_ text: String, channel: LiveCaptionChannel, awaitingSpeaker: Bool = false) -> Int {
+        applyFinalized(text, channel: channel, speaker: label(for: channel), awaitingSpeaker: awaitingSpeaker)
     }
 
     func label(for channel: LiveCaptionChannel) -> String {
@@ -251,6 +284,7 @@ final class LiveCaptionsState {
         hypothesisApp = ""
         recentFinals.removeAll()
         inheritingFinals.removeAll()
+        awaitingSpeaker.removeAll()
         remainingReadingTime = nil
     }
 

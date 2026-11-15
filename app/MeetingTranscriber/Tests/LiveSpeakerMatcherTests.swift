@@ -23,7 +23,7 @@ final class LiveSpeakerMatcherTests: XCTestCase {
         // model. Pre-warm fails fast in xctest's sandbox if the model
         // isn't already cached — that's fine, the matcher swallows the
         // error and returns nil.
-        let name = await matcher.match(audio: [Float](repeating: 0.0, count: 16000))
+        let name = await matcher.match(audio: [Float](repeating: 0.0, count: 16000)).name
         XCTAssertNil(
             name,
             "empty speaker DB must resolve to nil (channel-default fallback)",
@@ -70,7 +70,7 @@ final class LiveSpeakerMatcherTests: XCTestCase {
     /// network blip during the WeSpeaker download doesn't break captions.
     func testMatchReturnsNilWhenAudioIsEmpty() async {
         let (matcher, _) = makeMatcher(slug: "empty-audio")
-        let name = await matcher.match(audio: [])
+        let name = await matcher.match(audio: []).name
         XCTAssertNil(name, "empty audio must resolve to nil")
     }
 

@@ -58,6 +58,35 @@ final class LiveCaptionsOverlayTests: XCTestCase {
         )
     }
 
+    /// Shown under the channel label until its match landed, a line split the row for a moment
+    /// and joined it again: the bar flashed between the name and "Remote".
+    func testLineAwaitingItsSpeakerContinuesTheRowBeforeIt() {
+        let finals = [
+            LiveCaptionLine(channel: .app, text: "we retry", speaker: "Speaker A"),
+            LiveCaptionLine(channel: .app, text: "and recover", speaker: "Remote"),
+            LiveCaptionLine(channel: .mic, text: "okay", speaker: "Me"),
+            LiveCaptionLine(channel: .app, text: "then", speaker: "Remote"),
+        ]
+        let awaiting: (Int) -> Bool = { $0 != 0 }
+        let rows = LiveCaptionsOverlay.rows(finals: finals, awaiting: awaiting, hypotheses: []) { channel in
+            channel == .app ? "Remote" : "Me"
+        }
+        XCTAssertEqual(rows.map(\.speaker), ["Speaker A", "Me", "Remote"])
+        XCTAssertEqual(rows.map(\.text), ["we retry and recover", "okay", "then"])
+    }
+
+    /// The wiring: the bar reads which lines await their speaker from the state.
+    func testOverlayKeepsALineAwaitingItsSpeakerInTheRowBeforeIt() throws {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        state.applyFinalized("first line", channel: .app, speaker: "Speaker A")
+        state.applyFinalized("second line", channel: .app, awaitingSpeaker: true)
+
+        let overlay = try LiveCaptionsOverlay(state: state).inspect()
+        XCTAssertNoThrow(try overlay.find(text: "first line second line"))
+        XCTAssertThrowsError(try overlay.find(text: "Remote:"))
+    }
+
     /// The wiring: the bar renders the joined row with one label, not a row per line.
     func testOverlayRendersOneSpeakersLinesAsOneRow() throws {
         let state = LiveCaptionsState()
