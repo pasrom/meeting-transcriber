@@ -100,6 +100,9 @@ final class LiveCaptionsState {
     /// the newest for it to join.
     static let maxFinalsKept = 6
 
+    /// How long the lines of a finished turn stay above the next speaker's row.
+    static let earlierTurnHold: TimeInterval = 4.0
+
     /// Shortest time a finalized line stays fully visible.
     static let minimumReadingHold: TimeInterval = 4.0
     /// Reading time per word of a finalized line, above `minimumReadingHold`.
@@ -120,6 +123,8 @@ final class LiveCaptionsState {
     /// Monotonic identity for late speaker matches; never reused after clear.
     private var finalSequence = 0
     private var silenceTask: Task<Void, Never>?
+    /// Sequence of the first final of the newest turn an expiry was scheduled for.
+    private var scheduledTurnStart = 0
     private var remainingReadingTime: (() -> Duration)?
 
     func applyPartial(_ text: String, channel: LiveCaptionChannel) {
@@ -143,6 +148,7 @@ final class LiveCaptionsState {
         }
         setReadingDeadline(for: text)
         scheduleSilence()
+        scheduleTurnExpiry()
         return finalSequence
     }
 
@@ -153,6 +159,40 @@ final class LiveCaptionsState {
         let index = recentFinals.count - 1 - distance
         let line = recentFinals[index]
         recentFinals[index] = LiveCaptionLine(channel: line.channel, text: line.text, speaker: speaker)
+        scheduleTurnExpiry()
+    }
+
+    /// Sequence of the first final in the trailing run of one channel and speaker: the current turn.
+    private var currentTurnStart: Int {
+        guard let last = recentFinals.last else { return finalSequence + 1 }
+        var index = recentFinals.count - 1
+        while index > 0, recentFinals[index - 1].channel == last.channel, recentFinals[index - 1].speaker == last.speaker {
+            index -= 1
+        }
+        return finalSequence - (recentFinals.count - 1 - index)
+    }
+
+    /// Once a new turn starts, the lines before it leave after `earlierTurnHold`; without this
+    /// they stayed until the page turn, above the next speaker's row.
+    private func scheduleTurnExpiry() {
+        let start = currentTurnStart
+        let firstKept = finalSequence - (recentFinals.count - 1)
+        guard start > firstKept, start > scheduledTurnStart else { return }
+        scheduledTurnStart = start
+        func schedule(on clock: some Clock<Duration>) {
+            let deadline = clock.now.advanced(by: .seconds(Self.earlierTurnHold))
+            // Not cancelled by clear(): its boundary then lies before every newer line, so it removes nothing.
+            Task { @MainActor [weak self] in
+                try? await clock.sleep(until: deadline, tolerance: nil)
+                guard !Task.isCancelled, let self else { return }
+                // A relabel since may have joined the older lines to the current turn: keep those.
+                let boundary = min(start, currentTurnStart)
+                let firstKept = finalSequence - (recentFinals.count - 1)
+                recentFinals.removeFirst(min(recentFinals.count, max(0, boundary - firstKept)))
+            }
+        }
+        let expiryClock = clock
+        schedule(on: expiryClock)
     }
 
     /// Convenience: speaker defaults to the channel label. Used by tests
