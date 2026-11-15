@@ -84,7 +84,7 @@ final class MenuStageProgressUpdaterTests: XCTestCase {
         updater.observe { queue }
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: menu)
         defer { NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: menu) }
-        try await Task.sleep(for: .milliseconds(20))
+        await letUpdaterHandlePostedNotifications()
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())
         await waitForTitleChange(progress, from: initialProgress)
 
@@ -445,7 +445,7 @@ final class MenuStageProgressUpdaterTests: XCTestCase {
         await waitForTitleChange(firstProgress, from: beforeSwap)
         XCTAssertNotEqual(firstProgress.title, beforeSwap)
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: firstMenu)
-        try await Task.sleep(for: .milliseconds(20))
+        await letUpdaterHandlePostedNotifications()
 
         let secondMenu = NSMenu()
         let secondTitle = NSMenuItem(title: job.meetingTitle, action: nil, keyEquivalent: "")
