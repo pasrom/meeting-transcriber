@@ -41,6 +41,13 @@ final class ProtocolAPIKeyDrafts: ObservableObject {
         savedOpenAI = settings.openAIAPIKey
     }
 
+    /// Start the OpenAI field over from the stored key, after another
+    /// connection (with its own key) was selected.
+    func reloadOpenAI(from settings: AppSettings) {
+        savedOpenAI = settings.openAIAPIKey
+        openAI = savedOpenAI
+    }
+
     #if !APPSTORE
         func commitClaude(_ key: String, to settings: AppSettings) {
             settings.claudeAPIKey = key
