@@ -59,6 +59,24 @@ final class MeetingNotesFailureNotificationTests: XCTestCase {
         XCTAssertEqual(note.body, "Sprint Review")
     }
 
+    /// A notes-only run (a retry, or notes from a picked transcript) saved no
+    /// transcript, so a failure of it does not say that one is saved. The way
+    /// to fix it still follows.
+    func testAFailedNotesOnlyRunClaimsNoSavedTranscript() {
+        var job = makeJob()
+        job.generatesNotesOnly = true
+        job.notesFailure = .providerUnreachable
+        let note = PipelineQueue.doneNotification(for: job, announceNotesFailure: true)
+        XCTAssertEqual(note.title, "Meeting Notes Failed")
+        XCTAssertEqual(note.body, "\"Sprint Review\": The notes provider could not be reached.")
+
+        job.notesFailure = .claudeSignedOut
+        XCTAssertEqual(
+            PipelineQueue.doneNotification(for: job, announceNotesFailure: true).body,
+            "\"Sprint Review\": The Claude CLI is not signed in. Run claude in Terminal and sign in with /login.",
+        )
+    }
+
     // MARK: - Kind of failure
 
     #if !APPSTORE

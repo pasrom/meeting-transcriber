@@ -223,7 +223,7 @@ final class MeetingNotesRetryTests: XCTestCase {
         XCTAssertTrue(queue.canRetryMeetingNotes(id: id))
         XCTAssertEqual(
             PipelineQueue.doneNotification(for: job, announceNotesFailure: true).body,
-            "\"Sprint\": The saved transcript could not be read. The transcript is saved.",
+            "\"Sprint\": The saved transcript could not be read.",
         )
     }
 

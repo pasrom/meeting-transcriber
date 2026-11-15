@@ -519,7 +519,9 @@ class PipelineQueue {
     /// signed-out CLI posts one per job.
     ///
     /// A notes-only run (`generatesNotesOnly`) that saved nothing saved no
-    /// transcript either, so it never reads "Transcript Saved".
+    /// transcript either, so it never reads "Transcript Saved", and a failure
+    /// of it does not add "The transcript is saved". That covers a transcript
+    /// that could not be read, which only a notes-only run can meet.
     static func doneNotification(for job: PipelineJob, announceNotesFailure: Bool) -> (title: String, body: String) {
         if job.generatesNotesOnly == true, !job.hasSavedProtocol, job.notesFailure == nil || !announceNotesFailure {
             let reason = job.notesFailure?.summary ?? "Notes already exist next to the transcript, so nothing was written"
@@ -528,7 +530,8 @@ class PipelineQueue {
         guard let failure = job.notesFailure, announceNotesFailure else {
             return (job.hasSavedProtocol ? "Meeting Notes Ready" : "Transcript Saved", job.meetingTitle)
         }
-        let body = "\"\(job.meetingTitle)\": \(failure.summary). The transcript is saved."
+        let savedATranscript = job.generatesNotesOnly != true
+        let body = "\"\(job.meetingTitle)\": \(failure.summary)." + (savedATranscript ? " The transcript is saved." : "")
         return ("Meeting Notes Failed", failure.hint.map { "\(body) \($0)" } ?? body)
     }
 
