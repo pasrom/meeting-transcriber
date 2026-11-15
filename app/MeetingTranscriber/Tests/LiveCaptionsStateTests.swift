@@ -196,6 +196,21 @@ final class LiveCaptionsStateTests: XCTestCase {
         await assertEventually { !state.hasContent }
     }
 
+    /// A line appended under the channel label and then matched to the running speaker is no new turn.
+    func testRelabelIntoTheRunningTurnKeepsItsEarlierLines() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
+        let next = state.applyFinalized("second", channel: .app)
+        state.updateSpeaker("Speaker A", forFinal: next)
+        state.applyPartial("still speaking", channel: .app)
+
+        await clock.advance(by: .seconds(LiveCaptionsState.earlierTurnHold + 1))
+        await Task.yield()
+        XCTAssertEqual(state.recentFinals.map(\.text), ["first", "second"])
+    }
+
     // MARK: - Silence deadlines
 
     func testFinalReadingHoldHasFourSecondFloor() async {
@@ -396,5 +411,25 @@ final class LiveCaptionsStateTests: XCTestCase {
         state.setSize(.small)
 
         XCTAssertEqual(state.size, .small)
+    }
+}
+
+@MainActor
+extension LiveCaptionsStateTests {
+    /// A finished turn stayed above the next speaker's row until the page turn.
+    func testEarlierTurnLeavesAfterItsHoldOnceANewSpeakerStarts() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
+        state.applyFinalized("second", channel: .app, speaker: "Speaker A")
+        state.applyFinalized("reply", channel: .app, speaker: "Speaker B")
+        state.applyPartial("still speaking", channel: .app)
+
+        XCTAssertEqual(LiveCaptionsState.earlierTurnHold, 4.0)
+        await clock.advance(by: .milliseconds(3999))
+        XCTAssertEqual(state.recentFinals.map(\.text), ["first", "second", "reply"])
+        await clock.advance(by: .milliseconds(1))
+        await assertEventually { state.recentFinals.map(\.text) == ["reply"] }
     }
 }
