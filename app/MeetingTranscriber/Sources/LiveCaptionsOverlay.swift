@@ -9,12 +9,11 @@ import SwiftUI
 /// (see `rows`). Finals
 /// carry their own per-line `LiveCaptionLine.speaker` (resolved by
 /// `LiveSpeakerMatcher` for that line) so a `speakers.json` rename after
-/// the line is committed doesn't retroactively re-label it. Live hypothesis
-/// rows fall back to the channel-default `LiveCaptionsState.micLabel` /
-/// `.appLabel` because the partial transcript hasn't reached its end-of-
-/// speech boundary yet and no embedding is available. When the state is
-/// empty the rounded background collapses to a tiny pill — the wrapping
-/// panel uses `hasContent` to hide entirely.
+/// the line is committed doesn't retroactively re-label it. A hypothesis
+/// continues the preceding row if it is on the same channel, or uses the
+/// channel-default `LiveCaptionsState.micLabel` / `.appLabel` otherwise.
+/// When the state is empty the rounded background collapses to a tiny pill;
+/// the wrapping panel uses `hasContent` to hide entirely.
 ///
 /// The content is bottom-anchored inside the fixed-size NSPanel (see
 /// `LiveCaptionsWindowController`) so the bar visually grows upward as new
@@ -84,7 +83,7 @@ struct LiveCaptionsOverlay: View {
     }
 
     /// Consecutive finals of one channel and speaker share a row, and a hypothesis
-    /// continues the row before it while that row has its channel's label.
+    /// continues the row before it when that row is on its channel.
     static func rows(
         finals: [LiveCaptionLine],
         hypotheses: [(LiveCaptionChannel, String)],
@@ -102,7 +101,13 @@ struct LiveCaptionsOverlay: View {
             add(line.channel, line.speaker, line.text)
         }
         for (channel, text) in hypotheses where !text.isEmpty {
-            add(channel, label(channel), text)
+            // Unmatched yet, so it continues whoever spoke last on its channel; under the channel
+            // label it stood in a row of its own below every named row.
+            if let last = rows.last, last.channel == channel {
+                rows[rows.count - 1].text += " " + text
+            } else {
+                add(channel, label(channel), text)
+            }
         }
         return rows
     }

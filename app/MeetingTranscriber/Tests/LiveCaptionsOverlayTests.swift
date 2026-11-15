@@ -39,17 +39,22 @@ final class LiveCaptionsOverlayTests: XCTestCase {
         XCTAssertEqual(rows.map(\.text), ["if the service fails", "we retry", "okay", "then it recovers"])
     }
 
-    /// A hypothesis has no match yet, so it joins only a row still under its channel's label.
-    func testHypothesisStartsItsOwnRowAfterAMatchedOrOtherChannelRow() {
+    /// The live text has no match yet: it continues the last row of its channel under that row's
+    /// name, and starts its own row only after another channel's row.
+    func testHypothesisContinuesTheLastRowOfItsChannel() {
         let label: (LiveCaptionChannel) -> String = { $0 == .app ? "Remote" : "Me" }
         let matched = [LiveCaptionLine(channel: .app, text: "we retry", speaker: "Speaker A")]
         XCTAssertEqual(
             LiveCaptionsOverlay.rows(finals: matched, hypotheses: [(.app, "and"), (.mic, "yes")], label: label),
             [
-                .init(channel: .app, speaker: "Speaker A", text: "we retry"),
-                .init(channel: .app, speaker: "Remote", text: "and"),
+                .init(channel: .app, speaker: "Speaker A", text: "we retry and"),
                 .init(channel: .mic, speaker: "Me", text: "yes"),
             ],
+        )
+        let micLast = matched + [LiveCaptionLine(channel: .mic, text: "okay", speaker: "Me")]
+        XCTAssertEqual(
+            LiveCaptionsOverlay.rows(finals: micLast, hypotheses: [(.app, "and"), (.mic, "")], label: label).last,
+            .init(channel: .app, speaker: "Remote", text: "and"),
         )
     }
 
