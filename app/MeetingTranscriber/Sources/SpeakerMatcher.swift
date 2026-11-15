@@ -201,13 +201,10 @@ class SpeakerMatcher {
     }
 
     /// Match each label against the stored DB, returning the top candidates
-    /// with their per-anchor distances.
-    func matchVerbose(embeddings: [String: [Float]], topK: Int = 3)
+    /// with their per-anchor distances; `against` is a kept `matchableSpeakers()`.
+    func matchVerbose(embeddings: [String: [Float]], topK: Int = 3, against: [StoredSpeaker]? = nil)
         -> [String: VerboseMatch] {
-        // Synthetic entries (RPC `seedSpeaker`) carry random embeddings —
-        // letting them participate in matching would let any caller with
-        // RPC access poison auto-naming. Drop them before scoring.
-        let stored = loadDB().filter { !$0.isSynthetic }
+        let stored = against ?? matchableSpeakers()
         var result: [String: VerboseMatch] = [:]
         var usedNames: Set<String> = []
 

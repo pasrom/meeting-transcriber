@@ -289,6 +289,9 @@ private final class CaptionTranscriptionRecorder: @unchecked Sendable {
         case let .finalized(_, audio):
             _finalSampleCounts.append(audio.count)
             _finalAudio = audio
+
+        case .voiceChanged:
+            break
         }
     }
 }

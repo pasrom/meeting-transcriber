@@ -36,6 +36,24 @@ final class StreamingCaptionSplitterTests: XCTestCase {
         XCTAssertEqual(update.hypothesis, "four")
     }
 
+    /// A voice change ends the line after the words spoken before it; the rest stays live text.
+    func testCutCommitsTheWordsOfAnEarlierTranscript() {
+        var splitter = StreamingCaptionSplitter()
+        _ = splitter.update("what is the gap", audioTime: 1)
+        XCTAssertEqual(splitter.update("what is the gap i have no", audioTime: 2).hypothesis, "what is the gap i have no")
+        XCTAssertEqual(splitter.cut("what is the gap"), "what is the gap")
+        XCTAssertEqual(splitter.update("what is the gap i have no idea", audioTime: 2.5).hypothesis, "i have no idea")
+        XCTAssertNil(splitter.cut("what is"), "already committed")
+    }
+
+    /// The transcript at the change may end inside a word the speech went on with; that word is the next voice's.
+    func testCutLeavesAWordTheTranscriptContinuedToTheNextLine() {
+        var splitter = StreamingCaptionSplitter()
+        _ = splitter.update("the cognitive gap between them", audioTime: 1)
+        XCTAssertEqual(splitter.cut("the cognit"), "the")
+        XCTAssertEqual(splitter.update("the cognitive gap between them", audioTime: 1.1).hypothesis, "cognitive gap between them")
+    }
+
     func testWhitespaceUnicodeAndReset() {
         var splitter = StreamingCaptionSplitter(maxWords: 2)
         let update = splitter.update("  café\n世界\tnew", audioTime: 1)

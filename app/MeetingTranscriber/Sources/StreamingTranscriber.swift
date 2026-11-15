@@ -29,6 +29,8 @@ actor StreamingTranscriber: LiveCaptionPipeline {
         /// 1–5 seconds of float32 mono = 64–320 KB per event, emitted at
         /// most once per ~5 s — small enough to ship by value.
         case finalized(text: String, audio: [Float])
+        /// Another enrolled voice took over the channel; the line before it was cut there.
+        case voiceChanged(String)
     }
 
     typealias EventSink = @Sendable (Event) -> Void

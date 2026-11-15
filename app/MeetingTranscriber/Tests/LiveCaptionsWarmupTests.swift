@@ -549,6 +549,10 @@ private actor GatedSpeakerMatcher: LiveSpeakerMatching {
     func match(audio _: [Float]) -> LiveSpeakerMatch {
         .unknown
     }
+
+    func probe(audio _: [Float]) -> LiveSpeakerMatch {
+        .unknown
+    }
 }
 
 private struct ModelPathError: LocalizedError {

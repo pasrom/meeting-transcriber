@@ -473,9 +473,11 @@ final class LiveTranscriptionController {
         asr: (any EouStreamingAsrManaging)? = nil,
     ) -> EouStreamingCaptionSession {
         let logChannel = channel.rawValue
+        let matcher = speakerMatcher
         return EouStreamingCaptionSession(
             asr: asr ?? eouSessionFactory(),
             channelLabel: logChannel,
+            voiceProbe: { await matcher.probe(audio: $0) },
             onEvent: makeEventSink(channel: channel, logChannel: logChannel),
         )
     }
@@ -552,6 +554,9 @@ final class LiveTranscriptionController {
                     } else {
                         self.captions.resolveUnmatched(forFinal: sequence, nearest: match.nearest)
                     }
+
+                case let .voiceChanged(voice):
+                    self.captions.voiceChanged(to: voice, channel: channel)
                 }
             }
         }
