@@ -12,9 +12,12 @@ name: Quality & Safety
 # runs for SAME-REPO branches only. Fork PR code never runs here: the
 # sanitizer legs execute on the self-hosted Mini right next to an unlocked
 # CI keychain, and fork `pull_request` tokens are read-only, which would
-# also break the cancel-on-failure step.
+# also break the cancel-on-failure step. Dependabot PRs are same-repo
+# branches, so they are held separately: their legs wait until a maintainer
+# applies `run-quality` (see the `self-hosted` output of `changes`).
 #
-# What a PR gets (issue #688). ASan runs on every same-repo PR: at about
+# What a PR gets (issue #688). ASan runs on every same-repo PR not held
+# as a Dependabot PR: at about
 # three minutes for both packages it is cheaper than the required
 # GitHub-hosted test jobs, so it needs no gate. TSan runs on the
 # `run-quality` label, or when the PR's changed source lines add, remove or
@@ -33,8 +36,9 @@ on:
   push:
     branches: [main]
   # PR runs: opening or updating a PR triggers the workflow. ASan runs on
-  # every same-repo PR; TSan and the quality gate wait for the `run-quality`
-  # label (TSan also for what the PR's diff contains). `labeled` lets the
+  # every same-repo PR but a Dependabot one, which waits for the
+  # `run-quality` label; TSan and the quality gate wait for that label
+  # (TSan also for what the PR's diff contains). `labeled` lets the
   # label start the run on an already-open PR; a `labeled` event for any
   # other label produces a run in which the legs are skipped and the gate
   # reports, under a different check name, that nothing was evaluated (see
@@ -75,7 +79,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 jobs:
-  # Two facts for the sanitizer jobs, computed once, because an `if:`
+  # Three facts for the sanitizer jobs, computed once, because an `if:`
   # expression cannot see a diff and a condition repeated across four jobs
   # drifts. Issue #688: the label is off by default because TSan is slow,
   # but its absence was invisible at review time, so a PR reported green
@@ -265,6 +269,7 @@ jobs:
     outputs:
       verdict: ${{ steps.kind.outputs.verdict }}
       gate-name: ${{ steps.kind.outputs.gate-name }}
+      self-hosted: ${{ steps.hold.outputs.self-hosted }}
       tsan-relevant: ${{ steps.diff.outputs.tsan-relevant || 'false' }}
       tsan-reason: ${{ steps.diff.outputs.tsan-reason }}
     steps:
@@ -281,6 +286,38 @@ jobs:
           else
             echo "verdict=true" >> "$GITHUB_OUTPUT"
             echo "gate-name=sanitizer-gate" >> "$GITHUB_OUTPUT"
+          fi
+      # Fact 3: may this PR run start the self-hosted legs at all? Dependabot
+      # opens its PRs as same-repo branches, so the fork exclusion does not
+      # stop them, and a dependency bump is exactly the code nobody has read
+      # yet: a package's sources, build plugins and macros would be built and
+      # run on a Mini, next to its keychain and caches, before a maintainer
+      # saw the diff. A Dependabot PR therefore starts the legs only on a run
+      # a person started (`triggering_actor`, which is the person on a label
+      # event and on a re-run, while `actor` stays the bot on a re-run) AND
+      # with the `run-quality` label on the PR. Both halves: without the
+      # actor half a label would be a standing approval for every later
+      # Dependabot push to the branch, and without the label half a person
+      # re-running the `opened` run would start them with no visible marker.
+      # Keyed on the PR author, not the actor, so a person's commit pushed
+      # onto a Dependabot branch is held too. Every other event and every
+      # other PR gets `true`; the legs require exactly `true`, so a missing
+      # output holds rather than releases. Push runs on `main` are unaffected,
+      # so the merged commit still gets both legs.
+      - id: hold
+        name: Hold Dependabot PRs off the self-hosted runners until a maintainer asks
+        env:
+          EVENT: ${{ github.event_name }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          TRIGGERED_BY: ${{ github.triggering_actor }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'run-quality') }}
+        run: |
+          if [ "$EVENT" = "pull_request" ] && [ "$AUTHOR" = "dependabot[bot]" ] \
+            && { [ "$LABELLED" != "true" ] || [ "$TRIGGERED_BY" = "dependabot[bot]" ]; }; then
+            echo "self-hosted=false" >> "$GITHUB_OUTPUT"
+            printf 'Dependabot PR: the sanitizer legs are held off the self-hosted runners. A maintainer who has read the bump applies run-quality, or re-runs a run that already carried it, to start them.\n' | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "self-hosted=true" >> "$GITHUB_OUTPUT"
           fi
       - if: github.event_name == 'pull_request' && steps.kind.outputs.verdict == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -374,8 +411,9 @@ jobs:
     # `withUnsafePointer` slabs in audio mixing, and any C-imported framework
     # boundary. Every same-repo PR, no label and no diff arm: 3m12s for both
     # packages when measured, cheaper than the required GitHub-hosted test
-    # jobs. Fork PRs are excluded for the reason in the trigger comment, and
-    # a run that is no verdict for its commit skips (see `changes`).
+    # jobs. Fork PRs are excluded for the reason in the trigger comment, a
+    # Dependabot PR waits for a maintainer (`self-hosted`, see `changes`),
+    # and a run that is no verdict for its commit skips (see `changes`).
     if: |
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
@@ -383,6 +421,7 @@ jobs:
       (
         github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
+        needs.changes.outputs.self-hosted == 'true' &&
         needs.changes.outputs.verdict == 'true'
       )
     runs-on: [self-hosted, macOS, ARM64]
@@ -445,11 +484,14 @@ jobs:
     needs: changes
     # ThreadSanitizer catches races the static @Sendable checker can't see:
     # C-pointer shared state, GCD-callback closures over class properties.
-    # PR leg: same-repo branches only (see the trigger comment), on a run
-    # that is a verdict for its commit, and then either the `run-quality`
-    # label or one of the two arms `changes` computes. The repo check sits
-    # outside the arms on purpose: a diff or manifest match must never widen
-    # the audience to fork PRs, whatever the lists grow into. The label-arm
+    # PR leg: same-repo branches only (see the trigger comment), not on a
+    # Dependabot PR a maintainer has not released (`self-hosted`, see
+    # `changes`), on a run that is a verdict for its commit, and then either
+    # the `run-quality` label or one of the two arms `changes` computes. The
+    # repo and Dependabot checks sit outside the arms on purpose: a diff or
+    # manifest match must never widen the audience to fork PRs or to an
+    # unreleased bump (the manifest arm fires on every Swift package bump),
+    # whatever the lists grow into. The label-arm
     # deduplication for `labeled` events lives in `verdict`, which is false
     # for any label but `run-quality`.
     if: |
@@ -459,6 +501,7 @@ jobs:
       (
         github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
+        needs.changes.outputs.self-hosted == 'true' &&
         needs.changes.outputs.verdict == 'true' &&
         (
           contains(github.event.pull_request.labels.*.name, 'run-quality') ||
@@ -564,6 +607,7 @@ jobs:
           TSAN_TESTS: ${{ needs.test-tsan.outputs.tests-outcome }}
           TSAN_RELEVANT: ${{ needs.changes.outputs.tsan-relevant }}
           TSAN_REASON: ${{ needs.changes.outputs.tsan-reason }}
+          SELF_HOSTED: ${{ needs.changes.outputs.self-hosted }}
         run: |
           if [ "$VERDICT" = "false" ]; then
             {
@@ -602,7 +646,16 @@ jobs:
               fi
               ;;
             pull_request)
-              if [ "$SAME_REPO" = "true" ]; then
+              # A held Dependabot PR expects neither leg, so its gate is green
+              # with both rows reading "not run", never red for the skip. Only
+              # the literal `false` holds here: any other value takes the
+              # same-repo arm below, which expects ASan, and the legs, which
+              # need the literal `true`, skip, so a missing output turns the
+              # gate red instead of quietly green.
+              if [ "$SAME_REPO" = "true" ] && [ "$SELF_HOSTED" = "false" ]; then
+                not_run_reason="Dependabot PR: held off the self-hosted runners until a maintainer applies run-quality, or re-runs a run that already carried it"
+                tsan_why="$not_run_reason"
+              elif [ "$SAME_REPO" = "true" ]; then
                 expect_asan=true
                 # Both branches read tsan-relevant, never the reason text as a
                 # stand-in for it. Reading `-n "$TSAN_REASON"` here would be
