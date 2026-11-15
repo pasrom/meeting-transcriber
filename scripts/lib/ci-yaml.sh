@@ -169,3 +169,47 @@ ci_matrix_values() {
     ' | tr -d "\"'"
 }
 
+
+# The job-level `if:` of job $2 in file $1 as text: the value of a one-line
+# condition, or the lines of a `|` block scalar with the six-space indent
+# removed, one per line. `ci_job_condition` returns only `|` for a block, which
+# is enough for callers comparing one-line conditions and nothing for one that
+# has to read a multi-line PR arm. Comment lines are not part of the value.
+ci_job_condition_text() {
+    ci_job_body "$1" "$2" | awk '
+        /^    if:[[:space:]]*\|[[:space:]]*$/ { inblock = 1; next }
+        /^    if:/ { v = $0; sub(/^[[:space:]]*if:[[:space:]]*/, "", v); print v; exit }
+        inblock && /^      / { v = $0; sub(/^      /, "", v); print v; next }
+        inblock { exit }
+    '
+}
+
+# The `run: |` script of the step in job $2 of file $1 that carries the key
+# line $3 exactly (for example `id: hold`), with the step indentation removed,
+# so a test can execute the shell a workflow step would run instead of reading
+# it. Prints nothing when no such step exists or it has no block `run:`, which
+# the caller has to treat as a failure. Comment lines are dropped like
+# everywhere in this file, which leaves the shell's meaning unchanged.
+ci_step_run_block() {
+    ci_job_body "$1" "$2" | awk -v want="$3" '
+        /^      - / {
+            if (match_step && out != "") { printf "%s", out; done = 1; exit }
+            match_step = 0; inrun = 0; out = ""
+            key = $0; sub(/^      -[[:space:]]+/, "", key)
+            if (key == want) match_step = 1
+            if (key ~ /^run:[[:space:]]*\|[[:space:]]*$/) inrun = 1
+            next
+        }
+        /^        [A-Za-z_-]+:/ {
+            inrun = 0
+            key = $0; sub(/^        /, "", key)
+            if (key == want) match_step = 1
+            if (key ~ /^run:[[:space:]]*\|[[:space:]]*$/) inrun = 1
+            next
+        }
+        inrun && /^[[:space:]]*$/ { out = out "\n"; next }
+        inrun && /^          / { v = $0; sub(/^          /, "", v); out = out v "\n"; next }
+        inrun { inrun = 0 }
+        END { if (!done && match_step) printf "%s", out }
+    '
+}
