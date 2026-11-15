@@ -546,8 +546,8 @@ private actor GatedSpeakerMatcher: LiveSpeakerMatching {
         await gate.wait()
     }
 
-    func match(audio _: [Float]) -> String? {
-        nil
+    func match(audio _: [Float]) -> LiveSpeakerMatch {
+        .unknown
     }
 }
 

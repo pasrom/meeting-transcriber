@@ -11,9 +11,32 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveSpe
 protocol LiveSpeakerMatching: Sendable {
     /// Pre-warm any backing model state. Idempotent.
     func prepare() async throws
-    /// Returns a matched speaker name, or `nil` if no enrolled voice
-    /// passes the matcher's threshold + confidence margin.
-    func match(audio: [Float]) async -> String?
+    /// The matched speaker, or none if no enrolled voice passes the matcher's
+    /// threshold + confidence margin.
+    func match(audio: [Float]) async -> LiveSpeakerMatch
+}
+
+struct LiveSpeakerMatch: Equatable, Sendable {
+    /// Set when an enrolled voice passes threshold and margin.
+    var name: String?
+    /// The closest enrolled voice, when it lies within `nearestSlack` of the match threshold.
+    var nearest: String?
+
+    static let unknown = Self()
+
+    /// Farther than this past the threshold, the line may be a voice nobody enrolled, so no voice is
+    /// nearest; unbounded, a guest took the only enrolled speaker's name.
+    static let nearestSlack: Float = 0.05
+}
+
+extension LiveSpeakerMatch {
+    init(_ result: SpeakerMatcher.VerboseMatch, sentinel: String, threshold: Float) {
+        let best = result.topCandidates.first
+        self.init(
+            name: result.assignedName == sentinel ? nil : result.assignedName,
+            nearest: best.flatMap { $0.hybrid < threshold + Self.nearestSlack ? $0.name : nil },
+        )
+    }
 }
 
 /// Live speaker matching for the caption overlay. Given the speech samples
@@ -181,20 +204,19 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         }
     }
 
-    /// Match `audio` against the enrolled speaker DB. Returns the matched
-    /// speaker name when the embedding passes the threshold + confidence
-    /// margin, or `nil` when it doesn't (caller falls back to a channel
-    /// default). Errors during embedding extraction also return `nil` so
-    /// a transient inference failure degrades to "unknown speaker" rather
-    /// than blocking the caption.
-    func match(audio: [Float]) async -> String? {
+    /// Match `audio` against the enrolled speaker DB. The result names the
+    /// speaker when the embedding passes the threshold + confidence margin
+    /// (caller falls back to a channel default otherwise). Errors during
+    /// embedding extraction also return `.unknown` so a transient inference
+    /// failure degrades to "unknown speaker" rather than blocking the caption.
+    func match(audio: [Float]) async -> LiveSpeakerMatch {
         do {
             try await prepare()
         } catch {
             logger.warning("model load failed, falling back to channel default: \(error.localizedDescription, privacy: .public)")
-            return nil
+            return .unknown
         }
-        guard let models = loadedModels else { return nil }
+        guard let models = loadedModels else { return .unknown }
 
         // Extractor pads / loops the audio internally to its 160 000-sample
         // window — short utterances are stretched, not truncated.
@@ -205,12 +227,12 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
                 // Extractor returns a zero vector for inactive speakers (mask
                 // activity below threshold). Shouldn't happen for an all-ones
                 // mask on real speech, but degrade gracefully if it does.
-                return nil
+                return .unknown
             }
             embedding = first
         } catch {
             logger.warning("embedding extraction failed: \(error.localizedDescription, privacy: .public)")
-            return nil
+            return .unknown
         }
 
         // `SpeakerMatcher` returns the input label verbatim when no
@@ -219,9 +241,8 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         // the same name. Per-call UUID guarantees no collision with any
         // user-chosen name in `speakers.json`.
         let sentinel = UUID().uuidString
-        let result = speakerMatcher.match(embeddings: [sentinel: embedding])
-        guard let name = result[sentinel], name != sentinel else { return nil }
-        return name
+        guard let result = speakerMatcher.matchVerbose(embeddings: [sentinel: embedding])[sentinel] else { return .unknown }
+        return LiveSpeakerMatch(result, sentinel: sentinel, threshold: speakerMatcher.threshold)
     }
 
     private func loadModels() async throws -> LoadedModels {

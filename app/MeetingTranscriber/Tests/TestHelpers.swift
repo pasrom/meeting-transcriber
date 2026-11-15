@@ -470,11 +470,11 @@ actor FakeLiveSpeakerMatcher: LiveSpeakerMatching {
     func prepare() async throws {} // protocol conformance — async/throws matches `LiveSpeakerMatching`
 
     // swiftlint:disable:next async_without_await
-    func match(audio _: [Float]) async -> String? { // protocol conformance — `async` matches `LiveSpeakerMatching`
-        guard !canned.isEmpty else { return nil }
+    func match(audio _: [Float]) async -> LiveSpeakerMatch { // protocol conformance — `async` matches `LiveSpeakerMatching`
+        guard !canned.isEmpty else { return .unknown }
         let name = canned[index % canned.count]
         index += 1
-        return name
+        return LiveSpeakerMatch(name: name, nearest: name)
     }
 }
 

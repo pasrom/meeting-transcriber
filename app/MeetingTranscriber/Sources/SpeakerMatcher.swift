@@ -9,7 +9,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Speaker
 
 class SpeakerMatcher {
     private let dbPath: URL
-    private let threshold: Float
+    let threshold: Float
     private let confidenceMargin: Float
     /// Recent-samples FIFO size (was 5 before centroid landed; 3 is enough as
     /// fallback because the centroid is the primary anchor now).

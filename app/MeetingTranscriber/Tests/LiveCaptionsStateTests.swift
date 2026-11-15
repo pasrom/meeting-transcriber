@@ -207,32 +207,26 @@ final class LiveCaptionsStateTests: XCTestCase {
         await assertEventually { !state.hasContent }
     }
 
-    /// For an expiry that must not happen: a woken expiry task runs on the main actor within milliseconds.
-    private func assertStays(
-        file: StaticString = #filePath,
-        line: UInt = #line,
-        _ condition: () -> Bool,
-    ) async {
-        let deadline = ContinuousClock.now + .milliseconds(200)
-        while condition(), ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(1))
-        }
-        XCTAssertTrue(condition(), file: file, line: line)
+    /// A weak slice inside one speaker's turn keeps that speaker when it is also the nearest voice.
+    func testUnmatchedLineKeepsThePreviousSpeakerWhenThatIsItsNearestVoice() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        let first = state.applyFinalized("we really just wanted", channel: .app, awaitingSpeaker: true)
+        state.updateSpeaker("Speaker A", forFinal: first)
+        let weak = state.applyFinalized("to go fast", channel: .app, awaitingSpeaker: true)
+        state.resolveUnmatched(forFinal: weak, nearest: "Speaker A")
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Speaker A"])
+        XCTAssertFalse(state.awaitsSpeaker(lineAt: 1))
     }
 
-    /// A line appended under the channel label and then matched to the running speaker is no new turn.
-    func testRelabelIntoTheRunningTurnKeepsItsEarlierLines() async {
-        let clock = ManualClock()
-        let state = LiveCaptionsState(clock: clock)
+    /// Nearest to someone else, or to nobody: the line may be a new voice, so it keeps the channel label.
+    func testUnmatchedLineNearestToAnotherVoiceKeepsTheChannelLabel() {
+        let state = LiveCaptionsState()
         defer { state.clear() }
-        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
-        let next = state.applyFinalized("second", channel: .app)
-        state.updateSpeaker("Speaker A", forFinal: next)
-        state.applyPartial("still speaking", channel: .app)
-
-        await settle()
-        await clock.advance(by: .seconds(LiveCaptionsState.earlierTurnHold + 1))
-        await assertStays { state.recentFinals.map(\.text) == ["first", "second"] }
+        state.applyFinalized("secrets management", channel: .app, speaker: "Speaker A")
+        state.resolveUnmatched(forFinal: state.applyFinalized("which turned out", channel: .app), nearest: "Speaker B")
+        state.resolveUnmatched(forFinal: state.applyFinalized("to be important", channel: .app), nearest: nil)
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Remote", "Remote"])
     }
 
     /// A split leaves the end of a sentence as a line too short to match; it is the same speaker's.
@@ -257,6 +251,19 @@ final class LiveCaptionsStateTests: XCTestCase {
 
         state.updateSpeaker("Speaker A", forFinal: first)
         XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Speaker A", "Speaker A", "Remote"])
+    }
+
+    /// The overlay keeps a short line in the row before it while the line it inherits from awaits its match.
+    func testShortLineAwaitsTheMatchOfTheLineItInheritsFrom() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
+        let pending = state.applyFinalized("pending", channel: .app, awaitingSpeaker: true)
+        state.inheritSpeaker(forFinal: state.applyFinalized("short", channel: .app))
+        XCTAssertEqual((0 ..< 3).map(state.awaitsSpeaker(lineAt:)), [false, true, true])
+
+        state.updateSpeaker("Speaker A", forFinal: pending)
+        XCTAssertEqual((0 ..< 3).map(state.awaitsSpeaker(lineAt:)), [false, false, false])
     }
 
     func testShortLineDoesNotInheritAcrossChannels() {
@@ -473,6 +480,50 @@ final class LiveCaptionsStateTests: XCTestCase {
 
 @MainActor
 extension LiveCaptionsStateTests {
+    /// For an expiry that must not happen: a woken expiry task runs on the main actor within milliseconds.
+    private func assertStays(
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ condition: () -> Bool,
+    ) async {
+        let deadline = ContinuousClock.now + .milliseconds(200)
+        while condition(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertTrue(condition(), file: file, line: line)
+    }
+
+    /// A line appended under the channel label and then matched to the running speaker is no new turn.
+    func testRelabelIntoTheRunningTurnKeepsItsEarlierLines() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
+        let next = state.applyFinalized("second", channel: .app)
+        state.updateSpeaker("Speaker A", forFinal: next)
+        state.applyPartial("still speaking", channel: .app)
+
+        await settle()
+        await clock.advance(by: .seconds(LiveCaptionsState.earlierTurnHold + 1))
+        await assertStays { state.recentFinals.map(\.text) == ["first", "second"] }
+    }
+
+    /// A line still awaiting its match is no new turn: the turn before it stays.
+    func testLineAwaitingItsSpeakerStartsNoTurn() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
+        state.applyFinalized("second", channel: .app, awaitingSpeaker: true)
+        state.applyPartial("still speaking", channel: .app)
+
+        await settle()
+        await clock.advance(by: .seconds(LiveCaptionsState.earlierTurnHold + 1))
+        await assertStays { state.recentFinals.map(\.text) == ["first", "second"] }
+        XCTAssertTrue(state.awaitsSpeaker(lineAt: 1))
+        XCTAssertFalse(state.awaitsSpeaker(lineAt: 0))
+    }
+
     /// A finished turn stayed above the next speaker's row until the page turn.
     func testEarlierTurnLeavesAfterItsHoldOnceANewSpeakerStarts() async {
         let clock = ManualClock()
@@ -488,5 +539,28 @@ extension LiveCaptionsStateTests {
         XCTAssertEqual(state.recentFinals.map(\.text), ["first", "second", "reply"])
         await clock.advance(by: .milliseconds(1))
         await assertEventually { state.recentFinals.map(\.text) == ["reply"] }
+    }
+
+    func testShortLineDefersEarlierTurnExpiryUntilItsPendingSpeakerMatches() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
+        let pending = state.applyFinalized("pending", channel: .app, awaitingSpeaker: true)
+        state.inheritSpeaker(forFinal: state.applyFinalized("short", channel: .app))
+
+        await clock.advance(by: .seconds(1))
+        state.applyPartial("still speaking", channel: .app)
+        state.updateSpeaker("Speaker B", forFinal: pending)
+
+        // Require a fresh four-second hold after the match, not an expiry scheduled at append time.
+        await waitFor({ await clock.sleepingDeadlines().contains(.seconds(5)) }, timeout: .seconds(1))
+        let deadlines = await clock.sleepingDeadlines()
+        XCTAssertTrue(deadlines.contains(.seconds(5)))
+        await clock.advance(by: .milliseconds(3999))
+        XCTAssertEqual(state.recentFinals.map(\.text), ["first", "pending", "short"])
+        await clock.advance(by: .milliseconds(1))
+        await assertEventually { state.recentFinals.map(\.text) == ["pending", "short"] }
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker B", "Speaker B"])
     }
 }

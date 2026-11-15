@@ -23,11 +23,60 @@ final class LiveSpeakerMatcherTests: XCTestCase {
         // model. Pre-warm fails fast in xctest's sandbox if the model
         // isn't already cached — that's fine, the matcher swallows the
         // error and returns nil.
-        let name = await matcher.match(audio: [Float](repeating: 0.0, count: 16000))
+        let name = await matcher.match(audio: [Float](repeating: 0.0, count: 16000)).name
         XCTAssertNil(
             name,
             "empty speaker DB must resolve to nil (channel-default fallback)",
         )
+    }
+
+    /// With one voice enrolled, an unenrolled guest is far from it and must keep the channel label:
+    /// unbounded, the only enrolled speaker was always the nearest and the guest took their name.
+    func testNearestVoiceFarPastTheThresholdIsNoNearestVoice() {
+        let far = SpeakerMatcher.VerboseMatch(
+            assignedName: "sentinel",
+            topCandidates: [TopCandidate(name: "Speaker A", sample: 0.73, centroid: 0.71)],
+        )
+        XCTAssertEqual(LiveSpeakerMatch(far, sentinel: "sentinel", threshold: 0.40), .unknown)
+    }
+
+    /// Just past the threshold, the nearest voice is kept for the line before it to confirm.
+    func testNearestVoiceJustPastTheThresholdIsKept() {
+        let close = SpeakerMatcher.VerboseMatch(
+            assignedName: "sentinel",
+            topCandidates: [
+                TopCandidate(name: "Speaker A", sample: 0.43, centroid: nil),
+                TopCandidate(name: "Speaker B", sample: 0.80, centroid: nil),
+            ],
+        )
+        XCTAssertEqual(
+            LiveSpeakerMatch(close, sentinel: "sentinel", threshold: 0.40),
+            LiveSpeakerMatch(name: nil, nearest: "Speaker A"),
+        )
+        let matched = SpeakerMatcher.VerboseMatch(assignedName: "Speaker A", topCandidates: close.topCandidates)
+        XCTAssertEqual(LiveSpeakerMatch(matched, sentinel: "sentinel", threshold: 0.40).name, "Speaker A")
+    }
+
+    /// Through `match`, the nearest voice is bounded by the matcher's own threshold. The stored
+    /// embedding's other length puts it at cosine distance 2 from any real one, so only the threshold
+    /// decides: 1.90 leaves it far past the slack, 1.97 within it.
+    func testMatchBoundsTheNearestVoiceByItsMatcherThreshold() async throws {
+        let speech = try Array(AudioMixer.loadAudioFileAsFloat32(url: fixtureURL()).prefix(48000))
+        func match(threshold: Float) async -> LiveSpeakerMatch {
+            let tempDB = FileManager.default.temporaryDirectory
+                .appendingPathComponent("test-cache-nearest-\(UUID()).json")
+            addTeardownBlock { try? FileManager.default.removeItem(at: tempDB) }
+            let speakerMatcher = SpeakerMatcher(dbPath: tempDB, threshold: threshold)
+            speakerMatcher.saveDB([StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]])])
+            let matcher = LiveSpeakerMatcher(
+                speakerMatcher: speakerMatcher, readCachedFrameCount: { nil }, writeCachedFrameCount: { _ in },
+            )
+            return await matcher.match(audio: speech)
+        }
+        let far = await match(threshold: 1.90)
+        let close = await match(threshold: 1.97)
+        XCTAssertEqual(far, .unknown)
+        XCTAssertEqual(close, LiveSpeakerMatch(name: nil, nearest: "Speaker A"))
     }
 
     /// The live matcher loads the same WeSpeaker embedding model as the
@@ -70,7 +119,7 @@ final class LiveSpeakerMatcherTests: XCTestCase {
     /// network blip during the WeSpeaker download doesn't break captions.
     func testMatchReturnsNilWhenAudioIsEmpty() async {
         let (matcher, _) = makeMatcher(slug: "empty-audio")
-        let name = await matcher.match(audio: [])
+        let name = await matcher.match(audio: []).name
         XCTAssertNil(name, "empty audio must resolve to nil")
     }
 
