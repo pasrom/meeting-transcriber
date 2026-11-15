@@ -58,9 +58,17 @@ final class EngineController {
             engine: settings.transcriptionEngine,
             busy: isRecording() || Self.hasWork(queue),
             captionsUseEngine: captionsUseEngine(),
-            drainID: queue?.lastDrainID,
+            drainID: Self.lastDrainID(of: queue),
             queue: queue,
         )
+    }
+
+    /// Its own body on purpose. Read inline in `lifetimeState`, this lookup and
+    /// the first read of the settings shared one getter, whose type-check time
+    /// sat at the limit `Package.swift` sets for a function body and went over
+    /// it on the CI runners.
+    private static func lastDrainID(of queue: PipelineQueue?) -> UUID? {
+        queue?.lastDrainID
     }
 
     private static func hasWork(_ queue: PipelineQueue?) -> Bool {
