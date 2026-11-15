@@ -3,7 +3,8 @@
 # runners on its own.
 #
 # The reasoning lives where the conditions sit: the `hold` step of the
-# `changes` job in quality-and-safety.yml. In short: Dependabot opens its PRs
+# `changes` job in quality-and-safety.yml, and the comment above the `if:` of
+# each label-gated E2E lane. In short: Dependabot opens its PRs
 # as same-repo branches, so the fork exclusion lets them through, and the
 # dependency code they bring would be built and run on a Mini before anyone
 # read it.
@@ -203,6 +204,103 @@ if awk '/^  pull_request:/ { p = 1; next } p && /^  [a-z]/ { p = 0 } p && /types
 else
     bad "quality-and-safety.yml" "its pull_request trigger no longer lists \`labeled\`, so the run-quality label cannot release a held Dependabot PR."
 fi
+
+# --- every self-hosted job a PR can reach ------------------------------------
+
+# Jobs on a self-hosted runner in a workflow a PR event can start, as
+# `<workflow file>:<job>`. Discovered, then compared with the written list
+# below in both directions: a new job is unreviewed until it is listed with
+# its guard, and a listed job that vanished from discovery (renamed, moved to
+# another runner spelling) is a failure rather than a silent pass.
+self_hosted_pr_jobs() {
+    local file="$1"
+    awk '
+        /^on:/ { inon = 1 }
+        /^on:.*(pull_request|workflow_run)/ { pr = 1 }
+        inon && /^  (pull_request|pull_request_target|workflow_run):/ { pr = 1 }
+        /^[^[:space:]#]/ && !/^on:/ { inon = 0 }
+        END { exit pr ? 0 : 1 }
+    ' "$file" || return 0
+    awk "$CI_YAML_JOB_TRACK"'
+        $0 ~ /^[[:space:]]*#/ { next }
+        job != "" && /^    runs-on:/ { inruns = 1; if ($0 ~ /self-hosted/) print job; next }
+        inruns && /^      - / { if ($0 ~ /self-hosted/) print job; next }
+        { inruns = 0 }
+    ' "$file" | sort -u | sed "s|^|${file##*/}:|"
+}
+
+# Control: the discovery sees a self-hosted PR job, in either runs-on
+# spelling, and ignores the same job when no PR event can start it.
+cat > "$TMP/probe.yml" <<'YAML'
+on:
+  pull_request:
+jobs:
+  inline:
+    runs-on: [self-hosted, macOS]
+  listed:
+    runs-on:
+      - self-hosted
+  hosted:
+    runs-on: ubuntu-latest
+YAML
+probe_pr="$(self_hosted_pr_jobs "$TMP/probe.yml" | tr '\n' ' ')"
+sed 's/^  pull_request:$/  push:/' "$TMP/probe.yml" > "$TMP/probe-push.yml"
+probe_push="$(self_hosted_pr_jobs "$TMP/probe-push.yml")"
+if [ "$probe_pr" = "probe.yml:inline probe.yml:listed " ] && [ -z "$probe_push" ]; then
+    ok "discovery_control"
+else
+    bad "discovery_control" "pr='$probe_pr' push='$probe_push'"
+fi
+rm -f "$TMP/probe.yml" "$TMP/probe-push.yml"
+
+SELF_HOSTED_PR_JOBS="e2e-app.yml:e2e-app
+e2e-browser.yml:e2e-browser
+e2e-channel-fault.yml:e2e-channel-fault
+e2e-crash-recovery.yml:e2e-crash-recovery
+e2e.yml:e2e
+quality-and-safety.yml:test-asan
+quality-and-safety.yml:test-tsan"
+
+found=""
+for wf in "$ROOT"/.github/workflows/*.yml; do
+    found="$found$(self_hosted_pr_jobs "$wf")
+"
+done
+found="$(printf '%s' "$found" | sed '/^$/d' | sort)"
+if [ "$found" = "$SELF_HOSTED_PR_JOBS" ]; then
+    ok "self-hosted PR jobs are the reviewed list"
+else
+    bad "self-hosted PR jobs" "a PR event can reach a self-hosted job this test does not guard, or a guarded one moved. Give a new job the Dependabot guard and list it here.
+    listed:
+$SELF_HOSTED_PR_JOBS
+    found:
+$found"
+fi
+
+# The label-gated E2E lanes. A person applies `run-e2e`, but without the
+# actor clause the label would release every later Dependabot push to the
+# branch. All five carry the identical condition, so it is compared whole.
+expected_e2e="github.event_name != 'pull_request' ||
+(
+  contains(github.event.pull_request.labels.*.name, 'run-e2e') &&
+  github.event.pull_request.head.repo.full_name == github.repository &&
+  (github.event.pull_request.user.login != 'dependabot[bot]' || github.triggering_actor != 'dependabot[bot]') &&
+  (github.event.action != 'labeled' || github.event.label.name == 'run-e2e')
+)"
+for entry in $SELF_HOSTED_PR_JOBS; do
+    wf="${entry%%:*}"; job="${entry#*:}"
+    case "$wf" in quality-and-safety.yml) continue ;; esac
+    cond="$(ci_job_condition_text "$ROOT/.github/workflows/$wf" "$job")"
+    if [ "$cond" = "$expected_e2e" ]; then
+        ok "$wf:$job is held for a Dependabot push"
+    else
+        bad "$wf:$job" "its condition is not the guarded one, so a Dependabot push to a labelled branch starts it on a self-hosted runner.
+    expected:
+$expected_e2e
+    actual:
+$cond"
+    fi
+done
 
 rm -f "$TMP/out" "$TMP/summary"
 rmdir "$TMP"
