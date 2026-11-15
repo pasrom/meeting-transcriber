@@ -82,8 +82,11 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         await matcher.complete(with: "Alice")
         await waitFor(captions.recentFinals.last?.speaker == "Alice", timeout: .seconds(1))
 
-        XCTAssertEqual(captions.recentFinals.map(\.text), ["just too short", "line with audio"])
-        XCTAssertEqual(captions.recentFinals.map(\.speaker), ["Remote", "Alice"])
+        XCTAssertEqual(
+            captions.recentFinals.map(\.text),
+            ["line without audio", "single chunk", "just too short", "line with audio"],
+        )
+        XCTAssertEqual(captions.recentFinals.map(\.speaker), ["Remote", "Remote", "Remote", "Alice"])
         let matchCount = await matcher.matchCount
         XCTAssertEqual(matchCount, 1)
         await controller.flush()

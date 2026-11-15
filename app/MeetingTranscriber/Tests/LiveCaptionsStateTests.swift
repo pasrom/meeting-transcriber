@@ -66,18 +66,21 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertEqual(state.recentFinals.count, 1)
         XCTAssertEqual(
             state.recentFinals[0],
-            LiveCaptionLine(channel: .mic, text: "you done.", speaker: "Me", id: 1),
+            LiveCaptionLine(channel: .mic, text: "you done.", speaker: "Me"),
         )
     }
 
-    func testFinalsRotationCapDropsOldestFirst() {
+    /// The overlay joins lines into rows; dropping one line at a time re-wrapped a row on every line.
+    func testFinalsPastTheCapLeaveAllButTheNewestTwoAtOnce() {
         let state = LiveCaptionsState()
-        state.applyFinalized("first", channel: .mic)
-        state.applyFinalized("second", channel: .app)
-        state.applyFinalized("third", channel: .mic)
-        // maxFinalsKept = 2 → first must drop
-        XCTAssertEqual(state.recentFinals.count, LiveCaptionsState.maxFinalsKept)
-        XCTAssertEqual(state.recentFinals.map(\.text), ["second", "third"])
+        let kept = (1 ... 6).map { "line \($0)" }
+        for text in kept {
+            state.applyFinalized(text, channel: .app)
+        }
+        XCTAssertEqual(state.recentFinals.map(\.text), kept)
+
+        state.applyFinalized("newest", channel: .mic)
+        XCTAssertEqual(state.recentFinals.map(\.text), ["line 6", "newest"])
         XCTAssertEqual(state.recentFinals.map(\.channel), [.app, .mic])
     }
 
@@ -161,24 +164,13 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertEqual(state.hypothesisApp, "newest words")
     }
 
-    func testRelabelKeepsTheLineIdAndEqualLinesGetDistinctIds() {
-        let state = LiveCaptionsState()
-        defer { state.clear() }
-        let first = state.applyFinalized("same words", channel: .app)
-        state.applyFinalized("same words", channel: .app)
-        let ids = state.recentFinals.map(\.id)
-        XCTAssertEqual(Set(ids).count, 2, "equal lines must not share a row id")
-
-        state.updateSpeaker("Alice", forFinal: first)
-        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Alice", "Remote"])
-        XCTAssertEqual(state.recentFinals.map(\.id), ids, "a relabel must keep the row's identity")
-    }
-
     func testSpeakerMatchCannotRelabelEvictedOrClearedFinal() {
         let state = LiveCaptionsState()
         defer { state.clear() }
         let evicted = state.applyFinalized("same words", channel: .app)
-        state.applyFinalized("middle", channel: .app)
+        for _ in 1 ..< LiveCaptionsState.maxFinalsKept {
+            state.applyFinalized("middle", channel: .app)
+        }
         let cleared = state.applyFinalized("same words", channel: .app)
         state.updateSpeaker("old speaker", forFinal: evicted)
         XCTAssertEqual(state.recentFinals.map(\.speaker), ["Remote", "Remote"])
