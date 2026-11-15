@@ -88,16 +88,16 @@ extension PipelineQueue {
             return
         }
         do {
-            try await generateProtocol(
+            let outcome = try await generateProtocol(
                 jobID: job.id, transcript: transcript, title: job.meetingTitle,
                 protocolsDir: transcriptPath.deletingLastPathComponent(),
                 speakerNames: job.notesSpeakerNames ?? job.notionExportSpeakerNames ?? [],
                 // A retry owes notes: without a provider it stays on offer.
                 transcriptIsTheOutputWithoutAProvider: false,
             )
-            // `generateProtocol` returns without a word when the provider was
-            // switched to None while the job waited.
-            if protocolGeneratorFactory?() == nil, self.job(withID: job.id)?.hasSavedProtocol == false {
+            // `generateProtocol` records nothing on the job when the provider
+            // was switched to None while the job waited.
+            if outcome == .noProvider, self.job(withID: job.id)?.hasSavedProtocol == false {
                 recordNotesFailure(id: job.id, .noProvider)
                 addWarning(id: job.id, Self.notesRetryNoProviderWarning)
             }
@@ -176,6 +176,17 @@ extension PipelineQueue {
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return text
     }
+}
+
+/// How `PipelineQueue.generateProtocol` ended, as far as a caller has to tell
+/// the ends apart.
+enum ProtocolGenerationOutcome {
+    /// No provider is chosen: no model call was made, and nothing about the
+    /// notes was recorded on the job.
+    case noProvider
+    /// Every other end. What came of it is on the job: the notes, a failure
+    /// or a warning.
+    case attempted
 }
 
 /// What `enqueueNotes(fromTranscripts:)` did with each file it was given.
