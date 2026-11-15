@@ -552,6 +552,17 @@ PRs are excluded from the self-hosted runner.
    specific refusal (a System Events timeout is retried once with a longer
    window first); anything else fails the lane.
 
+   A **screen-locked console session** is the other host condition these lanes
+   tolerate, and the `--screenshot` arm of `e2e-channel-health.sh` with them:
+   locked, no keystroke from outside the app lands, none of its AX windows is
+   found and no screenshot is written, while every grant still reads as given. After their grant
+   checks (and again after a long pipeline wait) they ask
+   `host_skip_if_screen_locked`, which reads `CGSSessionScreenIsLocked` of this
+   user's on-console session from `ioreg -n Root -d1 -a` and skips the same way.
+   An unreadable answer runs the assertion. To keep it from recurring, set
+   System Settings → Lock Screen → "Require password after screen saver begins
+   or display is turned off" to Never for the runner account.
+
 **Launch the app with `open`, never by executing the binary.** TCC answers for
 the process launchd knows, so a bundle started as `"$APP/Contents/MacOS/..." &`
 is asked about an identity the grants were never made against. Measured on the
