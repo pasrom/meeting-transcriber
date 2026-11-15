@@ -363,7 +363,7 @@ final class LiveTranscriptionController {
         } catch {
             // Matcher load failure is non-fatal: the controller still
             // produces captions, just without per-utterance speaker names.
-            // `LiveSpeakerMatcher.match(audio:)` returns nil on cold-load
+            // `LiveSpeakerMatcher.match(audio:)` returns `.unknown` on cold-load
             // errors → channel default fallback at the caption call site.
             logger.warning("speaker matcher prewarm failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -540,13 +540,18 @@ final class LiveTranscriptionController {
                     if self.verboseDiagnostics() {
                         logger.info("[\(logChannel, privacy: .public)] final: \(text, privacy: .private)")
                     }
-                    let sequence = self.captions.applyFinalized(text, channel: channel)
-                    guard audio.count >= Self.minSpeakerMatchSamples else {
+                    let matchable = audio.count >= Self.minSpeakerMatchSamples
+                    let sequence = self.captions.applyFinalized(text, channel: channel, awaitingSpeaker: matchable)
+                    guard matchable else {
                         self.captions.inheritSpeaker(forFinal: sequence)
                         return
                     }
-                    guard let speaker = await self.speakerMatcher.match(audio: audio) else { return }
-                    self.captions.updateSpeaker(speaker, forFinal: sequence)
+                    let match = await self.speakerMatcher.match(audio: audio)
+                    if let name = match.name {
+                        self.captions.updateSpeaker(name, forFinal: sequence)
+                    } else {
+                        self.captions.resolveUnmatched(forFinal: sequence, nearest: match.nearest)
+                    }
                 }
             }
         }
