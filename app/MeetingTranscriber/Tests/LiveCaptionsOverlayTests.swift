@@ -75,6 +75,35 @@ final class LiveCaptionsOverlayTests: XCTestCase {
         XCTAssertEqual(rows.map(\.text), ["we retry and recover", "okay", "then"])
     }
 
+    /// After a voice change the live text starts the new voice's row instead of continuing the
+    /// previous speaker's, and a waiting line already under that voice keeps it.
+    func testVoiceHintStartsTheNewVoicesRow() {
+        let finals = [
+            LiveCaptionLine(channel: .app, text: "what is the gap", speaker: "Speaker A"),
+            LiveCaptionLine(channel: .app, text: "i have", speaker: "Speaker B"),
+        ]
+        let awaiting: (Int) -> Bool = { $0 == 1 }
+        let hint: (LiveCaptionChannel) -> String? = { $0 == .app ? "Speaker B" : nil }
+        let rows = LiveCaptionsOverlay.rows(finals: finals, awaiting: awaiting, voiceHint: hint, hypotheses: [(.app, "no idea")]) { channel in
+            channel == .app ? "Remote" : "Me"
+        }
+        XCTAssertEqual(rows.map(\.speaker), ["Speaker A", "Speaker B"])
+        XCTAssertEqual(rows.map(\.text), ["what is the gap", "i have no idea"])
+    }
+
+    /// The wiring: the live text takes the state's voice hint.
+    func testOverlayStartsTheNewVoicesRowForTheLiveText() throws {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        state.applyFinalized("what is the gap", channel: .app, speaker: "Speaker A")
+        state.voiceChanged(to: "Speaker B", channel: .app)
+        state.applyPartial("i have no idea", channel: .app)
+
+        let overlay = try LiveCaptionsOverlay(state: state).inspect()
+        XCTAssertNoThrow(try overlay.find(text: "Speaker B:"))
+        XCTAssertNoThrow(try overlay.find(text: "i have no idea"))
+    }
+
     /// The wiring: the bar reads which lines await their speaker from the state.
     func testOverlayKeepsALineAwaitingItsSpeakerInTheRowBeforeIt() throws {
         let state = LiveCaptionsState()

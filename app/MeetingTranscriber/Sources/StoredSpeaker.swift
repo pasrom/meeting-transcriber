@@ -155,4 +155,13 @@ struct StoredSpeaker: Codable, Identifiable {
     }
 }
 
+extension SpeakerMatcher {
+    /// Synthetic entries (RPC `seedSpeaker`) carry random embeddings — letting
+    /// them participate in matching would let any caller with RPC access poison
+    /// auto-naming. Drop them before scoring.
+    func matchableSpeakers() -> [StoredSpeaker] {
+        loadDB().filter { !$0.isSynthetic }
+    }
+}
+
 // swiftlint:enable discouraged_optional_collection

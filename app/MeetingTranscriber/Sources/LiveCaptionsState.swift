@@ -129,6 +129,13 @@ final class LiveCaptionsState {
     private var inheritingFinals: Set<Int> = []
     /// Finals whose speaker match is still running; the overlay keeps them in the row before them.
     private var awaitingSpeaker: Set<Int> = []
+    /// Voice the change detector heard take over a channel: the live text shows it, and the next
+    /// final on the channel takes it and ends it.
+    private var voiceHints: [LiveCaptionChannel: String] = [:]
+    /// The final that took a channel's voice hint; it does not inherit from the previous voice's line.
+    private var voiceChangeLines: [LiveCaptionChannel: Int] = [:]
+    /// Such a final too short to match: it takes the outcome of the next match on its channel.
+    private var shortVoiceChangeLines: [LiveCaptionChannel: Int] = [:]
     private var remainingReadingTime: (() -> Duration)?
 
     func applyPartial(_ text: String, channel: LiveCaptionChannel) {
@@ -151,6 +158,11 @@ final class LiveCaptionsState {
         case .app: hypothesisApp = ""
         }
         finalSequence += 1
+        let hinted = voiceHints.removeValue(forKey: channel)
+        if hinted != nil {
+            voiceChangeLines[channel] = finalSequence
+        }
+        let speaker = hinted ?? speaker
         recentFinals.append(LiveCaptionLine(channel: channel, text: text, speaker: speaker))
         if recentFinals.count > Self.maxFinalsKept {
             recentFinals.removeFirst(recentFinals.count - 2)
@@ -171,23 +183,41 @@ final class LiveCaptionsState {
         awaitingSpeaker.remove(sequence)
         guard let start = index(ofFinal: sequence) else { return }
         let channel = recentFinals[start].channel
+        setSpeaker(speaker, fromFinal: sequence, at: start)
+        // A short line after a voice change belongs to the voice matched next, or to no one enrolled.
+        if let short = shortVoiceChangeLines[channel], short < sequence {
+            shortVoiceChangeLines[channel] = nil
+            if let index = index(ofFinal: short) {
+                setSpeaker(speaker, fromFinal: short, at: index)
+            }
+        }
+        scheduleTurnExpiry()
+    }
+
+    /// Sets the line and the lines that inherit from it, even when its match lands after them.
+    private func setSpeaker(_ speaker: String, fromFinal sequence: Int, at start: Int) {
+        let channel = recentFinals[start].channel
         setSpeaker(speaker, at: start)
-        // Lines that inherit from this one follow it, even when its match lands after them.
         var next = start + 1
         while next < recentFinals.count, inheritingFinals.contains(sequence + next - start),
               recentFinals[next].channel == channel {
             setSpeaker(speaker, at: next)
             next += 1
         }
-        scheduleTurnExpiry()
     }
 
     /// For a final too short to match: it is most likely the rest of the sentence before it, so it
     /// shows that line's speaker, now or once that line's match lands. Only when the line before it
     /// is on the same channel.
     func inheritSpeaker(forFinal sequence: Int) {
-        guard let index = index(ofFinal: sequence), index > 0,
-              recentFinals[index - 1].channel == recentFinals[index].channel else { return }
+        guard let index = index(ofFinal: sequence) else { return }
+        let channel = recentFinals[index].channel
+        // The line before is the previous voice's: this one keeps the voice heard since.
+        if voiceChangeLines[channel] == sequence {
+            shortVoiceChangeLines[channel] = sequence
+            return
+        }
+        guard index > 0, recentFinals[index - 1].channel == channel else { return }
         let firstKept = finalSequence - (recentFinals.count - 1)
         inheritingFinals = inheritingFinals.filter { $0 >= firstKept }
         inheritingFinals.insert(sequence)
@@ -203,12 +233,24 @@ final class LiveCaptionsState {
     func resolveUnmatched(forFinal sequence: Int, nearest: String?) {
         awaitingSpeaker.remove(sequence)
         guard let index = index(ofFinal: sequence) else { return }
-        if index > 0, let nearest, recentFinals[index - 1].channel == recentFinals[index].channel,
+        let channel = recentFinals[index].channel
+        if index > 0, let nearest, recentFinals[index - 1].channel == channel,
            recentFinals[index - 1].speaker == nearest {
             updateSpeaker(nearest, forFinal: sequence)
         } else {
-            scheduleTurnExpiry()
+            // Shown under the detector's voice meanwhile; unmatched, it may be someone not enrolled.
+            updateSpeaker(label(for: channel), forFinal: sequence)
         }
+    }
+
+    /// The detector's voice on `channel`, for the live text; nil when none is pending.
+    func voiceHint(for channel: LiveCaptionChannel) -> String? {
+        voiceHints[channel]
+    }
+
+    /// Another enrolled voice took over `channel`: its live text and next line show it.
+    func voiceChanged(to voice: String, channel: LiveCaptionChannel) {
+        voiceHints[channel] = voice
     }
 
     /// True while the speaker match of the line at `index` in `recentFinals` is still running, or that
@@ -289,6 +331,9 @@ final class LiveCaptionsState {
         recentFinals.removeAll()
         inheritingFinals.removeAll()
         awaitingSpeaker.removeAll()
+        voiceHints.removeAll()
+        voiceChangeLines.removeAll()
+        shortVoiceChangeLines.removeAll()
         remainingReadingTime = nil
     }
 

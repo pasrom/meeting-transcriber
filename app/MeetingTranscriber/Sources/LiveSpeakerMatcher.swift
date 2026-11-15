@@ -14,6 +14,9 @@ protocol LiveSpeakerMatching: Sendable {
     /// The matched speaker, or none if no enrolled voice passes the matcher's
     /// threshold + confidence margin.
     func match(audio: [Float]) async -> LiveSpeakerMatch
+    /// The closest enrolled voice of a short window, for `VoiceChangeDetector`; `.unknown` unless
+    /// the model is already loaded and two or more voices are enrolled. Never loads the model.
+    func probe(audio: [Float]) async -> LiveSpeakerMatch
 }
 
 struct LiveSpeakerMatch: Equatable, Sendable {
@@ -21,6 +24,12 @@ struct LiveSpeakerMatch: Equatable, Sendable {
     var name: String?
     /// The closest enrolled voice, when it lies within `nearestSlack` of the match threshold.
     var nearest: String?
+    /// The closest enrolled voice at any distance, for `VoiceChangeDetector`, which applies its own bound.
+    var closest: String?
+    /// Distance to `closest`.
+    var distance: Float?
+    /// How much farther the runner-up is; nil with a single enrolled voice.
+    var margin: Float?
 
     static let unknown = Self()
 
@@ -30,11 +39,15 @@ struct LiveSpeakerMatch: Equatable, Sendable {
 }
 
 extension LiveSpeakerMatch {
+    /// `sentinel` is the label the match was run under; the matcher echoes it back when no voice passes.
     init(_ result: SpeakerMatcher.VerboseMatch, sentinel: String, threshold: Float) {
-        let best = result.topCandidates.first
+        let candidates = result.topCandidates
         self.init(
             name: result.assignedName == sentinel ? nil : result.assignedName,
-            nearest: best.flatMap { $0.hybrid < threshold + Self.nearestSlack ? $0.name : nil },
+            nearest: candidates.first.flatMap { $0.hybrid < threshold + Self.nearestSlack ? $0.name : nil },
+            closest: candidates.first?.name,
+            distance: candidates.first?.hybrid,
+            margin: candidates.count > 1 ? candidates[1].hybrid - candidates[0].hybrid : nil,
         )
     }
 }
@@ -139,6 +152,8 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
     /// latch every future caller.
     private var loadedModels: LoadedModels?
     private var loadingTask: Task<LoadedModels, any Error>?
+    /// Enrolled voices as of the last load or line match; probes read this instead of `speakers.json`.
+    private var probeVoices: [StoredSpeaker] = []
 
     /// `EmbeddingExtractor` is a FluidAudio reference type without declared
     /// `Sendable` conformance. The loader Task constructs it once and hands
@@ -198,6 +213,7 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         do {
             loadedModels = try await task.value
             loadingTask = nil
+            probeVoices = speakerMatcher.matchableSpeakers()
         } catch {
             loadingTask = nil
             throw error
@@ -241,8 +257,26 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         // the same name. Per-call UUID guarantees no collision with any
         // user-chosen name in `speakers.json`.
         let sentinel = UUID().uuidString
-        guard let result = speakerMatcher.matchVerbose(embeddings: [sentinel: embedding])[sentinel] else { return .unknown }
+        probeVoices = speakerMatcher.matchableSpeakers()
+        guard let result = speakerMatcher.matchVerbose(embeddings: [sentinel: embedding], against: probeVoices)[sentinel]
+        else { return .unknown }
         return LiveSpeakerMatch(result, sentinel: sentinel, threshold: speakerMatcher.threshold)
+    }
+
+    /// With fewer than two voices the closest is always the same one, so no change can be found.
+    func probe(audio: [Float]) -> LiveSpeakerMatch {
+        guard probeVoices.count >= 2, let models = loadedModels,
+              let embedding = try? models.extractor.getEmbeddings(audio: audio, masks: models.allOnesMask).first,
+              !embedding.allSatisfy({ $0 == 0 })
+        else { return .unknown }
+        let scored = probeVoices
+            .map { (name: $0.name, distance: SpeakerMatcher.distance(query: embedding, speaker: $0)) }
+            .sorted { $0.distance < $1.distance }
+        return LiveSpeakerMatch(
+            closest: scored[0].name,
+            distance: scored[0].distance,
+            margin: scored[1].distance - scored[0].distance,
+        )
     }
 
     private func loadModels() async throws -> LoadedModels {
