@@ -242,6 +242,19 @@ a notes-only retry after the relaunch. Nothing retries by itself.
 Such a job stays in the queue, past the 60-second cleanup and across a restart,
 until it is retried or dismissed in the menu.
 
+The same holds for a notes-only job (a retry, or one from
+`POST /v1/jobs/notes/generate`) that ended `done` without notes for one of two
+reasons, each named by a warning on the job: the meeting notes provider was
+switched to None while the job waited ("Choose a meeting notes provider in
+Settings → Output to make the meeting notes"), or the transcript could not be
+read when the job ran ("The saved transcript could not be read, so no meeting
+notes were made"). Both stay in the queue and can be retried through this
+route. The retry is refused with `409` while no provider is chosen or the
+transcript file is missing. A transcript that is there but cannot be read
+(blank, not UTF-8, or too large) is accepted with `200` and ends `done` with
+the same warning again, so a client should read the job's warnings rather
+than retry until the answer changes.
+
 Responses:
 
 - `200 OK` with the job's [JobStatusDTO](#jobstatusdto) (`state: waiting`).
@@ -298,6 +311,10 @@ Responses:
   was switched to None while it waited, ends `done` without notes and with a
   warning that says why; notes are never overwritten. `protocolPath` is what
   tells a job that saved notes from one that did not: it is set only then.
+  A job that ended for the provider or the unreadable transcript, or whose
+  model call failed, stays in the queue and can be retried with
+  `POST /v1/jobs/<id>/notes/retry` (see above); one whose
+  transcript gained notes leaves the queue like any finished job.
   The request posts no user notification; the response is the answer.
 - `400 Bad Request` if `paths` is missing/empty or the body is undecodable.
 - `409 Conflict` if the meeting notes provider is None (Settings → Output):
