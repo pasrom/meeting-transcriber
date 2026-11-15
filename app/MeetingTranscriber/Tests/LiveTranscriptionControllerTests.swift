@@ -120,6 +120,30 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         await controller.flush()
     }
 
+    /// The wiring: a voice change from the pipeline reaches the captions.
+    func testVoiceChangeEventSetsTheChannelsVoiceHint() async {
+        let captions = LiveCaptionsState()
+        defer { captions.clear() }
+        let probe = CaptionEventProbe()
+        let factory: LiveTranscriptionController.NemotronPipelineFactory = { _, _, makeSink in
+            probe.appSink = makeSink(.app)
+            return (CaptionDeliveryPipeline(), CaptionDeliveryPipeline())
+        }
+        let controller = LiveTranscriptionController(
+            engine: nil,
+            vad: FluidVAD(threshold: 0.5),
+            captions: captions,
+            speakerMatcher: SuspendedCaptionSpeakerMatcher(),
+            engineLanguage: "de",
+            nemotronPipelineFactory: factory,
+        )
+        await controller.prepare()
+        probe.appSink?(.voiceChanged("Speaker A"))
+        await waitFor(captions.voiceHint(for: .app) == "Speaker A", timeout: .seconds(1))
+        XCTAssertEqual(captions.voiceHint(for: .app), "Speaker A")
+        await controller.flush()
+    }
+
     func testFinalWithLessThanASecondOfAudioSkipsSpeakerMatching() async {
         let captions = LiveCaptionsState()
         defer { captions.clear() }
@@ -299,6 +323,10 @@ private actor SuspendedCaptionSpeakerMatcher: LiveSpeakerMatching {
     private(set) var matchCount = 0
 
     func prepare() {}
+
+    func probe(audio _: [Float]) -> LiveSpeakerMatch {
+        .unknown
+    }
 
     func match(audio _: [Float]) async -> LiveSpeakerMatch {
         matchCount += 1

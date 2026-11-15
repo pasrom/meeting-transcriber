@@ -188,6 +188,7 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
             switch event {
             case let .partial(text): _partials.append(Partial(text: text))
             case let .finalized(text, audio): _finals.append(Final(text: text, audio: audio))
+            case .voiceChanged: break
             }
         }
     }

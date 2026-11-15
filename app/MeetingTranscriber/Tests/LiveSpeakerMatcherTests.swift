@@ -37,7 +37,7 @@ final class LiveSpeakerMatcherTests: XCTestCase {
             assignedName: "sentinel",
             topCandidates: [TopCandidate(name: "Speaker A", sample: 0.73, centroid: 0.71)],
         )
-        XCTAssertEqual(LiveSpeakerMatch(far, sentinel: "sentinel", threshold: 0.40), .unknown)
+        XCTAssertNil(LiveSpeakerMatch(far, sentinel: "sentinel", threshold: 0.40).nearest)
     }
 
     /// Just past the threshold, the nearest voice is kept for the line before it to confirm.
@@ -49,10 +49,9 @@ final class LiveSpeakerMatcherTests: XCTestCase {
                 TopCandidate(name: "Speaker B", sample: 0.80, centroid: nil),
             ],
         )
-        XCTAssertEqual(
-            LiveSpeakerMatch(close, sentinel: "sentinel", threshold: 0.40),
-            LiveSpeakerMatch(name: nil, nearest: "Speaker A"),
-        )
+        let kept = LiveSpeakerMatch(close, sentinel: "sentinel", threshold: 0.40)
+        XCTAssertNil(kept.name)
+        XCTAssertEqual(kept.nearest, "Speaker A")
         let matched = SpeakerMatcher.VerboseMatch(assignedName: "Speaker A", topCandidates: close.topCandidates)
         XCTAssertEqual(LiveSpeakerMatch(matched, sentinel: "sentinel", threshold: 0.40).name, "Speaker A")
     }
@@ -75,8 +74,86 @@ final class LiveSpeakerMatcherTests: XCTestCase {
         }
         let far = await match(threshold: 1.90)
         let close = await match(threshold: 1.97)
-        XCTAssertEqual(far, .unknown)
-        XCTAssertEqual(close, LiveSpeakerMatch(name: nil, nearest: "Speaker A"))
+        XCTAssertNil(far.nearest)
+        XCTAssertNil(close.name)
+        XCTAssertEqual(close.nearest, "Speaker A")
+    }
+
+    /// With one voice enrolled the closest is always that voice, so a probe names no one; the
+    /// stored embeddings' other length puts both voices at the same distance from any real one.
+    func testProbeNamesNoOneWithFewerThanTwoEnrolledVoices() async throws {
+        let speech = try Array(AudioMixer.loadAudioFileAsFloat32(url: fixtureURL()).prefix(24000))
+        func probe(voices: [String]) async throws -> LiveSpeakerMatch {
+            let tempDB = FileManager.default.temporaryDirectory
+                .appendingPathComponent("test-cache-probe-\(UUID()).json")
+            addTeardownBlock { try? FileManager.default.removeItem(at: tempDB) }
+            let speakerMatcher = SpeakerMatcher(dbPath: tempDB)
+            speakerMatcher.saveDB(voices.map { StoredSpeaker(name: $0, embeddings: [[1, 0, 0]]) })
+            let matcher = LiveSpeakerMatcher(
+                speakerMatcher: speakerMatcher, readCachedFrameCount: { nil }, writeCachedFrameCount: { _ in },
+            )
+            try await matcher.prepare()
+            return await matcher.probe(audio: speech)
+        }
+        let one = try await probe(voices: ["Speaker A"])
+        let two = try await probe(voices: ["Speaker A", "Speaker B"])
+        XCTAssertEqual(one, .unknown)
+        XCTAssertNotNil(two.closest)
+        XCTAssertEqual(two.margin, 0)
+    }
+
+    /// A probe runs inside the caption ingest: it must never start a model load, which a failed
+    /// load would otherwise retry on every probe while that channel's captions wait.
+    func testProbeNeverLoadsTheModel() async {
+        let loads = RecordingModelLoaders()
+        let (matcher, _) = makeMatcher(slug: "probe-no-load", prepopulate: 589, modelLoaders: loads.loaders)
+        let result = await matcher.probe(audio: [Float](repeating: 0.1, count: 24000))
+        XCTAssertEqual(result, .unknown)
+        XCTAssertEqual(loads.embeddingUnits, [])
+        XCTAssertEqual(loads.diarizerUnits, [])
+    }
+
+    /// A probe names the closest voice at any distance and its lead over the runner-up, whatever the
+    /// order the voices are stored in.
+    func testProbeRanksTheEnrolledVoicesByDistance() {
+        let cases: [(distances: [(name: String, distance: Float)], expected: LiveSpeakerMatch)] = [
+            ([("A", 0.3), ("B", 0.7)], LiveSpeakerMatch(closest: "A", distance: 0.3, margin: 0.4)),
+            ([("B", 0.7), ("A", 0.3)], LiveSpeakerMatch(closest: "A", distance: 0.3, margin: 0.4)),
+            ([("C", 0.9), ("A", 0.8), ("B", 0.55)], LiveSpeakerMatch(closest: "B", distance: 0.55, margin: 0.25)),
+            ([("A", 0.2)], .unknown),
+            ([], .unknown),
+        ]
+        for (distances, expected) in cases {
+            let result = LiveSpeakerMatch(probing: distances)
+            XCTAssertEqual(result.closest, expected.closest, "\(distances)")
+            XCTAssertEqual(result.distance, expected.distance, "\(distances)")
+            XCTAssertEqual(result.margin ?? -1, expected.margin ?? -1, accuracy: 1e-6, "\(distances)")
+            XCTAssertNil(result.name)
+            XCTAssertNil(result.nearest)
+        }
+    }
+
+    /// A line match refreshes the voices a probe scores against, so a voice deleted in Settings
+    /// stops being probed from the next line match on.
+    func testALineMatchRefreshesTheVoicesAProbeReads() async throws {
+        let speech = try Array(AudioMixer.loadAudioFileAsFloat32(url: fixtureURL()).prefix(24000))
+        let tempDB = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-cache-probe-refresh-\(UUID()).json")
+        addTeardownBlock { try? FileManager.default.removeItem(at: tempDB) }
+        SpeakerMatcher(dbPath: tempDB)
+            .saveDB(["Speaker A", "Speaker B"].map { StoredSpeaker(name: $0, embeddings: [[1, 0, 0]]) })
+        let matcher = LiveSpeakerMatcher(
+            speakerMatcher: SpeakerMatcher(dbPath: tempDB), readCachedFrameCount: { nil }, writeCachedFrameCount: { _ in },
+        )
+        try await matcher.prepare()
+        // Settings deletes a voice: written through another matcher, as the app's own is.
+        SpeakerMatcher(dbPath: tempDB).saveDB([StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]])])
+        let kept = await matcher.probe(audio: speech)
+        XCTAssertNotNil(kept.closest, "probes keep the voices of the last load until a line match")
+
+        _ = await matcher.match(audio: speech)
+        let refreshed = await matcher.probe(audio: speech)
+        XCTAssertEqual(refreshed, .unknown)
     }
 
     /// The live matcher loads the same WeSpeaker embedding model as the

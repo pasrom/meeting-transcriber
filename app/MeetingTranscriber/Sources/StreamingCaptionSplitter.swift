@@ -50,6 +50,21 @@ struct StreamingCaptionSplitter {
         return Update(finals: finals, hypothesis: hypothesis)
     }
 
+    /// Commits the uncommitted words of `prefix`, an earlier state of the running transcript, as one
+    /// line: the voice changed after them. A word the running transcript continues goes to the next line.
+    mutating func cut(_ prefix: String) -> String? {
+        var endOffset = prefix.count
+        if prefix.last?.isWhitespace == false, lastTranscript.hasPrefix(prefix),
+           lastTranscript.dropFirst(endOffset).first?.isWhitespace == false {
+            endOffset = prefix.lastIndex(where: \.isWhitespace).map { prefix.distance(from: prefix.startIndex, to: $0) } ?? 0
+        }
+        guard endOffset > committedCharacters else { return nil }
+        let line = String(prefix.dropFirst(committedCharacters).prefix(endOffset - committedCharacters))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        committedCharacters = endOffset
+        return line.isEmpty ? nil : line
+    }
+
     mutating func reset() {
         committedCharacters = 0
         lastTranscript = ""
