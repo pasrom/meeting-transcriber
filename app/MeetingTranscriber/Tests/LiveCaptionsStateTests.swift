@@ -211,6 +211,39 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertEqual(state.recentFinals.map(\.text), ["first", "second"])
     }
 
+    /// A split leaves the end of a sentence as a line too short to match; it is the same speaker's.
+    func testShortLineTakesTheSpeakerOfTheLineBeforeIt() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        let first = state.applyFinalized("so that was console then", channel: .app)
+        state.updateSpeaker("Speaker A", forFinal: first)
+        state.inheritSpeaker(forFinal: state.applyFinalized("terraform", channel: .app))
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Speaker A"])
+    }
+
+    /// The match of the line before usually lands after the short line has arrived.
+    func testShortLinesFollowAMatchThatLandsAfterThem() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        let first = state.applyFinalized("so that was console then", channel: .app)
+        state.inheritSpeaker(forFinal: state.applyFinalized("terraform", channel: .app))
+        state.inheritSpeaker(forFinal: state.applyFinalized("yes", channel: .app))
+        state.applyFinalized("a matched line of its own", channel: .app)
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Remote", "Remote", "Remote", "Remote"])
+
+        state.updateSpeaker("Speaker A", forFinal: first)
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Speaker A", "Speaker A", "Remote"])
+    }
+
+    func testShortLineDoesNotInheritAcrossChannels() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        let app = state.applyFinalized("a remote sentence", channel: .app)
+        state.updateSpeaker("Speaker A", forFinal: app)
+        state.inheritSpeaker(forFinal: state.applyFinalized("okay", channel: .mic))
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Me"])
+    }
+
     // MARK: - Silence deadlines
 
     func testFinalReadingHoldHasFourSecondFloor() async {

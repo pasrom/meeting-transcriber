@@ -55,6 +55,37 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         await controller.flush()
     }
 
+    /// The wiring: a line too short to match shows the name the line before it gets.
+    func testFinalWithLessThanASecondOfAudioTakesThePreviousLinesSpeaker() async {
+        let captions = LiveCaptionsState()
+        defer { captions.clear() }
+        let matcher = SuspendedCaptionSpeakerMatcher()
+        let probe = CaptionEventProbe()
+        let factory: LiveTranscriptionController.NemotronPipelineFactory = { _, _, makeSink in
+            probe.appSink = makeSink(.app)
+            return (CaptionDeliveryPipeline(), CaptionDeliveryPipeline())
+        }
+        let controller = LiveTranscriptionController(
+            engine: nil,
+            vad: FluidVAD(threshold: 0.5),
+            captions: captions,
+            speakerMatcher: matcher,
+            engineLanguage: "de",
+            nemotronPipelineFactory: factory,
+        )
+        await controller.prepare()
+        probe.appSink?(.finalized(text: "so that was console then", audio: Self.matchableAudio))
+        probe.appSink?(.finalized(text: "terraform", audio: [Float](repeating: 0.1, count: 4096)))
+        await matcher.waitUntilMatching()
+        await matcher.complete(with: "Speaker A")
+        await waitFor(captions.recentFinals.first?.speaker == "Speaker A", timeout: .seconds(1))
+
+        XCTAssertEqual(captions.recentFinals.map(\.speaker), ["Speaker A", "Speaker A"])
+        let matchCount = await matcher.matchCount
+        XCTAssertEqual(matchCount, 1)
+        await controller.flush()
+    }
+
     func testFinalWithLessThanASecondOfAudioSkipsSpeakerMatching() async {
         let captions = LiveCaptionsState()
         defer { captions.clear() }
