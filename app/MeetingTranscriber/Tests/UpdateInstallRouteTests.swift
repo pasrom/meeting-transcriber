@@ -4,13 +4,16 @@ import XCTest
 
 @MainActor
 final class UpdateInstallRouteTests: XCTestCase {
+    private static let dmgLink = "https://github.com/pasrom/meeting-transcriber/releases/download/v1.0.0/app.dmg"
+    private static let releasesPage = "https://github.com/pasrom/meeting-transcriber/releases"
+
     private func release(prerelease: Bool = false, dmg: Bool = true) throws -> ReleaseInfo {
         try ReleaseInfo(
             tagName: prerelease ? "v1.0.0-rc1" : "v1.0.0",
             name: "Release",
             prerelease: prerelease,
             htmlURL: XCTUnwrap(URL(string: "https://github.com/pasrom/meeting-transcriber/releases/tag/v1.0.0")),
-            dmgURL: dmg ? URL(string: "https://example.com/app.dmg") : nil,
+            dmgURL: dmg ? URL(string: Self.dmgLink) : nil,
         )
     }
 
@@ -60,7 +63,7 @@ final class UpdateInstallRouteTests: XCTestCase {
         let route = try UpdateInstallRoute.resolve(
             update: release(prerelease: true), installedCask: "meeting-transcriber",
         )
-        try XCTAssertEqual(route, .download(XCTUnwrap(URL(string: "https://example.com/app.dmg"))))
+        try XCTAssertEqual(route, .download(XCTUnwrap(URL(string: Self.dmgLink))))
     }
 
     /// The beta cask is carried forward on stable releases too.
@@ -75,13 +78,70 @@ final class UpdateInstallRouteTests: XCTestCase {
 
     func testDMGInstallGetsDownload() throws {
         let route = try UpdateInstallRoute.resolve(update: release(), installedCask: nil)
-        try XCTAssertEqual(route, .download(XCTUnwrap(URL(string: "https://example.com/app.dmg"))))
+        try XCTAssertEqual(route, .download(XCTUnwrap(URL(string: Self.dmgLink))))
     }
 
     func testDownloadFallsBackToReleasePageWithoutDMG() throws {
         let update = try release(dmg: false)
         let route = UpdateInstallRoute.resolve(update: update, installedCask: nil)
         XCTAssertEqual(route, .download(update.htmlURL))
+    }
+
+    /// The release JSON decides what gets opened, so a link that is not an
+    /// https github.com URL must never reach the workspace.
+    func testUntrustedDMGLinkFallsBackToReleasePage() throws {
+        let update = try ReleaseInfo(
+            tagName: "v1.0.0", name: "Release", prerelease: false,
+            htmlURL: XCTUnwrap(URL(string: "https://github.com/pasrom/meeting-transcriber/releases/tag/v1.0.0")),
+            dmgURL: URL(string: "https://evil.example/app.dmg"),
+        )
+        let route = UpdateInstallRoute.resolve(update: update, installedCask: nil)
+        XCTAssertEqual(route, .download(update.htmlURL))
+    }
+
+    func testUntrustedLinksFallBackToRepositoryReleases() throws {
+        let update = try ReleaseInfo(
+            tagName: "v1.0.0", name: "Release", prerelease: false,
+            htmlURL: XCTUnwrap(URL(string: "file:///Applications/Calculator.app")),
+            dmgURL: URL(string: "http://github.com/pasrom/meeting-transcriber/releases/download/v1.0.0/app.dmg"),
+        )
+        let route = UpdateInstallRoute.resolve(update: update, installedCask: nil)
+        try XCTAssertEqual(route, .download(XCTUnwrap(URL(string: Self.releasesPage))))
+    }
+
+    // MARK: - isTrustedReleaseURL
+
+    func testTrustedReleaseURLAcceptsGitHubReleaseLinks() throws {
+        for link in [
+            "https://github.com/pasrom/meeting-transcriber/releases/tag/v1.0.0",
+            Self.dmgLink,
+            "HTTPS://GitHub.com/pasrom/meeting-transcriber/releases",
+        ] {
+            try XCTAssertTrue(UpdateInstallRoute.isTrustedReleaseURL(XCTUnwrap(URL(string: link))), link)
+        }
+    }
+
+    func testTrustedReleaseURLRejectsEverythingElse() throws {
+        for link in [
+            "http://github.com/pasrom/meeting-transcriber/releases",
+            "https://evil.example/app.dmg",
+            "https://github.com.evil.example/app.dmg",
+            "https://evilgithub.com/app.dmg",
+            "https://objects.githubusercontent.com/app.dmg",
+            "https://github.com@evil.example/",
+            "https://user:pass@github.com/pasrom/meeting-transcriber/releases",
+            "https://github.com:8443/pasrom/meeting-transcriber/releases",
+            "javascript:alert(1)",
+            "file:///Applications/Calculator.app",
+            "x-apple.systempreferences:com.apple.preference.security",
+        ] {
+            try XCTAssertFalse(UpdateInstallRoute.isTrustedReleaseURL(XCTUnwrap(URL(string: link))), link)
+        }
+    }
+
+    func testReleasesPageIsTrusted() {
+        XCTAssertTrue(UpdateInstallRoute.isTrustedReleaseURL(UpdateInstallRoute.releasesPage))
+        XCTAssertEqual(UpdateInstallRoute.releasesPage.absoluteString, Self.releasesPage)
     }
 
     // MARK: - perform
