@@ -97,7 +97,7 @@ final class LiveCaptionsState {
     /// Cap on `recentFinals` length. The overlay joins a speaker's lines into one
     /// row, so past the cap all but the newest two lines go at once: dropping one line
     /// at a time would re-wrap that row on every line. The second keeps a line before
-    /// the newest for it to join.
+    /// the newest for it to join and take its speaker from.
     static let maxFinalsKept = 6
 
     /// How long the lines of a finished turn stay above the next speaker's row.
@@ -125,6 +125,8 @@ final class LiveCaptionsState {
     private var silenceTask: Task<Void, Never>?
     /// Sequence of the first final of the newest turn an expiry was scheduled for.
     private var scheduledTurnStart = 0
+    /// Finals too short to match that take the speaker of the line before them.
+    private var inheritingFinals: Set<Int> = []
     private var remainingReadingTime: (() -> Duration)?
 
     func applyPartial(_ text: String, channel: LiveCaptionChannel) {
@@ -152,14 +154,46 @@ final class LiveCaptionsState {
         return finalSequence
     }
 
-    /// A late match changes only its retained line, never a newer hypothesis or reading deadline.
+    /// A late match updates retained and inheriting lines without changing hypotheses or the reading deadline.
     func updateSpeaker(_ speaker: String, forFinal sequence: Int) {
+        guard let start = index(ofFinal: sequence) else { return }
+        let channel = recentFinals[start].channel
+        setSpeaker(speaker, at: start)
+        // Lines that inherit from this one follow it, even when its match lands after them.
+        var next = start + 1
+        while next < recentFinals.count, inheritingFinals.contains(sequence + next - start),
+              recentFinals[next].channel == channel {
+            setSpeaker(speaker, at: next)
+            next += 1
+        }
+        scheduleTurnExpiry()
+    }
+
+    /// For a final too short to match: it is most likely the rest of the sentence before it, so it
+    /// shows that line's speaker, now or once that line's match lands. Only when the line before it
+    /// is on the same channel.
+    func inheritSpeaker(forFinal sequence: Int) {
+        guard let index = index(ofFinal: sequence), index > 0,
+              recentFinals[index - 1].channel == recentFinals[index].channel else { return }
+        let firstKept = finalSequence - (recentFinals.count - 1)
+        inheritingFinals = inheritingFinals.filter { $0 >= firstKept }
+        inheritingFinals.insert(sequence)
+        let previous = recentFinals[index - 1].speaker
+        if previous != label(for: recentFinals[index].channel) {
+            setSpeaker(previous, at: index)
+            scheduleTurnExpiry()
+        }
+    }
+
+    private func index(ofFinal sequence: Int) -> Int? {
         let distance = finalSequence - sequence
-        guard distance >= 0, distance < recentFinals.count else { return }
-        let index = recentFinals.count - 1 - distance
+        guard distance >= 0, distance < recentFinals.count else { return nil }
+        return recentFinals.count - 1 - distance
+    }
+
+    private func setSpeaker(_ speaker: String, at index: Int) {
         let line = recentFinals[index]
         recentFinals[index] = LiveCaptionLine(channel: line.channel, text: line.text, speaker: speaker)
-        scheduleTurnExpiry()
     }
 
     /// Sequence of the first final in the trailing run of one channel and speaker: the current turn.
@@ -217,6 +251,7 @@ final class LiveCaptionsState {
         hypothesisMic = ""
         hypothesisApp = ""
         recentFinals.removeAll()
+        inheritingFinals.removeAll()
         remainingReadingTime = nil
     }
 
