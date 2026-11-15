@@ -124,6 +124,17 @@
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 403)
         }
 
+        func testNullOriginReturns403() async throws {
+            // file://, data: and sandboxed-iframe pages send `Origin: null`.
+            let base = try await startServer()
+            var headers = authHeader
+            headers["Origin"] = "null"
+            let (_, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("healthz"), headers: headers),
+            )
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 403)
+        }
+
         func testStateReturnsValidJSON() async throws {
             let snapshot = RPCStateSnapshot(
                 pipeline: .init(isProcessing: true, activeJobCount: 2, waitingJobCount: 0, pendingNamingJobCount: 1),

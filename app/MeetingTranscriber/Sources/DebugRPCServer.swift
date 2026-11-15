@@ -324,7 +324,9 @@
         /// Returns a rejection response (403/401) when a check fails, or nil
         /// when the request may proceed.
         private func rejectionForFailedGuards(_ request: HTTPRequest) -> HTTPResponse? {
-            if let origin = request.headers["origin"], !origin.isEmpty, origin != "null" {
+            // Any non-empty Origin is a browser, including the literal "null" that
+            // file://, data: and sandboxed-iframe pages send.
+            if let origin = request.headers["origin"], !origin.isEmpty {
                 return HTTPResponse.forbidden()
             }
             let hostPort = boundPort ?? port.rawValue

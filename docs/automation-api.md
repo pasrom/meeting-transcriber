@@ -40,7 +40,7 @@ Two layers of defense, both enforced on every request:
    server off then on rotates the token (invalidating any previously leaked
    value). A missing or wrong token returns `401`. Comparison is constant-time.
 2. **Origin / Host guard.** Any request carrying a non-empty browser `Origin`
-   header (other than the literal `null`) is rejected with `403`, which blocks
+   header, the literal `null` included, is rejected with `403`, which blocks
    CSRF and DNS-rebinding from a page running locally. The `Host` header, when
    present, must be `127.0.0.1` or `localhost` (with or without the port), else
    `403`. The match is exact and case-sensitive (`Host: LOCALHOST:9876` is
