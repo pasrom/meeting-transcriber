@@ -245,6 +245,46 @@ final class NotesFromTranscriptTests: XCTestCase {
         XCTAssertEqual(PipelineQueue.doneNotification(for: job, announceNotesFailure: true).title, "Meeting Notes Failed")
     }
 
+    /// The provider switched to None while the model was writing, and the
+    /// call failed: the reason is the failure of the call, which is what
+    /// `generateProtocol` recorded, not the provider asked about afterwards.
+    func testAProviderSwitchedOffDuringTheCallDoesNotReplaceTheReason() async throws {
+        var providerOn = true
+        let generator = MockProtocolGen()
+        generator.shouldThrow = true
+        generator.errorToThrow = ProtocolError.emptyProtocol
+        generator.onGenerate = { providerOn = false }
+        let queue = makeQueue { providerOn ? generator : nil }
+        try queue.enqueueNotes(fromTranscripts: [transcript("20261030_0900_standup")])
+
+        await queue.awaitProcessing()
+
+        let job = try XCTUnwrap(queue.jobs.first)
+        XCTAssertEqual(job.notesFailure, .empty)
+        XCTAssertFalse(job.warnings.contains(PipelineQueue.notesRetryNoProviderWarning), "\(job.warnings)")
+    }
+
+    /// The same switch while notes appeared next to the transcript: the job
+    /// ended because notes exist, so it has no failure and nothing to retry.
+    func testNotesThatAppearedAreNotAMissingProvider() async throws {
+        var providerOn = true
+        let generator = MockProtocolGen()
+        let notes = dir.appendingPathComponent("20261030_0900_standup.md")
+        generator.onGenerate = {
+            try? "# By hand".write(to: notes, atomically: true, encoding: .utf8)
+            providerOn = false
+        }
+        let queue = makeQueue { providerOn ? generator : nil }
+        let id = try XCTUnwrap(queue.enqueueNotes(fromTranscripts: [transcript("20261030_0900_standup")]).queued.first)
+
+        await queue.awaitProcessing()
+
+        let job = try XCTUnwrap(queue.jobs.first)
+        XCTAssertNil(job.notesFailure)
+        XCTAssertEqual(job.warnings, [PipelineQueue.notesWrittenMeanwhileWarning])
+        XCTAssertFalse(queue.canRetryMeetingNotes(id: id), "a job whose notes exist is held for a retry")
+    }
+
     /// Ended without notes because they were already there: nothing was
     /// saved, and the notification says so.
     func testANotesJobThatFindsNotesIsNotAnnouncedAsSaved() async throws {
@@ -365,6 +405,14 @@ final class NotesFromTranscriptTests: XCTestCase {
     private func makeQueue(engine: MockEngine = MockEngine(), generator: MockProtocolGen = MockProtocolGen()) -> PipelineQueue {
         PipelineQueue(
             engine: engine, diarizationFactory: { MockDiarization() }, protocolGeneratorFactory: { generator },
+            outputDir: dir, logDir: dir,
+        )
+    }
+
+    /// A queue whose provider the test can switch off while a job runs.
+    private func makeQueue(factory: @escaping () -> (any ProtocolGenerating)?) -> PipelineQueue {
+        PipelineQueue(
+            engine: MockEngine(), diarizationFactory: { MockDiarization() }, protocolGeneratorFactory: factory,
             outputDir: dir, logDir: dir,
         )
     }

@@ -1091,19 +1091,24 @@ extension PipelineQueue {
     /// `transcriptIsTheOutputWithoutAProvider: false` for a run that was
     /// started with a provider: resumed after the provider was switched off,
     /// it still owes a protocol, so its transcript does not stand in for one.
+    ///
+    /// The result says whether a provider was there when this asked for one.
+    /// A caller that needs to know reads it instead of asking the factory
+    /// again: the setting can change while the model writes.
+    @discardableResult
     func generateProtocol( // swiftlint:disable:this function_parameter_count
         jobID: UUID, transcript: String, title: String, protocolsDir: URL,
         speakerNames: [String], transcriptIsTheOutputWithoutAProvider: Bool,
-    ) async throws(CancellationError) {
+    ) async throws(CancellationError) -> ProtocolGenerationOutcome {
         // No generator and no LLM call for a job that is already gone.
         try ensureStillQueued(jobID)
-        guard let job = job(withID: jobID) else { return }
+        guard let job = job(withID: jobID) else { return .attempted }
         guard let protocolGeneratorFactory, let generator = protocolGeneratorFactory() else {
             // No protocol, so no export, but an export that is switched on and
             // cannot run is still worth a reason on the job.
             resolveNotionExport(jobID: jobID)
             if transcriptIsTheOutputWithoutAProvider { markOutputWritten(jobID: jobID, output: job.transcriptPath) }
-            return
+            return .noProvider
         }
         let shortID = PipelineJob.shortID(for: jobID)
         // Reuse the basename fixed when the transcript was saved (persisted as
@@ -1148,7 +1153,7 @@ extension PipelineQueue {
             recordNotesFailure(id: jobID, MeetingNotesFailure(error))
             recordNotesSpeakerNames(id: jobID, speakerNames)
             resolveNotionExport(jobID: jobID)
-            return
+            return .attempted
         }
 
         // A job cancelled or removed during the call gets no protocol file and
@@ -1166,12 +1171,13 @@ extension PipelineQueue {
             )
         }
         // Checked again after the model call, which can take many minutes.
-        if notesAppearedDuringTheCall(of: job, basename: basename, protocolsDir: protocolsDir) { return }
+        if notesAppearedDuringTheCall(of: job, basename: basename, protocolsDir: protocolsDir) { return .attempted }
 
         saveGeneratedNotes(
             protocolMD, transcript: outputOptions.includeFullTranscriptInProtocol ? transcript : nil,
             basename: basename, jobID: jobID, protocolsDir: protocolsDir, speakerNames: speakerNames,
         )
+        return .attempted
     }
 
     /// Saves the notes the model wrote and queues their Notion export when one
