@@ -386,7 +386,7 @@ jobs:
         needs.changes.outputs.verdict == 'true'
       )
     runs-on: [self-hosted, macOS, ARM64]
-    # Generous next to the 3 min observed, but the same budget as TSan keeps
+    # Generous next to the 3 min observed, but a wide budget keeps
     # a cold-cache build from being the thing that turns the gate red: the
     # pre-warm and test steps carry 20 min each and sanitizer-prep 10, 50 in
     # all; the job adds 15 min for checkout, the Xcode check and the cancel
@@ -468,12 +468,14 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     # ~7 min wall-clock observed for the app package alone; the AudioTapLib
     # step adds roughly 1.5 to 2.5 min, most of it waiting out real restart
-    # deadlines rather than compiling, and the most recent full leg took
-    # 15m13s. The test step's 20 min still leaves room for cold-build
-    # variance while surfacing runaways before they cost an hour; the job
-    # budget adds the pre-warm step's 20 min, sanitizer-prep's 10 and the
-    # same headroom (see test-asan).
-    timeout-minutes: 65
+    # deadlines rather than compiling. The test step alone took 17m48s on
+    # 2026-11-02 and 19m21s on 2026-11-14, as the suite grew; at a 20 min
+    # bound two PR runs sharing the runner already pushed one over it with
+    # no test failing. Its 30 min leave room for that growth and for
+    # cold-build variance while still surfacing runaways before they cost an
+    # hour; the job budget adds the pre-warm step's 20 min, sanitizer-prep's
+    # 10 and the same headroom (see test-asan).
+    timeout-minutes: 75
     permissions:
       contents: read
       actions: write
@@ -494,7 +496,7 @@ jobs:
         timeout-minutes: 10
       - id: tests
         uses: ./.github/actions/sanitizer-tests
-        timeout-minutes: 20
+        timeout-minutes: 30
         with:
           sanitizer-flag: "--sanitize=thread"
           user-home: ${{ steps.home.outputs.home }}
