@@ -143,6 +143,26 @@ final class PipelineControllerRetentionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: mix.path))
     }
 
+    /// Switching the storage limit on runs a pass by itself, with the age
+    /// rule off and before any queue is built, and the user is told.
+    func testSwitchingTheStorageLimitOnWarnsTheUser() async throws {
+        settings.recordingRetentionEnabled = false
+        settings.recordingStorageLimitEnabled = false
+        settings.recordingStorageLimitGB = 1
+        let notifier = RecordingNotifier()
+        let controller = try makeController(notifier: notifier)
+        let mix = try registerDueRecording(in: controller)
+        let handle = try FileHandle(forWritingTo: mix)
+        try handle.truncate(atOffset: 1_000_000_001)
+        try handle.close()
+
+        settings.recordingStorageLimitEnabled = true
+        await waitFor({ !notifier.calls.isEmpty }, timeout: .seconds(5))
+
+        XCTAssertEqual(notifier.calls.map(\.title), ["Recording storage limit reached"])
+        XCTAssertTrue(exists(mix), "the grace period comes first")
+    }
+
     /// A value the stepper only passes through does not act, and the value it
     /// settles on does: going 36500, 0, 20000 must delete the recording due
     /// under 20000 days and keep the one only 0 days would delete.

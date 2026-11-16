@@ -113,6 +113,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/LegacyWhisperModelsState.swift` | Lists the leftover WhisperKit variants in `Documents` and moves the ones the user picked to the Trash (backs `LegacyWhisperModelsSection`) |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Speaker Naming (open the naming window automatically, how long unnamed meetings wait) · Mic Speaker Name · Known Voices · Recognition Stats · Experimental: Diarization Tuning |
 | `Settings/OutputSettingsView.swift` | Output tab: output folder · recording retention · Meeting Notes (notes language, prompt, output toggles) · AI Provider (provider, Claude CLI binary and key, connection picker, model) |
+| `Settings/RecordingStorageLimitRows.swift` | The storage-limit toggle, stepper and status line (usage, what cannot be deleted yet, pending deletion) under recording retention |
 | `Settings/OpenAIConnectionSection.swift` | Connection Settings section: selected connection's endpoint and API key, collapsed Advanced group (key placement, sampling overrides) and its `OpenAIAdvancedDisclosure` state |
 | `Settings/OpenAIConnectionControls.swift` | Saved OpenAI-compatible connection picker with Add/Delete/Rename buttons |
 | `Settings/OpenAIConnectionPrompts.swift` | State of the Add and Rename (name prompt) and Delete confirmation dialogs |
@@ -239,6 +240,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `RecordingRetention.swift` | Runs retention passes: decides on the main actor, deletes off it via `RecordingFileDeleter`, rechecks each delete |
 | `RecordingRetentionPolicy.swift` | Pure decision per registry entry: delete, keep (with the reason) or drop |
 | `RecordingRetentionRegistry.swift` | The list of relocated recordings retention may delete (`retained_recordings.json`), the only thing the cleaner acts on |
+| `RecordingStorageLimitPolicy.swift` | Pure storage-limit step (clear, warn, wait, delete), the oldest-first pick, and the stored warning that says which recordings a delete may take |
 | `PipelineQueue+OrphanRecovery.swift` | Orphaned-recording recovery for `PipelineQueue`: the staging scan and the jobs it creates |
 | `PipelineQueue+EchoBleed.swift` | Warns when a dual-source recording carries the same speech on both tracks (loudspeaker bleeding into the microphone) — measurement half of the echo mitigation (issue #581) |
 | `PipelineQueue+EchoCancellation.swift` | Removes the far end from the microphone track before anything reads it — cancellation half of the echo mitigation, the other branch of `EchoRemedy` |
