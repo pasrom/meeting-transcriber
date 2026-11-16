@@ -152,6 +152,17 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         1 ... mode.speakerCap
     }
 
+    /// Cap hint under the re-run controls. A dual-source job diarizes the app
+    /// track and the microphone track separately, so the cap holds for each
+    /// of them and the hint says so.
+    static func capHint(for mode: DiarizerMode, isDualSource: Bool) -> String {
+        let cap = mode.speakerCap
+        let scope = isDualSource
+            ? "\(cap) speakers in the call audio and \(cap) on your microphone"
+            : "\(cap) speakers"
+        return "\(mode.shortLabel) caps at \(scope) — switch to Offline for larger meetings."
+    }
+
     /// Identity of the current grace window. Changing it re-locks the buttons.
     var graceKey: NamingGraceKey {
         NamingGraceKey(revision: data.revision, pendingJobCount: pendingJobCount)
@@ -214,7 +225,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                 rerunButton
             }
             if currentDiarizerMode != nil, rerunMode != .offline {
-                Text("\(rerunMode.shortLabel) caps at \(rerunMode.speakerCap) speakers — switch to Offline for larger meetings.")
+                Text(Self.capHint(for: rerunMode, isDualSource: data.isDualSource))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier(A11yID.speakerCapHint)

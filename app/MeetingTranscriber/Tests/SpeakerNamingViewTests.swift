@@ -11,6 +11,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         title: String = "Standup",
         mapping: [String: String] = ["SPEAKER_00": "SPEAKER_00"],
         speakingTimes: [String: TimeInterval] = ["SPEAKER_00": 60.0],
+        isDualSource: Bool = false,
     ) -> PipelineQueue.SpeakerNamingData {
         PipelineQueue.SpeakerNamingData(
             jobID: UUID(),
@@ -21,7 +22,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             audioPath: nil,
             segments: [],
             participants: [],
-            isDualSource: false,
+            isDualSource: isDualSource,
         )
     }
 
@@ -654,6 +655,19 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             return
         }
         XCTAssertEqual(mode, .sortformer)
+    }
+
+    /// Wiring: the dialog hands the job's source kind to the hint.
+    func testDualSourceCapHintStatesTheCapPerTrack() throws {
+        let sut = SpeakerNamingView(
+            data: makeData(isDualSource: true),
+            currentDiarizerMode: .sortformer,
+            gracePeriod: 0,
+        ) { _ in }
+        XCTAssertEqual(
+            try sut.inspect().find(viewWithAccessibilityIdentifier: A11yID.speakerCapHint).text().string(),
+            "Sortformer caps at 4 speakers in the call audio and 4 on your microphone — switch to Offline for larger meetings.",
+        )
     }
 
     /// The re-run picker lists its modes by hand, so a new mode has to be

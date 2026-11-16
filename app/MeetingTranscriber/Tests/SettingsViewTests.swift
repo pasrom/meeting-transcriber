@@ -281,7 +281,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.diarizerMode = .sortformer
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(
-            text: "Sortformer supports up to \(DiarizerMode.sortformer.speakerCap) speakers per meeting. Switch to Offline mode for meetings with more participants.",
+            text: SpeakersSettingsView.speakerCapHint(for: .sortformer),
         ))
     }
 
@@ -291,7 +291,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.diarizerMode = .offline
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertThrowsError(try body.find(
-            text: "Sortformer supports up to \(DiarizerMode.sortformer.speakerCap) speakers per meeting. Switch to Offline mode for meetings with more participants.",
+            text: SpeakersSettingsView.speakerCapHint(for: .sortformer),
         ))
     }
 
@@ -301,7 +301,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.diarizerMode = .nemotron
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(
-            text: "Nemotron 3 supports up to 8 speakers per meeting. Switch to Offline mode for meetings with more participants.",
+            text: SpeakersSettingsView.speakerCapHint(for: .nemotron),
         ))
     }
 
