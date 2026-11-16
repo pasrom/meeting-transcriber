@@ -197,6 +197,7 @@ struct OutputSettingsView: View {
                     .foregroundStyle(.secondary)
                 Stepper("", value: $settings.recordingRetentionDays, in: 0 ... 3650)
                     .labelsHidden()
+                    .accessibilityIdentifier(A11yID.recordingRetentionDaysStepper)
             }
             .disabled(!settings.recordingRetentionEnabled)
 
@@ -211,6 +212,8 @@ struct OutputSettingsView: View {
             )
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            RecordingStorageLimitRows(settings: settings)
         }
     }
 

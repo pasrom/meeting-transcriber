@@ -2568,9 +2568,15 @@ LAST_MEETING_JOB=""
 _RETENTION_GRACE_S=5
 _assert_recording_kept_by_default() {
     local label="$1" transcript_path="$2"
-    local enabled setting mix
+    local enabled limit setting mix
     enabled="$(read_dev_default_effective "$DEV_BUNDLE_ID" "$_CONTAINER_PLIST" recordingRetentionEnabled)"
+    limit="$(read_dev_default_effective "$DEV_BUNDLE_ID" "$_CONTAINER_PLIST" recordingStorageLimitEnabled)"
     setting="recordingRetentionEnabled=${enabled:-<unset, default off>}"
+    # The storage limit deletes too, so with it on the check is skipped as well.
+    if retention_reads_as_on "$limit"; then
+        enabled="$limit"
+        setting="recordingStorageLimitEnabled=$limit"
+    fi
     mix="$RECORDINGS_DIR/$(basename "$transcript_path" .txt)_mix.wav"
     case "$(retention_default_verdict "$enabled" "$mix" "$_RETENTION_GRACE_S")" in
         skip) log "$label: SKIP retention default check: $setting on this host" ;;

@@ -107,6 +107,12 @@ final class RecordingRetention {
     }
 
     private let settings: () -> RecordingRetentionSettings
+    private let storageLimit: () -> RecordingStorageLimitSettings
+    private let alarm: RecordingStorageAlarm
+    /// Told on each storage-limit warning: total, limit.
+    private let onLimitReached: (Int64, Int64) -> Void
+    /// Told after each storage-limit pass; nil while the limit is off.
+    private let onStatus: (RecordingStorageStatus?) -> Void
     private let deleter: RecordingFileDeleter
     private let now: () -> Date
     /// Told once per pass that looks at entries; see `init`.
@@ -127,14 +133,31 @@ final class RecordingRetention {
         settings: @escaping () -> RecordingRetentionSettings,
         now: @escaping () -> Date = Date.init,
         deleter: RecordingFileDeleter = RecordingFileDeleter(),
+        storageLimit: @escaping () -> RecordingStorageLimitSettings = { .off },
+        alarm: RecordingStorageAlarm = .inMemory(),
+        onLimitReached: @escaping (Int64, Int64) -> Void = { _, _ in },
+        onStatus: @escaping (RecordingStorageStatus?) -> Void = { _ in },
         report: @escaping (RecordingRetentionPassSummary) -> Void = { logger.info("\($0.logLine, privacy: .public)") },
     ) {
         self.registry = registry
         self.settings = settings
+        self.storageLimit = storageLimit
+        self.alarm = alarm
+        self.onLimitReached = onLimitReached
+        self.onStatus = onStatus
         self.deleter = deleter
         self.now = now
         self.report = report
         settled = settings()
+        settledStorage = storageLimit()
+    }
+
+    /// The size of a regular file, 0 for anything else. Not followed through
+    /// a symlink, like the delete.
+    private func fileSize(_ url: URL) -> Int64 {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular else { return 0 }
+        return Int64(attributes[.size] as? Int ?? 0)
     }
 
     /// Waiting to run `afterSettling`'s action; replaced by each new call.
@@ -158,12 +181,35 @@ final class RecordingRetention {
     /// never reaches any pass, whoever starts it.
     func settle() {
         settled = settings()
+        settledStorage = storageLimit()
     }
+
+    private var settledStorage: RecordingStorageLimitSettings
 
     /// The settings as they are now. Reading it inside
     /// `withObservationTracking` observes both underlying settings.
     var currentSettings: RecordingRetentionSettings {
         settings()
+    }
+
+    /// The storage limit as it is now; observed alongside `currentSettings`.
+    var currentStorageLimit: RecordingStorageLimitSettings {
+        storageLimit()
+    }
+
+    /// The storage limit a pass acts on. Like `effectiveSettings`: switching
+    /// off and raising the limit apply at once, the other directions settle.
+    var effectiveStorageLimit: RecordingStorageLimitSettings {
+        let live = storageLimit()
+        return RecordingStorageLimitSettings(
+            enabled: settledStorage.enabled && live.enabled,
+            limitBytes: max(settledStorage.limitBytes, live.limitBytes),
+        )
+    }
+
+    /// Whether either rule could delete anything, so a pass is worth running.
+    var isActive: Bool {
+        effectiveSettings.enabled || effectiveStorageLimit.enabled
     }
 
     /// What a pass acts on: the settled settings, except that switching off
@@ -198,6 +244,11 @@ final class RecordingRetention {
     }
 
     private func sweepOnce(_ context: SweepContext) async {
+        await sweepByAge(context)
+        await sweepBySize(context)
+    }
+
+    private func sweepByAge(_ context: SweepContext) async {
         // Off, every entry is kept, so there is nothing to work out.
         guard effectiveSettings.enabled, !registry.entries.isEmpty else { return }
         guard registry.persist() else {
@@ -274,5 +325,160 @@ final class RecordingRetention {
             registry.forget(gone, of: jobID)
             summary.deletedFiles += gone.count
         }
+    }
+
+    /// The storage-limit pass. Counts every tracked file it can reach; when
+    /// the total is over the limit it warns, waits out the grace period, then
+    /// deletes the oldest recordings the age rules would let go of (outputs
+    /// written, not in use, inside the recordings folder) until the total
+    /// fits. Only recordings deletable when the warning was given are deleted
+    /// under it; one that becomes deletable later gets a warning of its own. Recordings
+    /// still waiting for their outputs count but are never deleted.
+    private func sweepBySize(_ context: SweepContext) async {
+        let limit = effectiveStorageLimit
+        guard limit.enabled else {
+            if alarm.load() != nil { alarm.save(nil) }
+            onStatus(nil)
+            return
+        }
+        guard registry.persist() else {
+            logger.warning("Storage limit pass skipped: the registry could not be saved")
+            return
+        }
+        let instant = now()
+        let rootKey = context.scopeRoot.map(RecordingRetentionPolicy.pathKey)
+        let (total, candidates, gone) = measure(context, now: instant)
+        // The age pass drops these too, but it does not run while it is off.
+        registry.remove(gone)
+        let step = RecordingStorageLimitPolicy.step(
+            totalBytes: total, settings: limit, warning: alarm.load(), root: rootKey, now: instant,
+        )
+        var picked: [RecordingStorageLimitPolicy.Candidate] = []
+        var result = (files: 0, bytes: Int64(0))
+        switch step {
+        case .clear:
+            if alarm.load() != nil { alarm.save(nil) }
+
+        case .warn:
+            warn(totalBytes: total, limitBytes: limit.limitBytes, root: rootKey, at: instant)
+
+        case .wait:
+            break
+
+        case .delete:
+            guard let warning = alarm.load() else { break }
+            picked = RecordingStorageLimitPolicy.selectForDeletion(
+                candidates.filter(warning.covers), totalBytes: total, limitBytes: limit.limitBytes,
+            )
+            result = await delete(picked, context, totalBytes: total)
+            // Switched off while deleting: the setting has cleared the warning.
+            let live = effectiveStorageLimit
+            guard live.enabled else { break }
+            let remaining = total - result.bytes
+            if remaining <= live.limitBytes {
+                alarm.save(nil)
+            } else if RecordingStorageLimitPolicy.needsNewWarning(
+                remainingBytes: remaining, limitBytes: live.limitBytes,
+                uncovered: candidates.filter { !warning.covers($0) },
+            ) {
+                warn(totalBytes: remaining, limitBytes: live.limitBytes, root: rootKey, at: now())
+            }
+        }
+        let deletableBytes = candidates.reduce(0) { $0 + $1.bytes }
+        onStatus(effectiveStorageLimit.enabled ? RecordingStorageStatus(
+            totalBytes: total - result.bytes, keptBytes: total - deletableBytes, warning: alarm.load(),
+        ) : nil)
+        logger.info(
+            """
+            Storage limit pass: \(String(describing: step), privacy: .public), total \(total, privacy: .public) \
+            of \(limit.limitBytes, privacy: .public) bytes, deletable \(candidates.count, privacy: .public), \
+            picked \(picked.count, privacy: .public), deleted files \(result.files, privacy: .public), \
+            freed \(result.bytes, privacy: .public) bytes, warning \(self.alarm.load() != nil, privacy: .public)
+            """,
+        )
+    }
+
+    /// Tell the user, then store the warning: a crash in between warns twice
+    /// rather than starting a grace period nobody was told about.
+    private func warn(totalBytes: Int64, limitBytes: Int64, root: String?, at instant: Date) {
+        onLimitReached(totalBytes, limitBytes)
+        alarm.save(RecordingStorageWarning(since: instant, limitBytes: limitBytes, root: root))
+    }
+
+    /// The bytes every reachable listed file takes, and the recordings the
+    /// age rule would let go of with a period of 0 days.
+    private func measure(
+        _ context: SweepContext, now instant: Date,
+    ) -> (total: Int64, candidates: [RecordingStorageLimitPolicy.Candidate], gone: [RetainedRecording]) {
+        let environment = RecordingRetentionPolicy.Environment.live(
+            excludedPaths: inUse(context), scopedRoot: context.scopeRoot,
+        )
+        var total: Int64 = 0
+        var candidates: [RecordingStorageLimitPolicy.Candidate] = []
+        var gone: [RetainedRecording] = []
+        for entry in registry.entries {
+            if let scoped = context.scopeRoot,
+               RecordingRetentionPolicy.pathKey(scoped) != RecordingRetentionPolicy.pathKey(entry.root) { continue }
+            guard environment.fileExists(entry.root) else { continue }
+            total += entry.paths
+                .filter { RecordingRetentionPolicy.isInRecordingsFolder($0, of: entry.root, in: environment) }
+                .filter(environment.fileExists)
+                .reduce(0) { $0 + fileSize($1) }
+            switch RecordingRetentionPolicy.decide(entry, now: instant, settings: Self.anyAge, environment: environment) {
+            case let .delete(urls):
+                // `decide` deletes only an entry with `eligibleAt` set.
+                candidates.append(.init(
+                    jobID: entry.jobID, recordedAt: entry.recordedAt, eligibleAt: entry.eligibleAt ?? instant, urls: urls,
+                    bytes: urls.reduce(0) { $0 + fileSize($1) },
+                ))
+
+            case .drop(.filesGone):
+                gone.append(entry)
+
+            case .keep:
+                break
+            }
+        }
+        return (total, candidates, gone)
+    }
+
+    /// The age rule's checks with no period: due as soon as it is safe.
+    private static let anyAge = RecordingRetentionSettings(enabled: true, days: 0)
+
+    /// Delete `picked`, rechecking each file as the age pass does, and stop
+    /// once the live limit is met, so raising it mid-pass applies at once.
+    /// Returns the files deleted and the bytes freed.
+    private func delete(
+        _ picked: [RecordingStorageLimitPolicy.Candidate], _ context: SweepContext, totalBytes: Int64,
+    ) async -> (files: Int, bytes: Int64) {
+        guard !picked.isEmpty else { return (0, 0) }
+        if let scopeRoot = context.scopeRoot {
+            guard context.securityScope.start(scopeRoot) else {
+                logger.warning("Storage limit pass skipped: the output folder's access could not be opened")
+                return (0, 0)
+            }
+        }
+        defer { context.scopeRoot.map(context.securityScope.stop) }
+        var freed: Int64 = 0
+        var deletedFiles = 0
+        for candidate in picked {
+            let live = effectiveStorageLimit
+            guard live.enabled, totalBytes - freed > live.limitBytes else { break }
+            var gone: [URL] = []
+            for url in candidate.urls {
+                guard registry.isPersisted, effectiveStorageLimit.enabled,
+                      let entry = registry.entry(listing: url, for: candidate.jobID),
+                      RecordingRetentionPolicy.isDue(entry, now: now(), settings: Self.anyAge),
+                      !RecordingRetentionPolicy.isInUse(entry, excludedPaths: inUse(context))
+                else { break }
+                let size = fileSize(url)
+                let deleted = await deleter.delete([url])
+                gone += deleted
+                if !deleted.isEmpty { freed += size }
+            }
+            registry.forget(gone, of: candidate.jobID)
+            deletedFiles += gone.count
+        }
+        return (deletedFiles, freed)
     }
 }

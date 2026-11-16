@@ -699,6 +699,36 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         }
     }
 
+    /// Cap on the disk space the tracked recordings may take. Off by default;
+    /// over it, the oldest deletable recordings go after a grace period.
+    /// Off forgets the warning at once rather than on the next pass, which
+    /// may never come before a queue is built with the age rule off too; a
+    /// stale warning would skip the grace period when switched on again.
+    var recordingStorageLimitEnabled: Bool {
+        didSet {
+            defaults.set(recordingStorageLimitEnabled, forKey: "recordingStorageLimitEnabled")
+            if !recordingStorageLimitEnabled { recordingStorageAlarm.save(nil) }
+        }
+    }
+
+    /// The storage limit in gigabytes (10^9 bytes). Never below 1.
+    var recordingStorageLimitGB: Int {
+        didSet {
+            if recordingStorageLimitGB < 1 { recordingStorageLimitGB = 1 }
+            defaults.set(recordingStorageLimitGB, forKey: "recordingStorageLimitGB")
+        }
+    }
+
+    /// The warning given when the recordings went over the storage limit, nil
+    /// while under it. State, not a setting.
+    var recordingStorageAlarm: RecordingStorageAlarm {
+        .defaults(defaults)
+    }
+
+    /// What the last storage-limit pass found, for Settings; nil until one
+    /// runs or while the limit is off. Not persisted.
+    var recordingStorageStatus: RecordingStorageStatus?
+
     static let protocolLanguages = [
         "German", "English", "French", "Spanish", "Italian",
         "Dutch", "Portuguese", "Japanese", "Chinese", "Korean",
@@ -1005,6 +1035,8 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         useAITitleForFilenames = defaults.bool(forKey: "useAITitleForFilenames", default: false)
         recordingRetentionEnabled = defaults.bool(forKey: "recordingRetentionEnabled", default: false)
         recordingRetentionDays = max(0, defaults.object(forKey: "recordingRetentionDays") as? Int ?? 30)
+        recordingStorageLimitEnabled = defaults.bool(forKey: "recordingStorageLimitEnabled", default: false)
+        recordingStorageLimitGB = max(1, defaults.object(forKey: "recordingStorageLimitGB") as? Int ?? 10)
 
         openAIEndpoint = defaults.object(forKey: "openAIEndpoint") as? String
             ?? Self.defaultOpenAIEndpoint
