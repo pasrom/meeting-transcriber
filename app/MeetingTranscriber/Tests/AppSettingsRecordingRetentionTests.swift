@@ -56,4 +56,44 @@ final class AppSettingsRecordingRetentionTests: XCTestCase {
         XCTAssertTrue(reloaded.recordingRetentionEnabled)
         XCTAssertEqual(reloaded.recordingRetentionDays, 7)
     }
+
+    // MARK: - Storage limit
+
+    func testStorageLimitDefaultsToOffAndTenGigabytes() {
+        let settings = makeSettings()
+        XCTAssertFalse(settings.recordingStorageLimitEnabled)
+        XCTAssertEqual(settings.recordingStorageLimitGB, 10)
+    }
+
+    func testStorageLimitIsClampedToOneGigabyte() {
+        let settings = makeSettings()
+        settings.recordingStorageLimitGB = 0
+        XCTAssertEqual(settings.recordingStorageLimitGB, 1)
+        defaults.set(-5, forKey: "recordingStorageLimitGB")
+        XCTAssertEqual(makeSettings().recordingStorageLimitGB, 1)
+    }
+
+    /// Off forgets the warning at once, so switching on again starts a new
+    /// grace period instead of deleting on the spot.
+    func testSwitchingTheStorageLimitOffForgetsTheWarning() {
+        let settings = makeSettings()
+        settings.recordingStorageLimitEnabled = true
+        settings.recordingStorageAlarm.save(Date(timeIntervalSince1970: 42))
+
+        settings.recordingStorageLimitEnabled = false
+
+        XCTAssertNil(settings.recordingStorageAlarm.load())
+    }
+
+    func testStorageLimitPersistsAcrossInstances() {
+        let settings = makeSettings()
+        settings.recordingStorageLimitEnabled = true
+        settings.recordingStorageLimitGB = 25
+        settings.recordingStorageAlarm.save(Date(timeIntervalSince1970: 42))
+
+        let reloaded = makeSettings()
+        XCTAssertTrue(reloaded.recordingStorageLimitEnabled)
+        XCTAssertEqual(reloaded.recordingStorageLimitGB, 25)
+        XCTAssertEqual(reloaded.recordingStorageAlarm.load(), Date(timeIntervalSince1970: 42))
+    }
 }

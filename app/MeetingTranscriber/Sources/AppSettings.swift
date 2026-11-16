@@ -697,6 +697,31 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         }
     }
 
+    /// Cap on the disk space the tracked recordings may take. Off by default;
+    /// over it, the oldest deletable recordings go after a grace period.
+    /// Off forgets the warning at once: with everything off no pass runs to
+    /// clear it, and a stale time would skip the grace period later.
+    var recordingStorageLimitEnabled: Bool {
+        didSet {
+            defaults.set(recordingStorageLimitEnabled, forKey: "recordingStorageLimitEnabled")
+            if !recordingStorageLimitEnabled { recordingStorageAlarm.save(nil) }
+        }
+    }
+
+    /// The storage limit in gigabytes (10^9 bytes). Never below 1.
+    var recordingStorageLimitGB: Int {
+        didSet {
+            if recordingStorageLimitGB < 1 { recordingStorageLimitGB = 1 }
+            defaults.set(recordingStorageLimitGB, forKey: "recordingStorageLimitGB")
+        }
+    }
+
+    /// When the recordings went over the storage limit, nil while under it.
+    /// State, not a setting: not observed and not shown.
+    var recordingStorageAlarm: RecordingStorageAlarm {
+        .defaults(defaults)
+    }
+
     static let protocolLanguages = [
         "German", "English", "French", "Spanish", "Italian",
         "Dutch", "Portuguese", "Japanese", "Chinese", "Korean",
@@ -1003,6 +1028,8 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         useAITitleForFilenames = defaults.bool(forKey: "useAITitleForFilenames", default: false)
         recordingRetentionEnabled = defaults.bool(forKey: "recordingRetentionEnabled", default: false)
         recordingRetentionDays = max(0, defaults.object(forKey: "recordingRetentionDays") as? Int ?? 30)
+        recordingStorageLimitEnabled = defaults.bool(forKey: "recordingStorageLimitEnabled", default: false)
+        recordingStorageLimitGB = max(1, defaults.object(forKey: "recordingStorageLimitGB") as? Int ?? 10)
 
         openAIEndpoint = defaults.object(forKey: "openAIEndpoint") as? String
             ?? Self.defaultOpenAIEndpoint

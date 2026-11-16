@@ -306,7 +306,7 @@ final class SettingsInteractionTests: XCTestCase {
 
     // MARK: - Stepper write-back
 
-    /// The retention days stepper is the only Stepper in the Output tab; it is
+    /// The Output tab has two Steppers, retention days then the storage limit,
     /// located by type because a Stepper exposes no findable identifier.
     func testRecordingRetentionDaysStepperWritesBackToSettings() throws {
         let settings = makeSettings()
@@ -315,7 +315,7 @@ final class SettingsInteractionTests: XCTestCase {
         let view = OutputSettingsView(settings: settings)
 
         let steppers = try view.inspect().findAll(ViewType.Stepper.self)
-        XCTAssertEqual(steppers.count, 1, "expected only the retention days stepper")
+        XCTAssertEqual(steppers.count, 2, "expected the retention days and storage limit steppers")
         try steppers[0].increment()
 
         XCTAssertEqual(settings.recordingRetentionDays, 1)

@@ -187,6 +187,8 @@ struct OutputSettingsView: View {
             )
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            RecordingStorageLimitRows(settings: settings)
         }
     }
 
