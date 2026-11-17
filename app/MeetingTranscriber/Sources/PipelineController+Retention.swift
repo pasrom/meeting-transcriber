@@ -26,6 +26,9 @@ extension PipelineController {
             let note = storageLimitNotification(totalBytes: total, limitBytes: limit)
             notifier.notify(title: note.title, body: note.body)
         }
+        let showStatus: (RecordingStorageStatus?) -> Void = { [weak settings] status in
+            settings?.recordingStorageStatus = status
+        }
         return RecordingRetention(
             registry: RecordingRetentionRegistry(
                 path: logDir.appendingPathComponent(RecordingRetentionRegistry.filename),
@@ -42,6 +45,7 @@ extension PipelineController {
             },
             alarm: settings.recordingStorageAlarm,
             onLimitReached: notifyLimitReached,
+            onStatus: showStatus,
         )
     }
 

@@ -109,8 +109,10 @@ final class RecordingRetention {
     private let settings: () -> RecordingRetentionSettings
     private let storageLimit: () -> RecordingStorageLimitSettings
     private let alarm: RecordingStorageAlarm
-    /// Told once when the recordings go over the storage limit: total, limit.
+    /// Told on each storage-limit warning: total, limit.
     private let onLimitReached: (Int64, Int64) -> Void
+    /// Told after each storage-limit pass; nil while the limit is off.
+    private let onStatus: (RecordingStorageStatus?) -> Void
     private let deleter: RecordingFileDeleter
     private let now: () -> Date
     /// Told once per pass that looks at entries; see `init`.
@@ -134,6 +136,7 @@ final class RecordingRetention {
         storageLimit: @escaping () -> RecordingStorageLimitSettings = { .off },
         alarm: RecordingStorageAlarm = .inMemory(),
         onLimitReached: @escaping (Int64, Int64) -> Void = { _, _ in },
+        onStatus: @escaping (RecordingStorageStatus?) -> Void = { _ in },
         report: @escaping (RecordingRetentionPassSummary) -> Void = { logger.info("\($0.logLine, privacy: .public)") },
     ) {
         self.registry = registry
@@ -141,6 +144,7 @@ final class RecordingRetention {
         self.storageLimit = storageLimit
         self.alarm = alarm
         self.onLimitReached = onLimitReached
+        self.onStatus = onStatus
         self.deleter = deleter
         self.now = now
         self.report = report
@@ -324,46 +328,81 @@ final class RecordingRetention {
     }
 
     /// The storage-limit pass. Counts every tracked file it can reach; when
-    /// the total is over the limit it notifies once, waits out the grace
-    /// period, then deletes the oldest recordings the age rules would let go
-    /// of (outputs written, not in use, inside the recordings folder) until
-    /// the total fits. Recordings still waiting for their outputs count but
-    /// are never deleted, so the total can stay over the limit.
+    /// the total is over the limit it warns, waits out the grace period, then
+    /// deletes the oldest recordings the age rules would let go of (outputs
+    /// written, not in use, inside the recordings folder) until the total
+    /// fits. Only recordings made before the warning are deleted under it; a
+    /// newer one that would have to go gets a warning of its own. Recordings
+    /// still waiting for their outputs count but are never deleted.
     private func sweepBySize(_ context: SweepContext) async {
         let limit = effectiveStorageLimit
         guard limit.enabled else {
             if alarm.load() != nil { alarm.save(nil) }
+            onStatus(nil)
             return
         }
-        guard registry.persist() else { return }
+        guard registry.persist() else {
+            logger.warning("Storage limit pass skipped: the registry could not be saved")
+            return
+        }
         let instant = now()
+        let rootKey = context.scopeRoot.map(RecordingRetentionPolicy.pathKey)
         let (total, candidates, gone) = measure(context, now: instant)
         // The age pass drops these too, but it does not run while it is off.
         registry.remove(gone)
-        switch RecordingStorageLimitPolicy.step(
-            totalBytes: total, settings: limit, exceededSince: alarm.load(), now: instant,
-        ) {
+        let step = RecordingStorageLimitPolicy.step(
+            totalBytes: total, settings: limit, warning: alarm.load(), root: rootKey, now: instant,
+        )
+        var picked: [RecordingStorageLimitPolicy.Candidate] = []
+        var result = (files: 0, bytes: Int64(0))
+        switch step {
         case .clear:
             if alarm.load() != nil { alarm.save(nil) }
 
         case .warn:
-            // Notify before saving: a crash in between then warns twice
-            // rather than starting a grace period nobody was told about.
-            logger.info("Storage limit reached: \(total, privacy: .public) of \(limit.limitBytes, privacy: .public) bytes")
-            onLimitReached(total, limit.limitBytes)
-            alarm.save(instant)
+            warn(totalBytes: total, limitBytes: limit.limitBytes, root: rootKey, at: instant)
 
         case .wait:
             break
 
         case .delete:
-            let picked = RecordingStorageLimitPolicy.selectForDeletion(
-                candidates, totalBytes: total, limitBytes: limit.limitBytes,
+            guard let warning = alarm.load() else { break }
+            picked = RecordingStorageLimitPolicy.selectForDeletion(
+                candidates.filter(warning.covers), totalBytes: total, limitBytes: limit.limitBytes,
             )
-            guard !picked.isEmpty else { return }
-            let freed = await delete(picked, context)
-            if total - freed <= limit.limitBytes { alarm.save(nil) }
+            result = await delete(picked, context, totalBytes: total)
+            // Switched off while deleting: the setting has cleared the warning.
+            let live = effectiveStorageLimit
+            guard live.enabled else { break }
+            let remaining = total - result.bytes
+            if remaining <= live.limitBytes {
+                alarm.save(nil)
+            } else if RecordingStorageLimitPolicy.needsNewWarning(
+                remainingBytes: remaining, limitBytes: live.limitBytes,
+                uncovered: candidates.filter { !warning.covers($0) },
+            ) {
+                warn(totalBytes: remaining, limitBytes: live.limitBytes, root: rootKey, at: now())
+            }
         }
+        let deletableBytes = candidates.reduce(0) { $0 + $1.bytes }
+        onStatus(effectiveStorageLimit.enabled ? RecordingStorageStatus(
+            totalBytes: total - result.bytes, keptBytes: total - deletableBytes, warning: alarm.load(),
+        ) : nil)
+        logger.info(
+            """
+            Storage limit pass: \(String(describing: step), privacy: .public), total \(total, privacy: .public) \
+            of \(limit.limitBytes, privacy: .public) bytes, deletable \(candidates.count, privacy: .public), \
+            picked \(picked.count, privacy: .public), deleted files \(result.files, privacy: .public), \
+            freed \(result.bytes, privacy: .public) bytes, warning \(self.alarm.load() != nil, privacy: .public)
+            """,
+        )
+    }
+
+    /// Tell the user, then store the warning: a crash in between warns twice
+    /// rather than starting a grace period nobody was told about.
+    private func warn(totalBytes: Int64, limitBytes: Int64, root: String?, at instant: Date) {
+        onLimitReached(totalBytes, limitBytes)
+        alarm.save(RecordingStorageWarning(since: instant, limitBytes: limitBytes, root: root))
     }
 
     /// The bytes every reachable listed file takes, and the recordings the
@@ -405,19 +444,25 @@ final class RecordingRetention {
     /// The age rule's checks with no period: due as soon as it is safe.
     private static let anyAge = RecordingRetentionSettings(enabled: true, days: 0)
 
-    /// Delete `picked`, rechecking each file as the age pass does, and return
-    /// the bytes freed.
-    private func delete(_ picked: [RecordingStorageLimitPolicy.Candidate], _ context: SweepContext) async -> Int64 {
+    /// Delete `picked`, rechecking each file as the age pass does, and stop
+    /// once the live limit is met, so raising it mid-pass applies at once.
+    /// Returns the files deleted and the bytes freed.
+    private func delete(
+        _ picked: [RecordingStorageLimitPolicy.Candidate], _ context: SweepContext, totalBytes: Int64,
+    ) async -> (files: Int, bytes: Int64) {
+        guard !picked.isEmpty else { return (0, 0) }
         if let scopeRoot = context.scopeRoot {
             guard context.securityScope.start(scopeRoot) else {
                 logger.warning("Storage limit pass skipped: the output folder's access could not be opened")
-                return 0
+                return (0, 0)
             }
         }
         defer { context.scopeRoot.map(context.securityScope.stop) }
         var freed: Int64 = 0
         var deletedFiles = 0
         for candidate in picked {
+            let live = effectiveStorageLimit
+            guard live.enabled, totalBytes - freed > live.limitBytes else { break }
             var gone: [URL] = []
             for url in candidate.urls {
                 guard registry.isPersisted, effectiveStorageLimit.enabled,
@@ -433,7 +478,6 @@ final class RecordingRetention {
             registry.forget(gone, of: candidate.jobID)
             deletedFiles += gone.count
         }
-        logger.info("Storage limit pass: deleted files \(deletedFiles, privacy: .public), freed \(freed, privacy: .public) bytes")
-        return freed
+        return (deletedFiles, freed)
     }
 }

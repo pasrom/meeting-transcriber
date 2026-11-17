@@ -36,17 +36,33 @@ final class RecordingStorageLimitSettingsViewTests: XCTestCase {
         XCTAssertTrue(settings.recordingStorageLimitEnabled)
     }
 
-    /// The second Stepper of the Output tab, after the retention days.
     func testStepperWritesBackToSettings() throws {
         let settings = try makeSettings()
         settings.recordingStorageLimitEnabled = true
         settings.recordingStorageLimitGB = 10
         let view = OutputSettingsView(settings: settings)
 
-        let steppers = try view.inspect().findAll(ViewType.Stepper.self)
-        XCTAssertEqual(steppers.count, 2)
-        try steppers[1].increment()
+        try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.recordingStorageLimitStepper)
+            .find(ViewType.Stepper.self)
+            .increment()
 
         XCTAssertEqual(settings.recordingStorageLimitGB, 11)
+    }
+
+    func testStatusIsShownOnlyWhileTheLimitIsOn() throws {
+        let settings = try makeSettings()
+        settings.recordingStorageLimitEnabled = true
+        settings.recordingStorageStatus = RecordingStorageStatus(totalBytes: 2_000_000_000, keptBytes: 0, warning: nil)
+
+        let status = try OutputSettingsView(settings: settings).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.recordingStorageStatus)
+        XCTAssertEqual(try status.find(ViewType.Text.self).string(), "Recordings use 2 GB.")
+
+        settings.recordingStorageLimitEnabled = false
+        XCTAssertThrowsError(
+            try OutputSettingsView(settings: settings).inspect()
+                .find(viewWithAccessibilityIdentifier: A11yID.recordingStorageStatus),
+        )
     }
 }

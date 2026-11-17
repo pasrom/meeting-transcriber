@@ -59,6 +59,10 @@ final class AppSettingsRecordingRetentionTests: XCTestCase {
 
     // MARK: - Storage limit
 
+    private let warning = RecordingStorageWarning(
+        since: Date(timeIntervalSince1970: 42), limitBytes: 1_000_000_000, root: "/out",
+    )
+
     func testStorageLimitDefaultsToOffAndTenGigabytes() {
         let settings = makeSettings()
         XCTAssertFalse(settings.recordingStorageLimitEnabled)
@@ -78,7 +82,7 @@ final class AppSettingsRecordingRetentionTests: XCTestCase {
     func testSwitchingTheStorageLimitOffForgetsTheWarning() {
         let settings = makeSettings()
         settings.recordingStorageLimitEnabled = true
-        settings.recordingStorageAlarm.save(Date(timeIntervalSince1970: 42))
+        settings.recordingStorageAlarm.save(warning)
 
         settings.recordingStorageLimitEnabled = false
 
@@ -89,11 +93,11 @@ final class AppSettingsRecordingRetentionTests: XCTestCase {
         let settings = makeSettings()
         settings.recordingStorageLimitEnabled = true
         settings.recordingStorageLimitGB = 25
-        settings.recordingStorageAlarm.save(Date(timeIntervalSince1970: 42))
+        settings.recordingStorageAlarm.save(warning)
 
         let reloaded = makeSettings()
         XCTAssertTrue(reloaded.recordingStorageLimitEnabled)
         XCTAssertEqual(reloaded.recordingStorageLimitGB, 25)
-        XCTAssertEqual(reloaded.recordingStorageAlarm.load(), Date(timeIntervalSince1970: 42))
+        XCTAssertEqual(reloaded.recordingStorageAlarm.load(), warning)
     }
 }
