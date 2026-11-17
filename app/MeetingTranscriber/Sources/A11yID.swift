@@ -96,6 +96,7 @@ enum A11yID {
     static let openAIConnectionPicker = "openAIConnectionPicker"
     static let openAIConnectionRenameButton = "openAIConnectionRenameButton"
     static let openAIRefreshModelsButton = "openAIRefreshModelsButton"
+    static let openAIAdvancedToggle = "openAIAdvancedToggle"
     static let openAIConnectionAddButton = "openAIConnectionAddButton"
     static let openAIConnectionDeleteButton = "openAIConnectionDeleteButton"
     static let claudeAPIKeyField = "claudeAPIKeyField"

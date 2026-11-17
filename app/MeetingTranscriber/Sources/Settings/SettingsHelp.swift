@@ -134,6 +134,7 @@ enum SettingsHelp {
 
         API key: leave it empty if the server needs no authentication.
 
+        Advanced:
         - Authentication: sent as a bearer token, or unchanged in a custom HTTP \
         header such as api-key.
         - Temperature and Top P are sent only when switched on; off leaves the \

@@ -105,7 +105,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Vocabulary section · Live transcription (PoC) toggle |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Speaker Naming (open the naming window automatically, how long unnamed meetings wait) · Mic Speaker Name · Known Voices · Recognition Stats · Experimental: Diarization Tuning |
 | `Settings/OutputSettingsView.swift` | Output tab: output folder · recording retention · Meeting Notes (notes language, prompt, output toggles) · AI Provider (provider, Claude CLI binary and key, connection picker, model) |
-| `Settings/OpenAIConnectionSection.swift` | Connection Settings section: selected connection's endpoint, API key, key placement and sampling overrides |
+| `Settings/OpenAIConnectionSection.swift` | Connection Settings section: selected connection's endpoint and API key, collapsed Advanced group (key placement, sampling overrides) and its `OpenAIAdvancedDisclosure` state |
 | `Settings/OpenAIConnectionControls.swift` | Saved OpenAI-compatible connection picker with Add/Delete/Rename buttons |
 | `Settings/OpenAIConnectionPrompts.swift` | State of the Add and Rename (name prompt) and Delete confirmation dialogs |
 | `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics |
@@ -808,7 +808,7 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 | **Audio** | Microphone · VAD · Echo · Per-Channel Indicator | `settings` | `audioDevices` |
 | **Transcription** | Engine + per-engine options + status + idle-model retention | `settings`, three engines | — |
 | **Speakers** | Diarization · Speaker Identity · Known Voices · Recognition Stats · Experimental: Diarization Tuning | `settings`, `recognitionStatsLog`, `enrollmentDiarizerFactory` | `knownVoicesSheet` |
-| **Output** | Output Folder · Notion · Recording Retention · Meeting Notes (language, prompt, output toggles) · AI Provider · Connection Settings (endpoint, key, key placement, sampling) | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
+| **Output** | Output Folder · Notion · Recording Retention · Meeting Notes (language, prompt, output toggles) · AI Provider · Connection Settings (endpoint, key, Advanced) | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
 | **Advanced** | Permissions · Diagnostics | — | `micPermission`, `screenRecordingOK`, `accessibilityOK` |
 | **About** | Build identity · Dependencies · Updates | `settings`, `updateChecker?` | — |
 
@@ -818,7 +818,7 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 - `vadEnabled` hides the VAD threshold slider
 - `transcriptionEngine` switches between WhisperKit / Parakeet option panels
 - `unloadModelsWhenIdle` (default on) skips the launch ASR load (a missing model is still downloaded at launch) and releases in-memory ASR and batch VAD models at a safe pipeline drain; the toggle sits beside model status and "Load Model". Turning it off restores launch preload and retains models across drains and engine switches. With the setting on, unloaded status reads "Loads when needed" while `/state` continues to report `"unloaded"`.
-- `protocolProvider` switches the AI Provider section between Claude CLI / OpenAI-compatible / None; OpenAI-compatible shows the saved-connection controls (`OpenAIConnectionControls`, see `docs/architecture/pipeline.md`) and the model row there, and adds a Connection Settings section with the selected connection's endpoint, key, key placement and sampling overrides. The explanations for these sections are `HelpBadge` popovers on the section headers (`SettingsHelp`), not footers, except the note that a Claude CLI API key is billed separately from the subscription, which stays in view under the key. None also hides the prompt row
+- `protocolProvider` switches the AI Provider section between Claude CLI / OpenAI-compatible / None; OpenAI-compatible shows the saved-connection controls (`OpenAIConnectionControls`, see `docs/architecture/pipeline.md`) and the model row there, and adds a Connection Settings section with the selected connection's endpoint, key and a collapsed Advanced group (key placement, sampling overrides; an invalid header name keeps it open, and editing a row inside it or clicking Advanced while the name is invalid latches it open, so fixing the name never closes it under the cursor). The explanations for these sections are `HelpBadge` popovers on the section headers (`SettingsHelp`), not footers, except the note that a Claude CLI API key is billed separately from the subscription, which stays in view under the key. None also hides the prompt row
 - `#if APPSTORE` removes the Claude CLI provider option entirely
 - `updateChecker == nil` hides the entire Updates section in About
 

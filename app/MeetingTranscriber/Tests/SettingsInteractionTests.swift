@@ -535,9 +535,3 @@ final class SettingsInteractionTests: XCTestCase {
         )
     }
 }
-
-/// The Connection Settings section, where these controls live.
-@MainActor
-private func connectionSection(_ settings: AppSettings) -> OpenAIConnectionSection {
-    OpenAIConnectionSection(settings: settings, apiKeyDrafts: ProtocolAPIKeyDrafts(settings: settings))
-}

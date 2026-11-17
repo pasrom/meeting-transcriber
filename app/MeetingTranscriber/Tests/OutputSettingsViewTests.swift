@@ -120,6 +120,28 @@ final class OutputSettingsViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(text: "Connection Settings"))
     }
 
+    func testAdvancedIsCollapsedForAValidHeaderName() throws {
+        let settings = AppSettings(defaults: makeIsolatedDefaults())
+        settings.protocolProvider = .openAICompatible
+        settings.openAIAPIKeyPlacement = .customHeader
+        settings.openAIAPIKeyHeaderName = "x-api-key"
+        let body = try OutputSettingsView(settings: settings).inspect()
+
+        // The Advanced row renders, so the missing picker is not a failed lookup.
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.openAIAdvancedToggle))
+        XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: A11yID.openAIAPIKeyPlacementPicker))
+    }
+
+    func testAnInvalidHeaderNameKeepsAdvancedOpen() throws {
+        let settings = AppSettings(defaults: makeIsolatedDefaults())
+        settings.protocolProvider = .openAICompatible
+        settings.openAIAPIKeyPlacement = .customHeader
+        settings.openAIAPIKeyHeaderName = "Content-Type"
+        let body = try OutputSettingsView(settings: settings).inspect()
+
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.openAIAPIKeyHeaderNameWarning))
+    }
+
     func testResetPromptIsDisabledWithoutACustomPrompt() throws {
         let settings = AppSettings(defaults: makeIsolatedDefaults())
         settings.protocolProvider = .openAICompatible
