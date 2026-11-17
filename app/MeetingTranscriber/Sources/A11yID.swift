@@ -89,7 +89,7 @@ enum A11yID {
     static let useAITitleForFilenamesToggle = "useAITitleForFilenamesToggle"
     static let openAIAPIKeyField = "openAIAPIKeyField"
     static let openAIConnectionPicker = "openAIConnectionPicker"
-    static let openAIConnectionNameField = "openAIConnectionNameField"
+    static let openAIConnectionRenameButton = "openAIConnectionRenameButton"
     static let openAIConnectionAddButton = "openAIConnectionAddButton"
     static let openAIConnectionDeleteButton = "openAIConnectionDeleteButton"
     static let claudeAPIKeyField = "claudeAPIKeyField"

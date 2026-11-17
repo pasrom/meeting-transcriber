@@ -105,8 +105,8 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Vocabulary section · Live transcription (PoC) toggle |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Speaker Naming (open the naming window automatically, how long unnamed meetings wait) · Mic Speaker Name · Known Voices · Recognition Stats · Experimental: Diarization Tuning |
 | `Settings/OutputSettingsView.swift` | LLM provider · notes language · notify when meeting notes fail · output folder · recording retention · custom prompt |
-| `Settings/OpenAIConnectionControls.swift` | Saved OpenAI-compatible connection picker, name field, Add/Delete |
-| `Settings/OpenAIConnectionPrompts.swift` | State of the Add (name prompt) and Delete confirmation dialogs |
+| `Settings/OpenAIConnectionControls.swift` | Saved OpenAI-compatible connection picker with Add/Delete/Rename buttons |
+| `Settings/OpenAIConnectionPrompts.swift` | State of the Add and Rename (name prompt) and Delete confirmation dialogs |
 | `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics |
 | `Settings/AboutSettingsView.swift` | Version · bundle identifier · build date · ffmpeg status · project link · Updates |
 | `Settings/HelpBadge.swift` / `Settings/SettingsHelp.swift` | Reusable "?" help-popover badge + its shared copy, used across Settings sections |
