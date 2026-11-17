@@ -1,6 +1,6 @@
 import Foundation
 
-/// A saved OpenAI-compatible meeting-notes connection (Settings → Meeting Notes).
+/// A saved OpenAI-compatible meeting-notes connection (Settings → Output → AI Provider).
 ///
 /// Holds everything but the API key, which stays in the Keychain under
 /// `AppSettings.openAIKeyAccount(for:)`. The selected connection's values are

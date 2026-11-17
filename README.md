@@ -284,7 +284,7 @@ Files are saved to `~/Downloads/MeetingTranscriber/`, or to the folder chosen un
 
 In **Settings → Output**, both transcript options default to enabled for backward compatibility:
 
-- **Include full transcript in meeting notes** appends the verbatim transcript to generated Markdown.
+- **Include full transcript** appends the verbatim transcript to generated Markdown.
 - **Save raw transcript separately** retains the standalone `.txt` file.
 
 Disable both to retain only the generated meeting notes. The recording follows its own retention policy and is not deleted by either setting. To avoid data loss, a raw transcript is retained if meeting notes generation is disabled, fails, or the job ends with an error.

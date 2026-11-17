@@ -109,6 +109,54 @@ final class OutputSettingsViewTests: XCTestCase {
         XCTAssertNoThrow(try view.inspect())
     }
 
+    func testOpenAIProviderExplainsConnectionsAndTheirSettingsInHelp() throws {
+        let settings = AppSettings(defaults: makeIsolatedDefaults())
+        settings.protocolProvider = .openAICompatible
+        let body = try OutputSettingsView(settings: settings).inspect()
+        let helpTexts = try body.findAll(HelpBadge.self).map { try $0.actualView().text }
+
+        XCTAssertTrue(helpTexts.contains(SettingsHelp.openAIProvider))
+        XCTAssertTrue(helpTexts.contains(SettingsHelp.openAIConnection))
+        XCTAssertNoThrow(try body.find(text: "Connection Settings"))
+    }
+
+    func testResetPromptIsDisabledWithoutACustomPrompt() throws {
+        let settings = AppSettings(defaults: makeIsolatedDefaults())
+        settings.protocolProvider = .openAICompatible
+        let body = try OutputSettingsView(settings: settings).inspect()
+
+        XCTAssertTrue(try body.find(button: "Reset to Default\u{2026}").isDisabled())
+        XCTAssertFalse(try body.find(button: "Import Prompt\u{2026}").isDisabled())
+    }
+
+    func testNoneProviderHidesPromptControls() throws {
+        let settings = AppSettings(defaults: makeIsolatedDefaults())
+        settings.protocolProvider = .none
+        let body = try OutputSettingsView(settings: settings).inspect()
+        // The language picker renders, so the missing prompt row is not a failed lookup.
+        XCTAssertNoThrow(try body.find(text: "Notes Language"))
+        XCTAssertThrowsError(try body.find(button: "Edit\u{2026}"))
+    }
+
+    #if !APPSTORE
+        func testClaudeCLIProviderExplainsItselfInHelpAndKeepsTheBillingNoteInView() throws {
+            let settings = AppSettings(defaults: makeIsolatedDefaults())
+            settings.protocolProvider = .claudeCLI
+            let body = try OutputSettingsView(settings: settings).inspect()
+            XCTAssertNoThrow(try body.find(HelpBadge.self) { try $0.actualView().text == SettingsHelp.claudeCLIProvider })
+            XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.claudeAPIKeyBillingNote))
+        }
+
+        func testClaudeCLIProviderHidesConnectionSettings() throws {
+            let settings = AppSettings(defaults: makeIsolatedDefaults())
+            settings.protocolProvider = .claudeCLI
+            let body = try OutputSettingsView(settings: settings).inspect()
+            // The binary picker renders, so the missing section is not a failed lookup.
+            XCTAssertNoThrow(try body.find(text: "Claude CLI"))
+            XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: A11yID.openAIConnectionSection))
+        }
+    #endif
+
     // MARK: - Helpers
 
     private func makeIsolatedDefaults() -> UserDefaults {

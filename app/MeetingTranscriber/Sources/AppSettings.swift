@@ -800,7 +800,7 @@ final class AppSettings { // swiftlint:disable:this type_body_length
 
     #if !APPSTORE
         /// API key for the Claude CLI protocol generator, entered by the user
-        /// in Settings → Meeting Notes. Empty means use the CLI's own
+        /// in Settings → Output → AI Provider. Empty means use the CLI's own
         /// `claude login` session; this is never populated automatically.
         var claudeAPIKey: String {
             get { KeychainHelper.read(key: claudeAPIKeyAccount) ?? "" }
