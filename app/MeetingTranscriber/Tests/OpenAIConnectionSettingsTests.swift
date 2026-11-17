@@ -69,17 +69,6 @@ final class OpenAIConnectionSettingsTests: XCTestCase {
         XCTAssertEqual(settings.openAIAPIKey, "sk-typed-not-committed")
     }
 
-    func testNameFieldRenamesTheSelectedConnection() throws {
-        let view = OutputSettingsView(settings: settings)
-
-        try view.inspect()
-            .find(viewWithAccessibilityIdentifier: A11yID.openAIConnectionNameField)
-            .find(ViewType.TextField.self)
-            .setInput("Work Azure")
-
-        XCTAssertEqual(settings.activeOpenAIConnection?.name, "Work Azure")
-    }
-
     /// Controls with `prompts` and a switch that records it ran around the change.
     private func makeControls(_ prompts: OpenAIConnectionPrompts, switches: @escaping () -> Void = {}) -> OpenAIConnectionControls {
         OpenAIConnectionControls(settings: settings, prompts: prompts) { change in
@@ -125,6 +114,67 @@ final class OpenAIConnectionSettingsTests: XCTestCase {
         makeControls(prompts).confirmAdd()
 
         XCTAssertEqual(settings.openAIConnections.count, 1)
+    }
+
+    func testRenameButtonAsksForTheSelectedConnectionsNameAndRenamesNothing() throws {
+        settings.renameActiveOpenAIConnection("Work")
+        let selected = settings.activeOpenAIConnection
+        let prompts = OpenAIConnectionPrompts()
+
+        try makeControls(prompts).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.openAIConnectionRenameButton)
+            .find(ViewType.Button.self)
+            .tap()
+
+        XCTAssertEqual(prompts.renaming, selected)
+        XCTAssertEqual(prompts.renameName, "Work")
+        XCTAssertEqual(settings.activeOpenAIConnection?.name, "Work")
+    }
+
+    func testRenamingAConnectionWithAClearedNameStartsEmpty() {
+        settings.renameActiveOpenAIConnection("")
+        let prompts = OpenAIConnectionPrompts()
+
+        prompts.beginRename(settings: settings)
+
+        XCTAssertEqual(prompts.renameName, "", "the picker's placeholder label must not become the name")
+        XCTAssertFalse(prompts.canRename)
+    }
+
+    func testConfirmingRenameRenamesTheSelectedConnection() {
+        let prompts = OpenAIConnectionPrompts()
+        prompts.beginRename(settings: settings)
+        prompts.renameName = "  Work Azure "
+
+        makeControls(prompts).confirmRename()
+
+        XCTAssertEqual(settings.activeOpenAIConnection?.name, "Work Azure")
+        XCTAssertNil(prompts.renaming)
+    }
+
+    func testABlankRenameKeepsTheName() {
+        settings.renameActiveOpenAIConnection("Work")
+        let prompts = OpenAIConnectionPrompts()
+        prompts.beginRename(settings: settings)
+        prompts.renameName = "   "
+
+        XCTAssertFalse(prompts.canRename)
+        makeControls(prompts).confirmRename()
+
+        XCTAssertEqual(settings.activeOpenAIConnection?.name, "Work")
+    }
+
+    func testConfirmingRenameDoesNothingOnceAnotherConnectionIsSelected() {
+        let first = settings.activeOpenAIConnectionID
+        settings.addOpenAIConnection(named: "Local")
+        let prompts = OpenAIConnectionPrompts()
+        prompts.beginRename(settings: settings)
+        prompts.renameName = "Renamed"
+        settings.selectOpenAIConnection(first)
+
+        makeControls(prompts).confirmRename()
+
+        XCTAssertFalse(settings.openAIConnections.map(\.name).contains("Renamed"))
     }
 
     func testDeleteButtonAsksAboutTheSelectedConnectionAndDeletesNothing() throws {
