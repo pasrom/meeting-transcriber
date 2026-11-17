@@ -5,6 +5,11 @@ import XCTest
 
 @MainActor
 final class LiveCaptionsOverlayTests: XCTestCase {
+    /// A full row's top line slides out slowly enough to follow; at 0.2 s it read as a jump.
+    func testFullRowSlidesItsTopLineOutOverMoreThanAQuarterSecond() {
+        XCTAssertGreaterThanOrEqual(LiveCaptionsOverlay.lineScrollDuration, 0.25)
+    }
+
     func testDetectingLanguageRendersWithoutCaptionsAndClearsAfterDecision() throws {
         let state = LiveCaptionsState()
         state.setDetectingLanguage(true)

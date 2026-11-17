@@ -134,9 +134,13 @@ struct LiveCaptionsOverlay: View {
                     .contentTransition(.identity)
             }
             .clipped()
-            .animation(.easeOut(duration: 0.2), value: text)
+            .animation(.easeInOut(duration: Self.lineScrollDuration), value: text)
         }
     }
+
+    /// How long a full row takes to slide its top line out. At 0.2 s easing out, the slide was over
+    /// in three frames of a 30 fps film and read as a jump.
+    static let lineScrollDuration: TimeInterval = 0.3
 
     /// Line pitch of the row font, which SwiftUI rounds up to whole points (19 / 26 / 33 pt at
     /// small / medium / large). A clip off this pitch shows a strip of the hidden line's descenders.
