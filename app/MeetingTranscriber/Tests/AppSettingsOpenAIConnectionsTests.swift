@@ -2,7 +2,7 @@ import Foundation
 @testable import MeetingTranscriber
 import XCTest
 
-/// Saved OpenAI-compatible connections (Settings → Meeting Notes): the live
+/// Saved OpenAI-compatible connections (Settings → Output → AI Provider): the live
 /// `openAI*` settings and the API key follow the selected connection, each
 /// connection keeps its own Keychain item, and the list survives a relaunch.
 final class AppSettingsOpenAIConnectionsTests: XCTestCase {

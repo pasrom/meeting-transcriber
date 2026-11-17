@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Connection picker and Add/Delete/Rename buttons above the
-/// OpenAI-compatible fields in Settings → Meeting Notes. Each button asks first.
+/// Connection picker with Add, Delete and Rename buttons at the top of the
+/// OpenAI-compatible settings in Settings → Output. Each button asks first.
 struct OpenAIConnectionControls: View {
     @Bindable var settings: AppSettings
     /// Runs a change of the selected connection; the parent hands the key
@@ -47,34 +47,29 @@ struct OpenAIConnectionControls: View {
         // Read here so this body observes the selection: the bindings' getters
         // run outside it (see `DraftTextField`).
         let _ = settings.activeOpenAIConnectionID // swiftlint:disable:this redundant_discardable_let
-        Picker("Connection", selection: Binding(
-            get: { settings.activeOpenAIConnectionID },
-            set: { id in switchConnection { settings.selectOpenAIConnection(id) } },
-        )) {
-            ForEach(settings.openAIConnections) { connection in
-                Text(connection.displayName).tag(connection.id)
-            }
-        }
-        .accessibilityIdentifier(A11yID.openAIConnectionPicker)
-
         HStack {
-            Button("Add Connection\u{2026}") {
+            Picker("Connection", selection: Binding(
+                get: { settings.activeOpenAIConnectionID },
+                set: { id in switchConnection { settings.selectOpenAIConnection(id) } },
+            )) {
+                ForEach(settings.openAIConnections) { connection in
+                    Text(connection.displayName).tag(connection.id)
+                }
+            }
+            .accessibilityIdentifier(A11yID.openAIConnectionPicker)
+
+            iconButton("Add Connection\u{2026}", systemImage: "plus", id: A11yID.openAIConnectionAddButton) {
                 prompts.beginAdd(settings: settings)
             }
-            .accessibilityIdentifier(A11yID.openAIConnectionAddButton)
 
-            Button("Delete Connection\u{2026}") {
+            iconButton("Delete Connection\u{2026}", systemImage: "minus", id: A11yID.openAIConnectionDeleteButton) {
                 prompts.beginDelete(settings: settings)
             }
             .disabled(settings.openAIConnections.count <= 1)
-            .accessibilityIdentifier(A11yID.openAIConnectionDeleteButton)
 
-            Button("Rename Connection\u{2026}") {
+            iconButton("Rename Connection\u{2026}", systemImage: "pencil", id: A11yID.openAIConnectionRenameButton) {
                 prompts.beginRename(settings: settings)
             }
-            .accessibilityIdentifier(A11yID.openAIConnectionRenameButton)
-
-            Spacer()
         }
         .alert("Add Connection", isPresented: $prompts.isAdding) {
             TextField("Name", text: $prompts.newName)
@@ -108,8 +103,17 @@ struct OpenAIConnectionControls: View {
         } message: {
             Text("Its settings are removed and its API key is deleted from the Keychain. This cannot be undone.")
         }
-        Text("Each connection keeps its own endpoint, model and API key. Meeting notes use the selected one.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+    }
+
+    private func iconButton(_ title: String, systemImage: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 14, height: 14)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(id)
     }
 }

@@ -417,7 +417,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
 
     func testProviderPickerExists() throws {
         let body = try makeOutput().inspect()
-        XCTAssertNoThrow(try body.find(text: "LLM Provider"))
+        XCTAssertNoThrow(try body.find(text: "Provider"))
     }
 
     #if !APPSTORE
@@ -435,7 +435,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         let body = try makeOutput(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Endpoint"))
         XCTAssertNoThrow(try body.find(text: "API Key"))
-        XCTAssertNoThrow(try body.find(text: "Fetch Models"))
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.openAIRefreshModelsButton))
     }
 
     func testOpenAIModelFieldShown() throws {
@@ -449,9 +449,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         let settings = makeSettings()
         settings.protocolProvider = .none
         let body = try makeOutput(settings: settings).inspect()
-        XCTAssertNoThrow(
-            try body.find(text: "No LLM summarization will be generated. Raw transcripts are retained if no meeting notes are saved."),
-        )
+        XCTAssertNoThrow(try body.find(HelpBadge.self) { try $0.actualView().text == SettingsHelp.noProvider })
     }
 
     func testNoneProviderHidesEndpointField() throws {
@@ -481,29 +479,22 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
 
     func testEditPromptButtonExists() throws {
         let body = try makeOutput().inspect()
-        XCTAssertNoThrow(try body.find(button: "Edit Prompt"))
+        XCTAssertNoThrow(try body.find(button: "Edit\u{2026}"))
     }
 
     func testImportPromptButtonExists() throws {
         let body = try makeOutput().inspect()
-        XCTAssertNoThrow(try body.find(button: "Import Prompt"))
+        XCTAssertNoThrow(try body.find(button: "Import Prompt\u{2026}"))
     }
 
     func testResetToDefaultButtonExists() throws {
         let body = try makeOutput().inspect()
-        XCTAssertNoThrow(try body.find(button: "Reset to Default"))
+        XCTAssertNoThrow(try body.find(button: "Reset to Default\u{2026}"))
     }
 
     func testDefaultPromptStatusShown() throws {
         let body = try makeOutput().inspect()
         XCTAssertNoThrow(try body.find(text: "Using default prompt"))
-    }
-
-    func testOpenAIAPIKeyCaptionShown() throws {
-        let settings = makeSettings()
-        settings.protocolProvider = .openAICompatible
-        let body = try makeOutput(settings: settings).inspect()
-        XCTAssertNoThrow(try body.find(text: "Leave empty if your local server doesn't require authentication"))
     }
 
     // MARK: - Advanced tab
@@ -563,12 +554,14 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         XCTAssertTrue(section.isDisabled())
     }
 
-    func testRecordOnlyDisablesProtocolSection() throws {
+    func testRecordOnlyDisablesProtocolSections() throws {
         let settings = makeSettings()
         settings.recordOnly = true
+        settings.protocolProvider = .openAICompatible
         let body = try makeOutput(settings: settings).inspect()
-        let section = try body.find(viewWithAccessibilityIdentifier: A11yID.protocolSection)
-        XCTAssertTrue(section.isDisabled())
+        for id in [A11yID.protocolSection, A11yID.protocolProviderSection, A11yID.openAIConnectionSection] {
+            XCTAssertTrue(try body.find(viewWithAccessibilityIdentifier: id).isDisabled(), id)
+        }
     }
 
     func testRecordOnlyDoesNotDisableOutputFolderSection() throws {

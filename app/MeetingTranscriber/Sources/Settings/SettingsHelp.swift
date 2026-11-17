@@ -106,4 +106,38 @@ enum SettingsHelp {
     static let customVocabularyWhisperKit = customVocabulary + "\n\n"
         + "Experimental with WhisperKit: on busy audio it can leave out whole sentences. "
         + "Parakeet is the better engine for vocabulary."
+
+    static let openAIProvider =
+        """
+        Sends the transcript to a server that speaks the OpenAI chat-completions API: \
+        a local one such as LM Studio or Ollama, or a hosted one.
+
+        Each connection keeps its own endpoint, model and API key. Meeting notes use \
+        the selected one. A new connection copies the current settings but not the key.
+        """
+
+    static let claudeCLIProvider =
+        """
+        Runs the selected Claude CLI binary to write the meeting notes.
+
+        The API key is optional: leave it empty to use your "claude login" session. \
+        Set one only if that session can't stay signed in.
+        """
+
+    static let noProvider =
+        "No LLM summarization will be generated. Raw transcripts are retained if no meeting notes are saved."
+
+    static let openAIConnection =
+        """
+        Endpoint: a base URL such as http://localhost:1234/v1, or the full \
+        chat-completions URL. Both work.
+
+        API key: leave it empty if the server needs no authentication.
+
+        - Authentication: sent as a bearer token, or unchanged in a custom HTTP \
+        header such as api-key.
+        - Temperature and Top P are sent only when switched on; off leaves the \
+        server's own default. Some servers reject both together, and reasoning \
+        models often reject any value.
+        """
 }

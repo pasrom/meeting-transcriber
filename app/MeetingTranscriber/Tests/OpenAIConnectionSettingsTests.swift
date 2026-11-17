@@ -2,7 +2,7 @@
 import ViewInspector
 import XCTest
 
-/// Wiring of the saved-connection controls in Settings → Meeting Notes; the
+/// Wiring of the saved-connection controls in Settings → Output → AI Provider; the
 /// switching logic itself is pinned in `AppSettingsOpenAIConnectionsTests`.
 @MainActor
 final class OpenAIConnectionSettingsTests: XCTestCase {
