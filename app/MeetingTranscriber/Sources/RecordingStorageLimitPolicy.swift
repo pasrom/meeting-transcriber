@@ -14,7 +14,8 @@ struct RecordingStorageLimitSettings: Equatable {
 
 /// The warning the user was given when the recordings went over the limit:
 /// when, under which limit, and for which output folder. It covers only the
-/// recordings made before it, under a limit at least as low, in that folder.
+/// recordings already deletable when it was given, under a limit at least as
+/// low, in that folder.
 struct RecordingStorageWarning: Codable, Equatable {
     let since: Date
     let limitBytes: Int64
@@ -32,8 +33,10 @@ struct RecordingStorageWarning: Codable, Equatable {
         limitBytes >= self.limitBytes && root == self.root
     }
 
+    /// By when the recording became deletable, not when it was made: one
+    /// whose notes are saved later, after a retry say, gets its own warning.
     func covers(_ candidate: RecordingStorageLimitPolicy.Candidate) -> Bool {
-        candidate.recordedAt < since
+        candidate.eligibleAt <= since
     }
 }
 
@@ -47,6 +50,8 @@ enum RecordingStorageLimitPolicy {
     struct Candidate: Equatable {
         let jobID: UUID
         let recordedAt: Date
+        /// When its outputs were saved, so it became deletable.
+        let eligibleAt: Date
         let urls: [URL]
         let bytes: Int64
     }
@@ -91,7 +96,7 @@ enum RecordingStorageLimitPolicy {
 
     /// After a delete that still leaves the total over the limit: warn again
     /// when a recording the warning does not cover could go, so it is never
-    /// deleted without a warning given after it was made.
+    /// deleted without a warning given after it became deletable.
     static func needsNewWarning(
         remainingBytes: Int64, limitBytes: Int64, uncovered: [Candidate],
     ) -> Bool {

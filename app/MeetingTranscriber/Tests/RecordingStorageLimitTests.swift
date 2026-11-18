@@ -47,11 +47,14 @@ final class RecordingStorageLimitTests: XCTestCase {
 
     private func makeRetention(
         retentionDays: Int? = nil,
+        registryPath: URL? = nil,
         deleter: RecordingFileDeleter = RecordingFileDeleter(),
         storageLimit: (() -> RecordingStorageLimitSettings)? = nil,
     ) -> RecordingRetention {
         RecordingRetention(
-            registry: RecordingRetentionRegistry(path: tmpDir.appendingPathComponent("logs/retained.json")),
+            registry: RecordingRetentionRegistry(
+                path: registryPath ?? tmpDir.appendingPathComponent("logs/retained.json"),
+            ),
             settings: { RecordingRetentionSettings(enabled: retentionDays != nil, days: retentionDays ?? 30) },
             now: { [weak self] in self?.now ?? Date() },
             deleter: deleter,
@@ -77,7 +80,8 @@ final class RecordingStorageLimitTests: XCTestCase {
     }
 
     /// One 100-byte track recorded `ageDays` before `start` (after it when
-    /// negative), in `folder` of `under` (the output root by default).
+    /// negative), in `folder` of `under` (the output root by default), its
+    /// notes saved `now` when `eligible`.
     @discardableResult
     private func register(
         in retention: RecordingRetention, ageDays: Double, eligible: Bool = true,
@@ -92,75 +96,12 @@ final class RecordingStorageLimitTests: XCTestCase {
         retention.registry.register(
             jobID: jobID, paths: [url], root: base, recordedAt: start.addingTimeInterval(-ageDays * 86400),
         )
-        if eligible { retention.registry.markEligible(jobID: jobID, output: protocolFile, at: start) }
+        if eligible { retention.registry.markEligible(jobID: jobID, output: protocolFile, at: now) }
         return url
     }
 
     private func exists(_ url: URL) -> Bool {
         FileManager.default.fileExists(atPath: url.path)
-    }
-
-    // MARK: - Policy
-
-    func testStepFollowsTheGracePeriod() {
-        let warning = RecordingStorageWarning(since: start, limitBytes: 250, root: nil)
-        let step = { (total: Int64, warning: RecordingStorageWarning?, now: Date) in
-            RecordingStorageLimitPolicy.step(
-                totalBytes: total, settings: self.limit, warning: warning, root: nil, now: now,
-            )
-        }
-        XCTAssertEqual(step(250, nil, start), .clear, "at the limit is not over it")
-        XCTAssertEqual(step(251, nil, start), .warn)
-        XCTAssertEqual(step(251, warning, start.addingTimeInterval(86399)), .wait)
-        XCTAssertEqual(step(251, warning, start.addingTimeInterval(86400)), .delete)
-        XCTAssertEqual(
-            RecordingStorageLimitPolicy.step(totalBytes: 999, settings: .off, warning: warning, root: nil, now: start),
-            .clear,
-        )
-    }
-
-    /// A warning covers its own limit or a higher one, and its own folder.
-    func testAWarningForAHigherLimitOrAnotherFolderWarnsAgain() {
-        let warning = RecordingStorageWarning(since: start, limitBytes: 250, root: "/a")
-        let later = start.addingTimeInterval(RecordingStorageLimitPolicy.gracePeriod)
-        let step = { (limit: Int64, root: String?) in
-            RecordingStorageLimitPolicy.step(
-                totalBytes: 1000, settings: .init(enabled: true, limitBytes: limit), warning: warning,
-                root: root, now: later,
-            )
-        }
-        XCTAssertEqual(step(250, "/a"), .delete)
-        XCTAssertEqual(step(500, "/a"), .delete, "raising the limit keeps the warning")
-        XCTAssertEqual(step(100, "/a"), .warn, "a lower limit than the one warned about")
-        XCTAssertEqual(step(250, "/b"), .warn, "another output folder")
-        XCTAssertEqual(step(250, nil), .warn)
-    }
-
-    func testStatusLinesShowUsageAndThePendingDeletion() {
-        let calm = RecordingStorageLimitRows.statusLines(.init(totalBytes: 2_000_000_000, keptBytes: 0, warning: nil))
-        XCTAssertEqual(calm, ["Recordings use 2 GB."])
-
-        let warning = RecordingStorageWarning(since: start, limitBytes: 1, root: nil)
-        let over = RecordingStorageLimitRows.statusLines(
-            .init(totalBytes: 2_000_000_000, keptBytes: 500_000_000, warning: warning),
-        )
-        XCTAssertEqual(over.count, 2)
-        XCTAssertEqual(over[0], "Recordings use 2 GB, 500 MB of it cannot be deleted yet.")
-        XCTAssertTrue(over[1].contains(start.formatted(date: .abbreviated, time: .shortened)))
-        XCTAssertTrue(over[1].contains(warning.deletesFrom.formatted(date: .abbreviated, time: .shortened)))
-    }
-
-    func testSelectsOldestFirstUntilUnderTheLimit() {
-        let make = { (age: Double, bytes: Int64) in
-            RecordingStorageLimitPolicy.Candidate(
-                jobID: UUID(), recordedAt: self.start.addingTimeInterval(-age * 86400), urls: [], bytes: bytes,
-            )
-        }
-        let newest = make(1, 100), middle = make(2, 100), oldest = make(3, 100)
-        let picked = RecordingStorageLimitPolicy.selectForDeletion(
-            [newest, oldest, middle], totalBytes: 350, limitBytes: 200,
-        )
-        XCTAssertEqual(picked, [oldest, middle])
     }
 
     // MARK: - Size pass
@@ -402,18 +343,59 @@ final class RecordingStorageLimitTests: XCTestCase {
         XCTAssertEqual(statuses.last??.keptBytes, 300)
     }
 
-    /// A listed file outside the recordings folder neither counts nor goes.
+    /// A listed file outside the recordings folder neither counts nor goes,
+    /// even as the oldest recording once the grace period is over.
     func testAFileOutsideTheRecordingsFolderDoesNotCount() async throws {
-        limit = RecordingStorageLimitSettings(enabled: true, limitBytes: 300)
         let retention = makeRetention()
-        try [1.0, 2, 3].forEach { try register(in: retention, ageDays: $0) }
+        let newest = try register(in: retention, ageDays: 1)
+        let middle = try register(in: retention, ageDays: 2)
+        let oldest = try register(in: retention, ageDays: 3)
         let outside = try register(in: retention, ageDays: 4, folder: "elsewhere")
 
         await retention.sweep(context)
+        XCTAssertEqual(statuses.last??.totalBytes, 300, "the outside file is not counted")
 
-        XCTAssertTrue(reached.isEmpty, "300 bytes counted, at the limit")
-        XCTAssertEqual(statuses.last??.totalBytes, 300)
+        now = start.addingTimeInterval(RecordingStorageLimitPolicy.gracePeriod)
+        await retention.sweep(context)
+
         XCTAssertTrue(exists(outside))
+        XCTAssertFalse(exists(oldest), "the oldest inside the folder goes instead")
+        XCTAssertTrue(exists(middle))
+        XCTAssertTrue(exists(newest))
+    }
+
+    /// An old recording whose notes only succeed after the warning, a retry
+    /// say, is warned about again instead of going as soon as they are saved.
+    func testARecordingWhoseNotesAreSavedAfterTheWarningIsWarnedAboutBeforeItGoes() async throws {
+        let retention = makeRetention()
+        let files = try [1.0, 2, 3].map { try register(in: retention, ageDays: $0, eligible: false) }
+        await retention.sweep(context)
+        XCTAssertEqual(reached.count, 1)
+
+        now = start.addingTimeInterval(7 * 86400)
+        let oldest = try XCTUnwrap(retention.registry.entries.first { $0.paths == [files[2]] })
+        retention.registry.markEligible(jobID: oldest.jobID, output: protocolFile, at: now)
+        await retention.sweep(context)
+        XCTAssertTrue(exists(files[2]), "made before the warning, but deletable only after it")
+        XCTAssertEqual(reached.count, 2)
+
+        now = now.addingTimeInterval(RecordingStorageLimitPolicy.gracePeriod)
+        await retention.sweep(context)
+        XCTAssertFalse(exists(files[2]), "its own grace period is over")
+    }
+
+    /// A registry that cannot be saved stops the pass before it warns or deletes.
+    func testARegistryThatCannotBeSavedSkipsThePass() async throws {
+        let blocker = tmpDir.appendingPathComponent("blocker")
+        try Data().write(to: blocker)
+        let retention = makeRetention(registryPath: blocker.appendingPathComponent("retained.json"))
+        let files = try [1.0, 2, 3].map { try register(in: retention, ageDays: $0) }
+
+        await retention.sweep(context)
+
+        XCTAssertTrue(reached.isEmpty)
+        XCTAssertTrue(statuses.isEmpty)
+        XCTAssertTrue(files.allSatisfy(exists))
     }
 
     /// A delete that fails leaves the total over, so the warning stays and

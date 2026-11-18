@@ -65,4 +65,17 @@ final class RecordingStorageLimitSettingsViewTests: XCTestCase {
                 .find(viewWithAccessibilityIdentifier: A11yID.recordingStorageStatus),
         )
     }
+
+    /// The view words the pending deletion against the current time.
+    func testStatusSaysDeletingOnceTheDeleteTimeHasPassed() throws {
+        let settings = try makeSettings()
+        settings.recordingStorageLimitEnabled = true
+        let warning = RecordingStorageWarning(since: Date().addingTimeInterval(-7 * 86400), limitBytes: 1, root: nil)
+        settings.recordingStorageStatus = RecordingStorageStatus(totalBytes: 2_000_000_000, keptBytes: 0, warning: warning)
+
+        let texts = try OutputSettingsView(settings: settings).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.recordingStorageStatus)
+            .findAll(ViewType.Text.self).map { try $0.string() }
+        XCTAssertTrue(texts.contains { $0.contains("are being deleted") }, "\(texts)")
+    }
 }

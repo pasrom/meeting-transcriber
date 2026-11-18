@@ -331,8 +331,8 @@ final class RecordingRetention {
     /// the total is over the limit it warns, waits out the grace period, then
     /// deletes the oldest recordings the age rules would let go of (outputs
     /// written, not in use, inside the recordings folder) until the total
-    /// fits. Only recordings made before the warning are deleted under it; a
-    /// newer one that would have to go gets a warning of its own. Recordings
+    /// fits. Only recordings deletable when the warning was given are deleted
+    /// under it; one that becomes deletable later gets a warning of its own. Recordings
     /// still waiting for their outputs count but are never deleted.
     private func sweepBySize(_ context: SweepContext) async {
         let limit = effectiveStorageLimit
@@ -426,8 +426,9 @@ final class RecordingRetention {
                 .reduce(0) { $0 + fileSize($1) }
             switch RecordingRetentionPolicy.decide(entry, now: instant, settings: Self.anyAge, environment: environment) {
             case let .delete(urls):
+                // `decide` deletes only an entry with `eligibleAt` set.
                 candidates.append(.init(
-                    jobID: entry.jobID, recordedAt: entry.recordedAt, urls: urls,
+                    jobID: entry.jobID, recordedAt: entry.recordedAt, eligibleAt: entry.eligibleAt ?? instant, urls: urls,
                     bytes: urls.reduce(0) { $0 + fileSize($1) },
                 ))
 
