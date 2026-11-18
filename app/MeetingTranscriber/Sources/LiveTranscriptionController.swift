@@ -1,4 +1,3 @@
-import AudioTapLib
 import FluidAudio
 import Foundation
 import os
@@ -162,34 +161,6 @@ final class LiveTranscriptionController {
     /// otherwise interleave with the next recording's ingests on the same actor —
     /// emitting the old tail as the new recording's caption or zeroing its ring.
     var pendingFlush: Task<Void, Never>?
-
-    /// Mic-channel live sink. Hand this to `DualSourceRecorder.micLiveSink`
-    /// before `recorder.start(...)`. Buffers arrive on the AVAudioEngine tap
-    /// thread; the closure yields into the channel's bounded feed and returns
-    /// immediately — no task spawn, no actor hop on the audio thread.
-    var micSink: LiveAudioSink {
-        let sink = micFeed.sink
-        let probe = micProbeFeed.sink
-        return { buffer in
-            sink(buffer)
-            probe(buffer)
-        }
-    }
-
-    /// App-channel live sink. Hand this to `DualSourceRecorder.appLiveSink`
-    /// before `recorder.start(...)`. Buffers arrive on the CATap IOProc
-    /// thread, normally already capture-time resampled to 16 kHz mono (raw
-    /// device rate only on the resampler-nil fallback) — the feed's consumer
-    /// runs them through `LiveAudioResampler`, which passes 16 kHz mono
-    /// through unchanged.
-    var appSink: LiveAudioSink {
-        let sink = appFeed.sink
-        let probe = appProbeFeed.sink
-        return { buffer in
-            sink(buffer)
-            probe(buffer)
-        }
-    }
 
     /// `verboseDiagnostics` stays the LAST parameter so a trailing closure binds
     /// to it (matching every existing call site + SwiftFormat's trailing-closure
