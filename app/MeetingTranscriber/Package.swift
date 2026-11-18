@@ -2,6 +2,26 @@
 
 import PackageDescription
 
+// Type-check gate for both targets. Surfaces accidental compile-time blowups:
+// pathological generic-overload search or deeply nested SwiftUI builders take
+// seconds to type-check.
+//
+// 1000 ms, not the 100 ms often recommended, because the timer also counts the
+// lazy `@Observable` expansion of a type declared in another file, charged to
+// whichever body first touches it in a compile job. For `AppSettings` and
+// `PipelineQueue` that is about 50 to 70 ms each on an M-series Mac, so a
+// 10-line body that touches both measures over 100 ms on its own, and 300 to
+// 430 ms on a loaded CI runner while the body itself takes 1 ms. Rewriting the
+// body only moves the cost to the next first toucher.
+//
+// The expression timer is charged the same way (53 ms on the first
+// `settings.watchApps` expression in `defaultDetectors`), so both flags move
+// together. Raised from 300 ms.
+let typeCheckGate: SwiftSetting = .unsafeFlags([
+    "-Xfrontend", "-warn-long-function-bodies=1000",
+    "-Xfrontend", "-warn-long-expression-type-checking=1000",
+])
+
 let package = Package(
     name: "MeetingTranscriber",
     platforms: [.macOS(.v14)],
@@ -68,16 +88,7 @@ let package = Package(
             // to WhisperKit/FluidAudio.
             swiftSettings: [
                 .treatAllWarnings(as: .error),
-                // Surface accidental compile-time blowups. Type-checking a
-                // function body or expression beyond 300 ms is almost always
-                // a sign of pathological generic-overload search or deeply
-                // nested SwiftUI builders. Apple recommends 100 ms; 300 ms
-                // is the historical pre-Swift-6 setting that turned out to
-                // be sustainable once strict-concurrency analysis settled.
-                .unsafeFlags([
-                    "-Xfrontend", "-warn-long-function-bodies=300",
-                    "-Xfrontend", "-warn-long-expression-type-checking=300",
-                ]),
+                typeCheckGate,
                 .enableUpcomingFeature("ExistentialAny"),
             ],
             linkerSettings: [
@@ -103,10 +114,7 @@ let package = Package(
             exclude: ["Fixtures", "__Snapshots__"],
             swiftSettings: [
                 .treatAllWarnings(as: .error),
-                .unsafeFlags([
-                    "-Xfrontend", "-warn-long-function-bodies=300",
-                    "-Xfrontend", "-warn-long-expression-type-checking=300",
-                ]),
+                typeCheckGate,
                 .enableUpcomingFeature("ExistentialAny"),
             ]
         ),

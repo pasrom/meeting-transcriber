@@ -8,7 +8,7 @@
 #
 # What it pins, and why each matters:
 #   - A body measured by several compiler jobs appears once, with its slowest
-#     measurement. The 300 ms gate fires on any single measurement, so a table
+#     measurement. The gate fires on any single measurement, so a table
 #     that averaged or took the first would understate the risk.
 #   - Lines outside the repository root (dependencies), macro expansion buffers
 #     and `<invalid loc>` declarations are skipped: none of them is a place a

@@ -234,10 +234,11 @@ jobs:
           # change: output identical after the strip, +14 s on a 212 s run.
           swiftlint analyze --strict --compiler-log-path /tmp/xcodebuild.log --reporter github-actions-logging 2>&1 \
             | bash scripts/ci/type-check-timings.sh strip
-      # Non-gating by construction: the 300 ms limit in Package.swift stays the
-      # only enforcement. `continue-on-error` keeps any report problem from
-      # failing the job, including the script's own exit 1 when it found no
-      # timings, which then shows as a tolerated step failure plus a warning
+      # Non-gating by construction: the limits in the Package.swift manifests
+      # (app 1000 ms, AudioTapLib 300 ms) stay the only enforcement.
+      # `continue-on-error` keeps any report problem from failing the job,
+      # including the script's own exit 1 when it found no timings, which then
+      # shows as a tolerated step failure plus a warning
       # annotation rather than as an empty table. Runs after a failed build
       # too: when the gate fires, the bodies measured before the error are
       # exactly the ones to read.
