@@ -81,7 +81,7 @@ flowchart TD
 
 ## Features
 
-- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via the power assertions they hold during a call (no window titles, so no Screen Recording needed), opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in any Chromium browser, or in Safari with the Homebrew build) gated behind a recording-consent prompt, and opt-in mic-input detection for call apps without a reliable meeting signal (WeChat, Tencent Meeting, FaceTime, WhatsApp, Slack Huddles) — per app, off by default, and unlike the browser path it starts recording without a prompt
+- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via the power assertions they hold during a call (no window titles, so no Screen Recording needed), opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in any Chromium browser, or in Safari with the Homebrew build) gated behind a recording-consent prompt, and opt-in mic-input detection for call apps without a reliable meeting signal (WeChat, Tencent Meeting, FaceTime, WhatsApp, Slack Huddles, Discord) — per app, off by default, and unlike the browser path it starts recording without a prompt
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
 - **On-device transcription** — Engines selectable in Settings:
   - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model; besides the stock models, a custom WhisperKit model can be loaded from another Hugging Face repository or a local folder (see [Custom WhisperKit models](#custom-whisperkit-models))
@@ -251,7 +251,7 @@ Open Settings via the menu bar item or ⌘,.
 
 | Tab | What's in it |
 |---|---|
-| **General** | Startup (launch at login, start watching on open), record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack), detection timing |
+| **General** | Startup (launch at login, start watching on open), record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack/Discord), detection timing |
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
 | **Transcription** | ASR engine (WhisperKit / Parakeet / GigaAM) and per-engine options (model incl. a custom WhisperKit model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
 | **Speakers** | Diarization, whether the naming window opens by itself, how long unnamed meetings wait before they get the automatic names, mic speaker name, known voices, recognition stats |

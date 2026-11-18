@@ -14,9 +14,11 @@ extension DualSourceRecorder {
     /// prepending the root if enumeration somehow missed it — order matters
     /// for the aggregate device's cosmetic name tag (root first).
     static func resolveTapPIDs(rootPID: pid_t) -> [pid_t] {
-        resolveTapPIDs(
+        let app = NSRunningApplication(processIdentifier: rootPID)
+        return resolveTapPIDs(
             rootPID: rootPID,
-            bundleURL: NSRunningApplication(processIdentifier: rootPID)?.bundleURL,
+            bundleURL: app?.bundleURL,
+            bundleIdentifier: app?.bundleIdentifier,
             enumerate: ProcessTreeEnumerator.pidsRooted(in:),
             // Safari's audio runs in WebKit XPC outside Safari.app — see ProcessResponsibility.tapPIDs.
             widen: { ProcessResponsibility.tapPIDs(rootPID: rootPID, bundleDerived: $0) },
@@ -37,14 +39,17 @@ extension DualSourceRecorder {
     static func resolveTapPIDs(
         rootPID: pid_t,
         bundleURL: URL?,
+        bundleIdentifier: String? = nil,
         enumerate: (URL) -> [pid_t],
         widen: ([pid_t]) -> [pid_t] = \.self,
-        select: ([pid_t]) -> [pid_t] = \.self,
+        select: ([pid_t], Bool) -> [pid_t] = { pids, _ in pids },
     ) -> [pid_t] {
         guard let bundleURL else { return [rootPID] }
         let enumerated = enumerate(bundleURL)
         // Empty `enumerated` needs no guard: it falls through to `[rootPID] + []`, the root alone.
         let bundleDerived = enumerated.contains(rootPID) ? enumerated : [rootPID] + enumerated
-        return select(widen(bundleDerived))
+        // Discord's voice engine can own Core Audio streams in a renderer even
+        // while Chromium's usual audio service is present.
+        return select(widen(bundleDerived), bundleIdentifier == AppMeetingPattern.discordBundleID)
     }
 }

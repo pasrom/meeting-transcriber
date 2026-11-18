@@ -28,6 +28,7 @@ enum A11yID {
     static let micMuteHotkeyConflict = "micMuteHotkeyConflict"
     static let watchBrowserToggle = "watchBrowserToggle"
     static let watchSlackToggle = "watchSlackToggle"
+    static let watchDiscordToggle = "watchDiscordToggle"
     static let browserConsentWarning = "browserConsentWarning"
     static let consentDenyListSection = "consentDenyListSection"
     /// Per-row Remove button in the never-record list, addressed by ROW INDEX,

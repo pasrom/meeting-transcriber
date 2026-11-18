@@ -3,11 +3,10 @@ import os
 
 private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", category: "ChromiumHelperFilter")
 
-/// Keeps a Chromium-based app's audio service in the tap set and drops its
-/// other helpers (issue #791).
+/// Keeps a Chromium-based app's audio processes in the tap set (issue #791).
 ///
-/// A Chromium browser (Chrome, Brave, Edge, Comet) or Electron app renders
-/// every output stream in one utility process, `--utility-sub-type=
+/// A Chromium browser (Chrome, Brave, Edge, Comet) or Electron app
+/// usually renders through a utility process, `--utility-sub-type=
 /// audio.mojom.AudioService`. The bundle-rooted enumeration also returns the
 /// helpers that merely talked to CoreAudio, and on macOS 14.6.1 the reporter
 /// of #791 measured that a `stereoMixdownOfProcesses` tap over the audio
@@ -18,10 +17,9 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// browser root, delivers. Which HAL interaction stalls the aggregate is not
 /// known, so the selection is an allow-list rather than a deny-list of the
 /// one helper measured: every `--type=` child other than the audio service
-/// goes, including ones not yet seen to stall. What that trades away: a child
-/// that renders through a native add-on instead of the audio service (an
-/// Electron app with node integration could) would be dropped too; no such
-/// app has been measured.
+/// goes unless the caller opts in to keeping renderers. Discord needs that
+/// opt-in: Core Audio reports its renderer as the output owner while its
+/// separate Chromium audio service is running.
 ///
 /// Rejected: selecting by `kAudioProcessPropertyIsRunningOutput`. It says
 /// whether the process has an output stream running at the moment of the read
@@ -30,9 +28,8 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// before the far end's audio has started would read false on the audio
 /// service itself and drop the one process that matters.
 ///
-/// The filter only acts when it has found an audio service, so an app with no
-/// such helper (a native app, a WebKit app, a Chromium with in-process audio)
-/// keeps its set untouched. A process whose arguments cannot be read has no
+/// The filter acts only after finding an audio service or an opted-in renderer.
+/// Native and WebKit app process sets pass through unchanged. A process whose arguments cannot be read has no
 /// `--type=` either and is kept as well.
 public enum ChromiumHelperFilter {
     /// What a process's arguments say it is, as far as this filter cares.
@@ -42,7 +39,9 @@ public enum ChromiumHelperFilter {
         case notAChild
         /// `--type=utility --utility-sub-type=audio.mojom.AudioService`.
         case audioService
-        /// Any other Chromium child: renderer, GPU, network, video capture.
+        /// Discord can render voice through this process.
+        case renderer
+        /// Other Chromium children, such as GPU, network, video capture.
         case otherChild
     }
 
@@ -52,7 +51,7 @@ public enum ChromiumHelperFilter {
            value(of: "--utility-sub-type", in: arguments) == "audio.mojom.AudioService" {
             return .audioService
         }
-        return .otherChild
+        return type == "renderer" ? .renderer : .otherChild
     }
 
     private static func value(of flag: String, in arguments: [String]) -> String? {
@@ -61,31 +60,37 @@ public enum ChromiumHelperFilter {
         return String(match.dropFirst(prefix.count))
     }
 
-    /// `pids` with every Chromium child other than the audio service removed,
-    /// in the original order, plus what was removed. Unchanged when no audio
-    /// service is among them.
+    /// Retain the root, audio service, and any opted-in renderers, preserving order.
     static func select(
         _ pids: [pid_t],
+        includeRenderers: Bool = false,
         arguments: (pid_t) -> [String],
     ) -> (kept: [pid_t], dropped: [pid_t]) {
         let roles = pids.map { (pid: $0, role: role(of: arguments($0))) }
-        guard roles.contains(where: { $0.role == .audioService }) else {
+        func isAudioRole(_ role: Role) -> Bool {
+            role == .audioService || (includeRenderers && role == .renderer)
+        }
+        guard roles.contains(where: { isAudioRole($0.role) }) else {
             return (kept: pids, dropped: [])
         }
-        return (
-            kept: roles.filter { $0.role != .otherChild }.map(\.pid),
-            dropped: roles.filter { $0.role == .otherChild }.map(\.pid),
-        )
+        var kept: [pid_t] = []
+        var dropped: [pid_t] = []
+        for (pid, role) in roles {
+            if role == .notAChild || isAudioRole(role) {
+                kept.append(pid)
+            } else {
+                dropped.append(pid)
+            }
+        }
+        return (kept, dropped)
     }
 
-    /// The live form of `select`, reading each process's arguments from the
-    /// kernel and logging what it drops at the same level as the tap summary,
-    /// so a silent-track report shows which helpers the tap did not cover.
-    public static func audioRelevantPIDs(_ pids: [pid_t]) -> [pid_t] {
-        let selection = select(pids, arguments: ProcessArguments.live)
+    /// The live form of `select`, reading each process's arguments from the kernel.
+    public static func audioRelevantPIDs(_ pids: [pid_t], includeRenderers: Bool = false) -> [pid_t] {
+        let selection = select(pids, includeRenderers: includeRenderers, arguments: ProcessArguments.live)
         if !selection.dropped.isEmpty {
             logger.info(
-                "App audio tap: tapping the Chromium audio service, leaving out \(selection.dropped.count, privacy: .public) other helper(s) [\(pidSummary(selection.dropped), privacy: .public)]",
+                "App audio tap: leaving out \(selection.dropped.count, privacy: .public) non-audio Chromium helper(s) [\(pidSummary(selection.dropped), privacy: .public)]",
             )
         }
         return selection.kept

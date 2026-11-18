@@ -36,7 +36,7 @@ final class ChromiumHelperFilterTests: XCTestCase {
     func testAudioServiceRoleNeedsBothFlags() {
         XCTAssertEqual(ChromiumHelperFilter.role(of: cometArguments(200)), .audioService)
         XCTAssertEqual(ChromiumHelperFilter.role(of: cometArguments(300)), .otherChild)
-        XCTAssertEqual(ChromiumHelperFilter.role(of: cometArguments(400)), .otherChild)
+        XCTAssertEqual(ChromiumHelperFilter.role(of: cometArguments(400)), .renderer)
         XCTAssertEqual(ChromiumHelperFilter.role(of: cometArguments(500)), .otherChild)
         XCTAssertEqual(
             ChromiumHelperFilter.role(of: ["Helper", "--utility-sub-type=audio.mojom.AudioService"]),
@@ -45,7 +45,7 @@ final class ChromiumHelperFilterTests: XCTestCase {
         )
         XCTAssertEqual(
             ChromiumHelperFilter.role(of: ["Helper", "--type=renderer", "--utility-sub-type=audio.mojom.AudioService"]),
-            .otherChild,
+            .renderer,
         )
     }
 
@@ -62,6 +62,18 @@ final class ChromiumHelperFilterTests: XCTestCase {
         let selection = ChromiumHelperFilter.select([100, 400, 300, 200, 500], arguments: cometArguments)
         XCTAssertEqual(selection.kept, [100, 200], "order is the caller's: the root stays first for the aggregate name tag")
         XCTAssertEqual(selection.dropped, [400, 300, 500])
+    }
+
+    func testOptedInRendererStaysBesideAudioServiceButVideoAndGPUDrop() {
+        let selection = ChromiumHelperFilter.select([100, 400, 300, 200, 500], includeRenderers: true, arguments: cometArguments)
+        XCTAssertEqual(selection.kept, [100, 400, 200])
+        XCTAssertEqual(selection.dropped, [300, 500])
+    }
+
+    func testOptedInRendererCanBeTheOnlyAudioProcess() {
+        let selection = ChromiumHelperFilter.select([100, 300, 400], includeRenderers: true, arguments: cometArguments)
+        XCTAssertEqual(selection.kept, [100, 400])
+        XCTAssertEqual(selection.dropped, [300])
     }
 
     func testLeavesTheSetAloneWithoutAnAudioService() {
