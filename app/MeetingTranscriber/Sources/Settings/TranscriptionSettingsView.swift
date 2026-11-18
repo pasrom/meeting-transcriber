@@ -6,6 +6,7 @@ struct TranscriptionSettingsView: View {
     @Bindable var settings: AppSettings
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
+    var gigaAMEngine: GigaAMEngine
     var captionWarmup: LiveCaptionsWarmup = .idle
 
     /// Set when the user flips live captions on while a first-use Nemotron model
@@ -26,12 +27,14 @@ struct TranscriptionSettingsView: View {
         settings: AppSettings,
         whisperKitEngine: WhisperKitEngine,
         parakeetEngine: ParakeetEngine,
+        gigaAMEngine: GigaAMEngine = .init(),
         captionWarmup: LiveCaptionsWarmup = .idle,
         legacyModels: LegacyWhisperModelsState? = nil,
     ) {
         self.settings = settings
         self.whisperKitEngine = whisperKitEngine
         self.parakeetEngine = parakeetEngine
+        self.gigaAMEngine = gigaAMEngine
         self.captionWarmup = captionWarmup
         // Created here, not as a default value: for an `@Observable` type the
         // default-value form creates the object only once the view is installed,
@@ -85,7 +88,7 @@ struct TranscriptionSettingsView: View {
         Section("Transcription") {
             enginePicker
             whisperKitPickers
-            parakeetLanguagePicker
+            secondaryLanguageSetting
             engineStatusView
             Toggle("Unload models when idle", isOn: $settings.unloadModelsWhenIdle)
                 .accessibilityIdentifier(A11yID.unloadModelsWhenIdleToggle)
@@ -140,13 +143,15 @@ struct TranscriptionSettingsView: View {
     }
 
     @ViewBuilder
-    private var parakeetLanguagePicker: some View { // swiftlint:disable:this attributes
+    private var secondaryLanguageSetting: some View { // swiftlint:disable:this attributes
         if settings.transcriptionEngine == .parakeet {
             Picker("Language", selection: $settings.parakeetLanguage) {
                 ForEach(PickerLanguages.parakeet, id: \.code) { lang in
                     Text(lang.label).tag(lang.code)
                 }
             }
+        } else if settings.transcriptionEngine == .gigaAM {
+            LabeledContent("Language", value: "Russian (fixed)")
         }
     }
 
@@ -327,6 +332,9 @@ struct TranscriptionSettingsView: View {
     /// different levels of influence over recognition.
     static func vocabularyHelpText(for engine: TranscriptionEngineSetting) -> String {
         switch engine {
+        case .gigaAM:
+            "GigaAM uses the canonical terminology rules after transcription."
+
         case .parakeet:
             "Text file with one term per line. Parakeet uses CTC rescoring for saved transcription. "
                 + "Live captions do not use CTC vocabulary rescoring."
@@ -411,6 +419,7 @@ struct TranscriptionSettingsView: View {
         switch settings.transcriptionEngine {
         case .parakeet: parakeetEngine
         case .whisperKit: whisperKitEngine
+        case .gigaAM: gigaAMEngine
         }
     }
 
@@ -419,11 +428,20 @@ struct TranscriptionSettingsView: View {
         let engine = activeEngine
         switch engine.modelState {
         case .downloading:
-            ProgressView(value: engine.downloadProgress)
-                .progressViewStyle(.linear)
-            Text("Downloading model... \(Int(engine.downloadProgress * 100))%")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if settings.transcriptionEngine == .gigaAM {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Downloading GigaAM model (about 421 MiB)…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                ProgressView(value: engine.downloadProgress)
+                    .progressViewStyle(.linear)
+                Text("Downloading model... \(Int(engine.downloadProgress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
         case .loading:
             HStack {
@@ -458,143 +476,18 @@ struct TranscriptionSettingsView: View {
         // no reason while a model is loaded (a failed reload that keeps its pipe
         // keeps the requested model, since any model change drops the pipe), so
         // this shows only beside "Load Model".
-        if settings.transcriptionEngine == .whisperKit, let reason = whisperKitEngine.loadFailureReason {
+        if let reason = activeModelFailureReason {
             Text(reason)
                 .font(.caption)
                 .foregroundStyle(.red)
         }
     }
-}
 
-/// The Vocabulary section. An extension so the view's main body stays under
-/// the type-length limit.
-extension TranscriptionSettingsView {
-    private var vocabularySection: some View {
-        Section("Vocabulary") {
-            customVocabularyToggle
-            customVocabularyFileRows
-            terminologyRulesEditor
-        }
-        .accessibilityIdentifier(A11yID.vocabularySection)
-        .recordOnlyDisabled(settings.recordOnly)
-    }
-
-    /// WhisperKit's help adds the experimental warning: it is the engine where the
-    /// vocabulary can cost completeness.
-    private var customVocabularyToggle: some View {
-        HelpfulToggle(
-            title: "Use custom vocabulary",
-            help: settings.transcriptionEngine == .whisperKit
-                ? SettingsHelp.customVocabularyWhisperKit
-                : SettingsHelp.customVocabulary,
-            isOn: $settings.customVocabularyEnabled,
-        )
-        .accessibilityIdentifier(A11yID.customVocabularyToggle)
-    }
-
-    /// Hidden while the switch is off, since no engine reads the file then.
-    @ViewBuilder private var customVocabularyFileRows: some View {
-        if settings.customVocabularyEnabled {
-            customVocabularyRow
-            customVocabularyValidation
-        }
-    }
-
-    private var customVocabularyRow: some View {
-        HStack {
-            TextField("Custom vocabulary file", text: Binding(
-                get: { settings.customVocabularyPath },
-                set: { settings.setCustomVocabularyPath($0) },
-            ))
-            .textFieldStyle(.roundedBorder)
-            .accessibilityIdentifier(A11yID.customVocabularyPathField)
-            Button("Choose\u{2026}") {
-                let panel = NSOpenPanel()
-                panel.allowedContentTypes = [.plainText]
-                panel.allowsMultipleSelection = false
-                if panel.runModal() == .OK, let url = panel.url {
-                    settings.setCustomVocabularyFile(url)
-                }
-            }
-        }
-        .help(Self.vocabularyHelpText(for: settings.transcriptionEngine))
-    }
-
-    private var customVocabularyValidation: some View {
-        Text(settings.customVocabularyValidation.message)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .onAppear { settings.refreshCustomVocabularyValidation() }
-            .onChange(of: settings.customVocabularyPath) { _, _ in
-                settings.refreshCustomVocabularyValidation()
-            }
-    }
-}
-
-// MARK: - Terminology rules
-
-private extension TranscriptionSettingsView {
-    var terminologyRulesEditor: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Canonical terminology")
-            terminologyRulesFileRow
-            terminologyRulesSource
-            Text(
-                "Applied to saved transcripts after ASR. One rule per line: "
-                    + "Canonical spelling => spoken variant | another variant. "
-                    + "Rules only replace whole words or phrases.",
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            Text(settings.terminologyRulesValidation.message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .onAppear { settings.refreshTerminologyRulesValidation() }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                    settings.refreshTerminologyRulesValidation()
-                }
-        }
-    }
-
-    var terminologyRulesFileRow: some View {
-        HStack {
-            TextField("Terminology rules file (optional)", text: Binding(
-                get: { settings.terminologyRulesFilePath },
-                set: { settings.setTerminologyRulesFilePath($0) },
-            ))
-            .textFieldStyle(.roundedBorder)
-            .accessibilityIdentifier(A11yID.terminologyRulesFilePathField)
-            Button("Choose\u{2026}") {
-                let panel = NSOpenPanel()
-                panel.allowedContentTypes = [.plainText]
-                panel.allowsMultipleSelection = false
-                if panel.runModal() == .OK, let url = panel.url {
-                    settings.setTerminologyRulesFile(url)
-                }
-            }
-        }
-        .help("When a file is set, its rules are used instead of the text area and are read again at the start of each job.")
-    }
-
-    /// The text area while no rules file is set; otherwise the file's contents,
-    /// read-only, as of the last read: on appearing, on a change of path, when
-    /// the app becomes active and at each job start.
-    @ViewBuilder
-    var terminologyRulesSource: some View { // swiftlint:disable:this attributes
-        if settings.usesTerminologyRulesFile {
-            ScrollView {
-                Text(settings.terminologyRulesFileContents)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(minHeight: 72)
-            .accessibilityIdentifier(A11yID.terminologyRulesFilePreview)
-        } else {
-            TextEditor(text: $settings.terminologyRulesText)
-                .font(.body.monospaced())
-                .frame(minHeight: 72)
-                .accessibilityIdentifier(A11yID.terminologyRulesEditor)
+    private var activeModelFailureReason: String? {
+        switch settings.transcriptionEngine {
+        case .whisperKit: whisperKitEngine.loadFailureReason
+        case .parakeet: nil
+        case .gigaAM: gigaAMEngine.loadFailureReason
         }
     }
 }

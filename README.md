@@ -83,9 +83,10 @@ flowchart TD
 
 - **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via the power assertions they hold during a call (no window titles, so no Screen Recording needed), opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in any Chromium browser, or in Safari with the Homebrew build) gated behind a recording-consent prompt, and opt-in mic-input detection for call apps without a reliable meeting signal (WeChat, Tencent Meeting, FaceTime, WhatsApp, Slack Huddles) — per app, off by default, and unlike the browser path it starts recording without a prompt
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
-- **On-device transcription** — Two engines, selectable in Settings:
+- **On-device transcription** — Engines selectable in Settings:
   - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model; besides the stock models, a custom WhisperKit model can be loaded from another Hugging Face repository or a local folder (see [Custom WhisperKit models](#custom-whisperkit-models))
   - [Parakeet TDT v3](https://github.com/FluidInference/FluidAudio) (NVIDIA) — 25 EU languages, ~50 MB model, ~10× faster
+  - **GigaAM v3 E2E-CTC** — Russian transcription with punctuation and capitalization on Apple silicon. Select it in Settings → Transcription → Engine. The [Core ML model](https://huggingface.co/inhum/gigaam-v3-coreml) downloads once (~421 MiB) and runs offline.
 - **Custom vocabulary & terminology** — One shared vocabulary file boosts recognition of names/jargon on Parakeet (CTC boosting) and, optionally, on WhisperKit (experimental decoder-prompt hint); an independent, opt-in terminology-normalization pass rewrites recognized spelling variants to a canonical form after transcription, regardless of engine
 - **On-device speaker diarization** — [FluidAudio](https://github.com/FluidInference/FluidAudio) via CoreML/ANE — no HuggingFace token needed; three modes: standard (`OfflineDiarizer`), overlap-aware (`Sortformer`, up to 4 speakers) and NVIDIA's overlap-aware Nemotron 3 (up to 8 speakers)
 - **Dual-track diarization** — App and mic tracks diarized separately for clean speaker separation without echo interference
@@ -252,7 +253,7 @@ Open Settings via the menu bar item or ⌘,.
 |---|---|
 | **General** | Startup (launch at login, start watching on open), record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack), detection timing |
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
-| **Transcription** | ASR engine (WhisperKit / Parakeet) and per-engine options (model incl. a custom WhisperKit model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
+| **Transcription** | ASR engine (WhisperKit / Parakeet / GigaAM) and per-engine options (model incl. a custom WhisperKit model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
 | **Speakers** | Diarization, whether the naming window opens by itself, how long unnamed meetings wait before they get the automatic names, mic speaker name, known voices, recognition stats |
 | **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), saved OpenAI-compatible connections (each with its own endpoint, model and API key), transcript-retention options, notes language, a notification when meeting notes fail (on by default; the menu then offers Retry Meeting Notes), output folder, custom prompt |
 | **Advanced** | Permissions status, diagnostics, Local Automation API |

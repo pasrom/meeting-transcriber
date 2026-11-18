@@ -16,20 +16,28 @@ enum TranscriptionEngineSetting: String, CaseIterable, Codable {
     // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
     case whisperKit
     case parakeet
+    // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
+    case gigaAM
 
     var label: String {
         switch self {
         case .whisperKit: "WhisperKit (Whisper)"
         case .parakeet: "Parakeet TDT v3 (NVIDIA)"
+        case .gigaAM: "GigaAM v3 E2E-CTC"
         }
     }
 
-    /// Whether this engine is available on the current platform. Both current
-    /// engines run everywhere the app does; kept as a capability hook for
-    /// engines with stricter OS floors.
+    /// Whether this engine is available on the current platform.
     var isAvailable: Bool {
         switch self {
         case .whisperKit, .parakeet: true
+
+        case .gigaAM:
+            #if arch(arm64)
+                true
+            #else
+                false
+            #endif
         }
     }
 
@@ -39,12 +47,11 @@ enum TranscriptionEngineSetting: String, CaseIterable, Codable {
     }
 
     /// Whether the engine implements `transcribeSamples([Float])` so the
-    /// live-transcription pipeline can feed it VAD-bounded windows. Both current
-    /// engines do; kept as an exhaustive `switch` (not a stored `true`) so a
-    /// future non-streaming engine is forced to declare its support here.
+    /// live-transcription pipeline can feed it VAD-bounded windows. An exhaustive
+    /// switch makes each engine declare its support here.
     var supportsLiveTranscription: Bool {
         switch self {
-        case .whisperKit, .parakeet: true
+        case .whisperKit, .parakeet, .gigaAM: true
         }
     }
 }
@@ -938,8 +945,9 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         asymmetricSilenceWarningSeconds = max(30, min(300, defaults.object(forKey: "asymmetricSilenceWarningSeconds") as? Double ?? 90))
 
         unloadModelsWhenIdle = defaults.bool(forKey: "unloadModelsWhenIdle", default: true)
-        transcriptionEngine = (defaults.string(forKey: "transcriptionEngine")
-            .flatMap(TranscriptionEngineSetting.init(rawValue:))) ?? .whisperKit
+        transcriptionEngine = defaults.string(forKey: "transcriptionEngine")
+            .flatMap(TranscriptionEngineSetting.init(rawValue:))
+            .flatMap { $0.isAvailable ? $0 : nil } ?? .whisperKit
         whisperKitModel = defaults.object(forKey: "whisperKitModel") as? String
             ?? "openai_whisper-large-v3-v20240930_turbo"
         whisperKitCustomModelEnabled = defaults.bool(forKey: "whisperKitCustomModelEnabled", default: false)
