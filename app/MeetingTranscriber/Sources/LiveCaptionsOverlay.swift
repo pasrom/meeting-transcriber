@@ -4,17 +4,16 @@ import SwiftUI
 /// Caption-bar content rendered inside `LiveCaptionsWindow` (a borderless,
 /// status-bar-level NSPanel pinned to the bottom of the main screen).
 ///
-/// Layout (top to bottom): up to `maxFinalsKept` recent finalised utterances,
-/// the older at 60 % opacity and the newest at full opacity, then the
-/// per-channel hypotheses at full opacity. Finals
+/// Layout (top to bottom): one row per run of recent finalised lines of one
+/// channel and speaker, the open hypotheses continuing their channel's row
+/// (see `rows`). Finals
 /// carry their own per-line `LiveCaptionLine.speaker` (resolved by
 /// `LiveSpeakerMatcher` for that line) so a `speakers.json` rename after
-/// the line is committed doesn't retroactively re-label it. Live hypothesis
-/// rows fall back to the channel-default `LiveCaptionsState.micLabel` /
-/// `.appLabel` because the partial transcript hasn't reached its end-of-
-/// speech boundary yet and no embedding is available. When the state is
-/// empty the rounded background collapses to a tiny pill — the wrapping
-/// panel uses `hasContent` to hide entirely.
+/// the line is committed doesn't retroactively re-label it. A hypothesis
+/// continues the preceding row if it is on the same channel, or uses the
+/// channel-default `LiveCaptionsState.micLabel` / `.appLabel` otherwise.
+/// When the state is empty the rounded background collapses to a tiny pill;
+/// the wrapping panel uses `hasContent` to hide entirely.
 ///
 /// The content is bottom-anchored inside the fixed-size NSPanel (see
 /// `LiveCaptionsWindowController`) so the bar visually grows upward as new
@@ -44,7 +43,12 @@ struct LiveCaptionsOverlay: View {
     }
 
     private var content: some View {
-        let finals = state.recentFinals.suffix(LiveCaptionsState.maxFinalsKept)
+        let rows = Self.rows(
+            finals: state.recentFinals,
+            awaiting: state.awaitsSpeaker(lineAt:),
+            hypotheses: [(.app, state.hypothesisApp), (.mic, state.hypothesisMic)],
+            label: state.label(for:),
+        )
         return VStack(alignment: .leading, spacing: 4) {
             if state.isDetectingLanguage {
                 Text("Detecting language…")
@@ -56,16 +60,9 @@ struct LiveCaptionsOverlay: View {
                     .foregroundStyle(.white.opacity(0.45))
                     .accessibilityIdentifier(A11yID.liveCaptionBackend)
             }
-            // Keyed on the line's id: a relabel keeps its row, equal lines stay distinct.
-            ForEach(Array(finals.enumerated()), id: \.element.id) { index, line in
-                // The newest final is often still being read, so only older ones dim.
-                row(speaker: line.speaker, text: line.text, opacity: index == finals.count - 1 ? 1.0 : 0.6)
-            }
-            if !state.hypothesisApp.isEmpty {
-                row(speaker: state.appLabel, text: state.hypothesisApp, opacity: 1.0)
-            }
-            if !state.hypothesisMic.isEmpty {
-                row(speaker: state.micLabel, text: state.hypothesisMic, opacity: 1.0)
+            // Keyed by position: a row that grows or is relabelled keeps its view, so its text does not cross-fade.
+            ForEach(rows.indices, id: \.self) { index in
+                row(speaker: rows[index].speaker, text: rows[index].text)
             }
         }
         .font(.system(size: state.size.fontSize, weight: .medium, design: .rounded))
@@ -80,25 +77,70 @@ struct LiveCaptionsOverlay: View {
         })
     }
 
-    private func row(speaker: String, text: String, opacity: Double) -> some View {
+    struct Row: Equatable {
+        let channel: LiveCaptionChannel
+        let speaker: String
+        var text: String
+    }
+
+    /// Consecutive finals of one channel and speaker share a row, and a hypothesis or a final still
+    /// awaiting its speaker continues the row before it when that row is on its channel.
+    static func rows(
+        finals: [LiveCaptionLine],
+        awaiting: (Int) -> Bool = { _ in false },
+        hypotheses: [(LiveCaptionChannel, String)],
+        label: (LiveCaptionChannel) -> String,
+    ) -> [Row] {
+        var rows: [Row] = []
+        func add(_ channel: LiveCaptionChannel, _ speaker: String, _ text: String) {
+            if let last = rows.last, last.channel == channel, last.speaker == speaker {
+                rows[rows.count - 1].text += " " + text
+            } else {
+                rows.append(Row(channel: channel, speaker: speaker, text: text))
+            }
+        }
+        for (index, line) in finals.enumerated() {
+            // Under the channel label until its match lands, it flashed a row of its own.
+            if awaiting(index), let last = rows.last, last.channel == line.channel {
+                rows[rows.count - 1].text += " " + line.text
+            } else {
+                add(line.channel, line.speaker, line.text)
+            }
+        }
+        for (channel, text) in hypotheses where !text.isEmpty {
+            // Unmatched yet, so it continues whoever spoke last on its channel; under the channel
+            // label it stood in a row of its own below every named row.
+            if let last = rows.last, last.channel == channel {
+                rows[rows.count - 1].text += " " + text
+            } else {
+                add(channel, label(channel), text)
+            }
+        }
+        return rows
+    }
+
+    private func row(speaker: String, text: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(speaker + ":")
-                .foregroundStyle(.white.opacity(min(opacity, 0.85)))
+                .foregroundStyle(.white.opacity(0.85))
                 .fontWeight(.semibold)
                 .lineLimit(1)
                 .layoutPriority(1)
-            // Bound each channel too, so a long mic row cannot push the app row out of the bar.
+            // Bound each row too, so a long mic row cannot push the app row out of the bar.
             LiveCaptionTextClip(maxHeight: 2 * Self.lineHeight(fontSize: state.size.fontSize)) {
                 Text(text)
                     .foregroundStyle(.white)
-                    .opacity(opacity)
                     // New words swap in at once; only the position eases, so a full line slides out the top.
                     .contentTransition(.identity)
             }
             .clipped()
-            .animation(.easeOut(duration: 0.2), value: text)
+            .animation(.easeInOut(duration: Self.lineScrollDuration), value: text)
         }
     }
+
+    /// How long a full row takes to slide its top line out. At 0.2 s easing out, the slide was over
+    /// in three frames of a 30 fps film and read as a jump.
+    static let lineScrollDuration: TimeInterval = 0.3
 
     /// Line pitch of the row font, which SwiftUI rounds up to whole points (19 / 26 / 33 pt at
     /// small / medium / large). A clip off this pitch shows a strip of the hidden line's descenders.

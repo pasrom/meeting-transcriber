@@ -66,19 +66,22 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertEqual(state.recentFinals.count, 1)
         XCTAssertEqual(
             state.recentFinals[0],
-            LiveCaptionLine(channel: .mic, text: "you done.", speaker: "Me", id: 1),
+            LiveCaptionLine(channel: .mic, text: "you done.", speaker: "Me"),
         )
     }
 
-    func testFinalsRotationCapDropsOldestFirst() {
+    /// The overlay joins lines into rows; dropping one line at a time re-wrapped a row on every line.
+    func testFinalsPastTheCapLeaveAllButTheNewestAtOnce() {
         let state = LiveCaptionsState()
-        state.applyFinalized("first", channel: .mic)
-        state.applyFinalized("second", channel: .app)
-        state.applyFinalized("third", channel: .mic)
-        // maxFinalsKept = 2 → first must drop
-        XCTAssertEqual(state.recentFinals.count, LiveCaptionsState.maxFinalsKept)
-        XCTAssertEqual(state.recentFinals.map(\.text), ["second", "third"])
-        XCTAssertEqual(state.recentFinals.map(\.channel), [.app, .mic])
+        let kept = (1 ... 6).map { "line \($0)" }
+        for text in kept {
+            state.applyFinalized(text, channel: .app)
+        }
+        XCTAssertEqual(state.recentFinals.map(\.text), kept)
+
+        state.applyFinalized("newest", channel: .mic)
+        XCTAssertEqual(state.recentFinals.map(\.text), ["newest"])
+        XCTAssertEqual(state.recentFinals.map(\.channel), [.mic])
     }
 
     func testClearResetsEverything() {
@@ -161,27 +164,16 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertEqual(state.hypothesisApp, "newest words")
     }
 
-    func testRelabelKeepsTheLineIdAndEqualLinesGetDistinctIds() {
-        let state = LiveCaptionsState()
-        defer { state.clear() }
-        let first = state.applyFinalized("same words", channel: .app)
-        state.applyFinalized("same words", channel: .app)
-        let ids = state.recentFinals.map(\.id)
-        XCTAssertEqual(Set(ids).count, 2, "equal lines must not share a row id")
-
-        state.updateSpeaker("Alice", forFinal: first)
-        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Alice", "Remote"])
-        XCTAssertEqual(state.recentFinals.map(\.id), ids, "a relabel must keep the row's identity")
-    }
-
     func testSpeakerMatchCannotRelabelEvictedOrClearedFinal() {
         let state = LiveCaptionsState()
         defer { state.clear() }
         let evicted = state.applyFinalized("same words", channel: .app)
-        state.applyFinalized("middle", channel: .app)
+        for _ in 1 ..< LiveCaptionsState.maxFinalsKept {
+            state.applyFinalized("middle", channel: .app)
+        }
         let cleared = state.applyFinalized("same words", channel: .app)
         state.updateSpeaker("old speaker", forFinal: evicted)
-        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Remote", "Remote"])
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Remote"])
 
         state.clear()
         let fresh = state.applyFinalized("same words", channel: .app)
@@ -202,6 +194,61 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertTrue(state.faded)
         await clock.advance(by: .seconds(2))
         await assertEventually { !state.hasContent }
+    }
+
+    /// A weak slice inside one speaker's turn keeps that speaker when it is also the nearest voice.
+    func testUnmatchedLineKeepsThePreviousSpeakerWhenThatIsItsNearestVoice() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        let first = state.applyFinalized("we really just wanted", channel: .app, awaitingSpeaker: true)
+        state.updateSpeaker("Speaker A", forFinal: first)
+        let weak = state.applyFinalized("to go fast", channel: .app, awaitingSpeaker: true)
+        state.resolveUnmatched(forFinal: weak, nearest: "Speaker A")
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Speaker A"])
+        XCTAssertFalse(state.awaitsSpeaker(lineAt: 1))
+    }
+
+    /// Nearest to someone else, or to nobody: the line may be a new voice, so it keeps the channel label.
+    func testUnmatchedLineNearestToAnotherVoiceKeepsTheChannelLabel() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        state.applyFinalized("secrets management", channel: .app, speaker: "Speaker A")
+        state.resolveUnmatched(forFinal: state.applyFinalized("which turned out", channel: .app), nearest: "Speaker B")
+        state.resolveUnmatched(forFinal: state.applyFinalized("to be important", channel: .app), nearest: nil)
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Remote", "Remote"])
+    }
+
+    /// A split leaves the end of a sentence as a line too short to match; it is the same speaker's.
+    func testShortLineTakesTheSpeakerOfTheLineBeforeIt() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        let first = state.applyFinalized("so that was console then", channel: .app)
+        state.updateSpeaker("Speaker A", forFinal: first)
+        state.inheritSpeaker(forFinal: state.applyFinalized("terraform", channel: .app))
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Speaker A"])
+    }
+
+    /// The match of the line before usually lands after the short line has arrived.
+    func testShortLinesFollowAMatchThatLandsAfterThem() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        let first = state.applyFinalized("so that was console then", channel: .app)
+        state.inheritSpeaker(forFinal: state.applyFinalized("terraform", channel: .app))
+        state.inheritSpeaker(forFinal: state.applyFinalized("yes", channel: .app))
+        state.applyFinalized("a matched line of its own", channel: .app)
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Remote", "Remote", "Remote", "Remote"])
+
+        state.updateSpeaker("Speaker A", forFinal: first)
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Speaker A", "Speaker A", "Remote"])
+    }
+
+    func testShortLineDoesNotInheritAcrossChannels() {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        let app = state.applyFinalized("a remote sentence", channel: .app)
+        state.updateSpeaker("Speaker A", forFinal: app)
+        state.inheritSpeaker(forFinal: state.applyFinalized("okay", channel: .mic))
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker A", "Me"])
     }
 
     // MARK: - Silence deadlines
@@ -404,5 +451,79 @@ final class LiveCaptionsStateTests: XCTestCase {
         state.setSize(.small)
 
         XCTAssertEqual(state.size, .small)
+    }
+}
+
+@MainActor
+extension LiveCaptionsStateTests {
+    /// A line appended under the channel label and then matched to the running speaker is no new turn.
+    func testRelabelIntoTheRunningTurnKeepsItsEarlierLines() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
+        let next = state.applyFinalized("second", channel: .app)
+        state.updateSpeaker("Speaker A", forFinal: next)
+        state.applyPartial("still speaking", channel: .app)
+
+        await clock.advance(by: .seconds(LiveCaptionsState.earlierTurnHold + 1))
+        await Task.yield()
+        XCTAssertEqual(state.recentFinals.map(\.text), ["first", "second"])
+    }
+
+    /// A line still awaiting its match is no new turn: the turn before it stays.
+    func testLineAwaitingItsSpeakerStartsNoTurn() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
+        state.applyFinalized("second", channel: .app, awaitingSpeaker: true)
+        state.applyPartial("still speaking", channel: .app)
+
+        await clock.advance(by: .seconds(LiveCaptionsState.earlierTurnHold + 1))
+        await Task.yield()
+        XCTAssertEqual(state.recentFinals.map(\.text), ["first", "second"])
+        XCTAssertTrue(state.awaitsSpeaker(lineAt: 1))
+        XCTAssertFalse(state.awaitsSpeaker(lineAt: 0))
+    }
+
+    /// A finished turn stayed above the next speaker's row until the page turn.
+    func testEarlierTurnLeavesAfterItsHoldOnceANewSpeakerStarts() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
+        state.applyFinalized("second", channel: .app, speaker: "Speaker A")
+        state.applyFinalized("reply", channel: .app, speaker: "Speaker B")
+        state.applyPartial("still speaking", channel: .app)
+
+        XCTAssertEqual(LiveCaptionsState.earlierTurnHold, 4.0)
+        await clock.advance(by: .milliseconds(3999))
+        XCTAssertEqual(state.recentFinals.map(\.text), ["first", "second", "reply"])
+        await clock.advance(by: .milliseconds(1))
+        await assertEventually { state.recentFinals.map(\.text) == ["reply"] }
+    }
+
+    func testShortLineDefersEarlierTurnExpiryUntilItsPendingSpeakerMatches() async {
+        let clock = ManualClock()
+        let state = LiveCaptionsState(clock: clock)
+        defer { state.clear() }
+        state.applyFinalized("first", channel: .app, speaker: "Speaker A")
+        let pending = state.applyFinalized("pending", channel: .app, awaitingSpeaker: true)
+        state.inheritSpeaker(forFinal: state.applyFinalized("short", channel: .app))
+
+        await clock.advance(by: .seconds(1))
+        state.applyPartial("still speaking", channel: .app)
+        state.updateSpeaker("Speaker B", forFinal: pending)
+
+        // Require a fresh four-second hold after the match, not an expiry scheduled at append time.
+        await waitFor({ await clock.sleepingDeadlines().contains(.seconds(5)) }, timeout: .seconds(1))
+        let deadlines = await clock.sleepingDeadlines()
+        XCTAssertTrue(deadlines.contains(.seconds(5)))
+        await clock.advance(by: .milliseconds(3999))
+        XCTAssertEqual(state.recentFinals.map(\.text), ["first", "pending", "short"])
+        await clock.advance(by: .milliseconds(1))
+        await assertEventually { state.recentFinals.map(\.text) == ["pending", "short"] }
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Speaker B", "Speaker B"])
     }
 }

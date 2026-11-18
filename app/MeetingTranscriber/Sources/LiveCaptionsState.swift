@@ -17,17 +17,10 @@ enum LiveCaptionChannel: String, Hashable, Codable {
 /// A finalised utterance with its source channel and rendered speaker label.
 /// `speaker` starts as the channel-default fallback and can be replaced by
 /// the live match for this line. Later registry renames do not relabel it.
-/// Not `Hashable`, so the whole line cannot become a row id again: a relabel would change it.
-struct LiveCaptionLine: Equatable, Codable, Identifiable {
+struct LiveCaptionLine: Hashable, Codable {
     let channel: LiveCaptionChannel
     let text: String
     let speaker: String
-    /// Final sequence number: stays the same across a relabel. Not on the wire.
-    var id = 0
-
-    private enum CodingKeys: String, CodingKey {
-        case channel, text, speaker
-    }
 }
 
 /// Observable state powering the live caption-bar overlay.
@@ -101,9 +94,13 @@ final class LiveCaptionsState {
         self.size = size
     }
 
-    /// Cap on `recentFinals` length. 2 keeps the bar at most two prior lines
-    /// plus the two live hypothesis rows on top.
-    static let maxFinalsKept = 2
+    /// Cap on `recentFinals` length. The overlay joins a speaker's lines into one
+    /// row, so past the cap all but the newest line go at once: dropping one line
+    /// at a time would re-wrap that row on every line.
+    static let maxFinalsKept = 6
+
+    /// How long the lines of a finished turn stay above the next speaker's row.
+    static let earlierTurnHold: TimeInterval = 4.0
 
     /// Shortest time a finalized line stays fully visible.
     static let minimumReadingHold: TimeInterval = 4.0
@@ -125,6 +122,12 @@ final class LiveCaptionsState {
     /// Monotonic identity for late speaker matches; never reused after clear.
     private var finalSequence = 0
     private var silenceTask: Task<Void, Never>?
+    /// Sequence of the first final of the newest turn an expiry was scheduled for.
+    private var scheduledTurnStart = 0
+    /// Finals too short to match that take the speaker of the line before them.
+    private var inheritingFinals: Set<Int> = []
+    /// Finals whose speaker match is still running; the overlay keeps them in the row before them.
+    private var awaitingSpeaker: Set<Int> = []
     private var remainingReadingTime: (() -> Duration)?
 
     func applyPartial(_ text: String, channel: LiveCaptionChannel) {
@@ -136,35 +139,133 @@ final class LiveCaptionsState {
     }
 
     @discardableResult
-    func applyFinalized(_ text: String, channel: LiveCaptionChannel, speaker: String) -> Int {
+    func applyFinalized(
+        _ text: String,
+        channel: LiveCaptionChannel,
+        speaker: String,
+        awaitingSpeaker awaiting: Bool = false,
+    ) -> Int {
         switch channel {
         case .mic: hypothesisMic = ""
         case .app: hypothesisApp = ""
         }
         finalSequence += 1
-        recentFinals.append(LiveCaptionLine(channel: channel, text: text, speaker: speaker, id: finalSequence))
+        recentFinals.append(LiveCaptionLine(channel: channel, text: text, speaker: speaker))
         if recentFinals.count > Self.maxFinalsKept {
-            recentFinals.removeFirst(recentFinals.count - Self.maxFinalsKept)
+            recentFinals.removeFirst(recentFinals.count - 1)
+        }
+        let firstKept = finalSequence - (recentFinals.count - 1)
+        awaitingSpeaker = awaitingSpeaker.filter { $0 >= firstKept }
+        if awaiting {
+            awaitingSpeaker.insert(finalSequence)
         }
         setReadingDeadline(for: text)
         scheduleSilence()
+        scheduleTurnExpiry()
         return finalSequence
     }
 
-    /// A late match changes only its retained line, never a newer hypothesis or reading deadline.
+    /// A late match updates retained and inheriting lines without changing hypotheses or the reading deadline.
     func updateSpeaker(_ speaker: String, forFinal sequence: Int) {
+        awaitingSpeaker.remove(sequence)
+        guard let start = index(ofFinal: sequence) else { return }
+        let channel = recentFinals[start].channel
+        setSpeaker(speaker, at: start)
+        // Lines that inherit from this one follow it, even when its match lands after them.
+        var next = start + 1
+        while next < recentFinals.count, inheritingFinals.contains(sequence + next - start),
+              recentFinals[next].channel == channel {
+            setSpeaker(speaker, at: next)
+            next += 1
+        }
+        scheduleTurnExpiry()
+    }
+
+    /// For a final too short to match: it is most likely the rest of the sentence before it, so it
+    /// shows that line's speaker, now or once that line's match lands. Only when the line before it
+    /// is on the same channel.
+    func inheritSpeaker(forFinal sequence: Int) {
+        guard let index = index(ofFinal: sequence), index > 0,
+              recentFinals[index - 1].channel == recentFinals[index].channel else { return }
+        let firstKept = finalSequence - (recentFinals.count - 1)
+        inheritingFinals = inheritingFinals.filter { $0 >= firstKept }
+        inheritingFinals.insert(sequence)
+        let previous = recentFinals[index - 1].speaker
+        if previous != label(for: recentFinals[index].channel) {
+            setSpeaker(previous, at: index)
+            scheduleTurnExpiry()
+        }
+    }
+
+    /// No confident match: the line keeps the speaker of the line before it when that voice is also
+    /// its nearest, so a weak slice inside one speaker's turn does not split it under the channel label.
+    func resolveUnmatched(forFinal sequence: Int, nearest: String?) {
+        awaitingSpeaker.remove(sequence)
+        guard let index = index(ofFinal: sequence) else { return }
+        if index > 0, let nearest, recentFinals[index - 1].channel == recentFinals[index].channel,
+           recentFinals[index - 1].speaker == nearest {
+            updateSpeaker(nearest, forFinal: sequence)
+        } else {
+            scheduleTurnExpiry()
+        }
+    }
+
+    /// True while the speaker match of the line at `index` in `recentFinals` is still running.
+    func awaitsSpeaker(lineAt index: Int) -> Bool {
+        awaitingSpeaker.contains(finalSequence - (recentFinals.count - 1 - index))
+    }
+
+    private func index(ofFinal sequence: Int) -> Int? {
         let distance = finalSequence - sequence
-        guard distance >= 0, distance < recentFinals.count else { return }
-        let index = recentFinals.count - 1 - distance
+        guard distance >= 0, distance < recentFinals.count else { return nil }
+        return recentFinals.count - 1 - distance
+    }
+
+    private func setSpeaker(_ speaker: String, at index: Int) {
         let line = recentFinals[index]
-        recentFinals[index] = LiveCaptionLine(channel: line.channel, text: line.text, speaker: speaker, id: line.id)
+        recentFinals[index] = LiveCaptionLine(channel: line.channel, text: line.text, speaker: speaker)
+    }
+
+    /// Sequence of the first final in the trailing run of one channel and speaker: the current turn.
+    private var currentTurnStart: Int {
+        guard let last = recentFinals.last else { return finalSequence + 1 }
+        var index = recentFinals.count - 1
+        while index > 0, recentFinals[index - 1].channel == last.channel, recentFinals[index - 1].speaker == last.speaker {
+            index -= 1
+        }
+        return finalSequence - (recentFinals.count - 1 - index)
+    }
+
+    /// Once a new turn starts, the lines before it leave after `earlierTurnHold`; without this
+    /// they stayed until the page turn, above the next speaker's row.
+    private func scheduleTurnExpiry() {
+        // A short line can follow a still-unresolved match in the same turn.
+        let start = currentTurnStart
+        guard !awaitingSpeaker.contains(where: { $0 >= start }) else { return }
+        let firstKept = finalSequence - (recentFinals.count - 1)
+        guard start > firstKept, start > scheduledTurnStart else { return }
+        scheduledTurnStart = start
+        func schedule(on clock: some Clock<Duration>) {
+            let deadline = clock.now.advanced(by: .seconds(Self.earlierTurnHold))
+            // Not cancelled by clear(): its boundary then lies before every newer line, so it removes nothing.
+            Task { @MainActor [weak self] in
+                try? await clock.sleep(until: deadline, tolerance: nil)
+                guard !Task.isCancelled, let self else { return }
+                // A relabel since may have joined the older lines to the current turn: keep those.
+                let boundary = min(start, currentTurnStart)
+                let firstKept = finalSequence - (recentFinals.count - 1)
+                recentFinals.removeFirst(min(recentFinals.count, max(0, boundary - firstKept)))
+            }
+        }
+        let expiryClock = clock
+        schedule(on: expiryClock)
     }
 
     /// Convenience: speaker defaults to the channel label. Used by tests
     /// and as a fallback path when the live matcher isn't wired in.
     @discardableResult
-    func applyFinalized(_ text: String, channel: LiveCaptionChannel) -> Int {
-        applyFinalized(text, channel: channel, speaker: label(for: channel))
+    func applyFinalized(_ text: String, channel: LiveCaptionChannel, awaitingSpeaker: Bool = false) -> Int {
+        applyFinalized(text, channel: channel, speaker: label(for: channel), awaitingSpeaker: awaitingSpeaker)
     }
 
     func label(for channel: LiveCaptionChannel) -> String {
@@ -182,6 +283,8 @@ final class LiveCaptionsState {
         hypothesisMic = ""
         hypothesisApp = ""
         recentFinals.removeAll()
+        inheritingFinals.removeAll()
+        awaitingSpeaker.removeAll()
         remainingReadingTime = nil
     }
 

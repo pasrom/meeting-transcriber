@@ -5,6 +5,11 @@ import XCTest
 
 @MainActor
 final class LiveCaptionsOverlayTests: XCTestCase {
+    /// A full row's top line slides out slowly enough to follow; at 0.2 s it read as a jump.
+    func testFullRowSlidesItsTopLineOutOverMoreThanAQuarterSecond() {
+        XCTAssertGreaterThanOrEqual(LiveCaptionsOverlay.lineScrollDuration, 0.25)
+    }
+
     func testDetectingLanguageRendersWithoutCaptionsAndClearsAfterDecision() throws {
         let state = LiveCaptionsState()
         state.setDetectingLanguage(true)
@@ -22,27 +27,82 @@ final class LiveCaptionsOverlayTests: XCTestCase {
         XCTAssertNoThrow(try overlay.find(text: "hello"))
     }
 
-    /// The newest final is the line still being read when the next speech
-    /// starts, so it stays bright with or without a hypothesis below it.
-    func testOlderFinalDimsWhileNewestFinalAndHypothesesStayBright() throws {
-        for withHypotheses in [false, true] {
-            let state = LiveCaptionsState()
-            defer { state.clear() }
-            state.applyFinalized("older line", channel: .app)
-            state.applyFinalized("newest line", channel: .mic)
-            if withHypotheses {
-                state.applyPartial("app speaking", channel: .app)
-                state.applyPartial("mic speaking", channel: .mic)
-            }
-            let overlay = try LiveCaptionsOverlay(state: state).inspect()
-
-            XCTAssertEqual(try overlay.find(text: "older line").opacity(), 0.6)
-            XCTAssertEqual(try overlay.find(text: "newest line").opacity(), 1.0)
-            if withHypotheses {
-                XCTAssertEqual(try overlay.find(text: "app speaking").opacity(), 1.0)
-                XCTAssertEqual(try overlay.find(text: "mic speaking").opacity(), 1.0)
-            }
+    /// Lines split from one speaker's speech read as one text, as the unsplit
+    /// hypothesis did; a new speaker or channel starts a row with its own label.
+    func testRowsJoinConsecutiveLinesOfOneSpeakerAndChannel() {
+        let finals = [
+            LiveCaptionLine(channel: .app, text: "if the", speaker: "Remote"),
+            LiveCaptionLine(channel: .app, text: "service fails", speaker: "Remote"),
+            LiveCaptionLine(channel: .app, text: "we retry", speaker: "Speaker A"),
+            LiveCaptionLine(channel: .mic, text: "okay", speaker: "Me"),
+            LiveCaptionLine(channel: .app, text: "then", speaker: "Remote"),
+        ]
+        let rows = LiveCaptionsOverlay.rows(finals: finals, hypotheses: [(.app, "it recovers"), (.mic, "")]) { channel in
+            channel == .app ? "Remote" : "Me"
         }
+        XCTAssertEqual(rows.map(\.speaker), ["Remote", "Speaker A", "Me", "Remote"])
+        XCTAssertEqual(rows.map(\.text), ["if the service fails", "we retry", "okay", "then it recovers"])
+    }
+
+    /// The live text has no match yet: it continues the last row of its channel under that row's
+    /// name, and starts its own row only after another channel's row.
+    func testHypothesisContinuesTheLastRowOfItsChannel() {
+        let label: (LiveCaptionChannel) -> String = { $0 == .app ? "Remote" : "Me" }
+        let matched = [LiveCaptionLine(channel: .app, text: "we retry", speaker: "Speaker A")]
+        XCTAssertEqual(
+            LiveCaptionsOverlay.rows(finals: matched, hypotheses: [(.app, "and"), (.mic, "yes")], label: label),
+            [
+                .init(channel: .app, speaker: "Speaker A", text: "we retry and"),
+                .init(channel: .mic, speaker: "Me", text: "yes"),
+            ],
+        )
+        let micLast = matched + [LiveCaptionLine(channel: .mic, text: "okay", speaker: "Me")]
+        XCTAssertEqual(
+            LiveCaptionsOverlay.rows(finals: micLast, hypotheses: [(.app, "and"), (.mic, "")], label: label).last,
+            .init(channel: .app, speaker: "Remote", text: "and"),
+        )
+    }
+
+    /// Shown under the channel label until its match landed, a line split the row for a moment
+    /// and joined it again: the bar flashed between the name and "Remote".
+    func testLineAwaitingItsSpeakerContinuesTheRowBeforeIt() {
+        let finals = [
+            LiveCaptionLine(channel: .app, text: "we retry", speaker: "Speaker A"),
+            LiveCaptionLine(channel: .app, text: "and recover", speaker: "Remote"),
+            LiveCaptionLine(channel: .mic, text: "okay", speaker: "Me"),
+            LiveCaptionLine(channel: .app, text: "then", speaker: "Remote"),
+        ]
+        let awaiting: (Int) -> Bool = { $0 != 0 }
+        let rows = LiveCaptionsOverlay.rows(finals: finals, awaiting: awaiting, hypotheses: []) { channel in
+            channel == .app ? "Remote" : "Me"
+        }
+        XCTAssertEqual(rows.map(\.speaker), ["Speaker A", "Me", "Remote"])
+        XCTAssertEqual(rows.map(\.text), ["we retry and recover", "okay", "then"])
+    }
+
+    /// The wiring: the bar reads which lines await their speaker from the state.
+    func testOverlayKeepsALineAwaitingItsSpeakerInTheRowBeforeIt() throws {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        state.applyFinalized("first line", channel: .app, speaker: "Speaker A")
+        state.applyFinalized("second line", channel: .app, awaitingSpeaker: true)
+
+        let overlay = try LiveCaptionsOverlay(state: state).inspect()
+        XCTAssertNoThrow(try overlay.find(text: "first line second line"))
+        XCTAssertThrowsError(try overlay.find(text: "Remote:"))
+    }
+
+    /// The wiring: the bar renders the joined row with one label, not a row per line.
+    func testOverlayRendersOneSpeakersLinesAsOneRow() throws {
+        let state = LiveCaptionsState()
+        defer { state.clear() }
+        state.applyFinalized("first line", channel: .app)
+        state.applyFinalized("second line", channel: .app)
+        state.applyPartial("still speaking", channel: .app)
+
+        let overlay = try LiveCaptionsOverlay(state: state).inspect()
+        XCTAssertNoThrow(try overlay.find(text: "first line second line still speaking"))
+        XCTAssertEqual(overlay.findAll(ViewType.HStack.self).count, 1)
     }
 
     /// Trimming the oldest words re-wrapped the whole row on every partial and
@@ -59,7 +119,7 @@ final class LiveCaptionsOverlayTests: XCTestCase {
         state.applyPartial(mic, channel: .mic)
 
         let overlay = try LiveCaptionsOverlay(state: state).inspect()
-        for text in [final, app, mic] {
+        for text in [final + " " + app, mic] {
             XCTAssertNoThrow(try overlay.find(text: text), "row must render the complete text")
         }
     }

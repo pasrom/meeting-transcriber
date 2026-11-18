@@ -47,11 +47,76 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         await waitFor(captions.hypothesisApp == "newest words", timeout: .seconds(1))
         XCTAssertEqual(captions.recentFinals.first?.text, "finished line")
         XCTAssertEqual(captions.recentFinals.first?.speaker, "Remote")
+        XCTAssertTrue(captions.awaitsSpeaker(lineAt: 0), "the overlay keeps it in the row before it meanwhile")
 
         await matcher.complete(with: "Alice")
         await waitFor(captions.recentFinals.first?.speaker == "Alice", timeout: .seconds(1))
         XCTAssertEqual(captions.hypothesisApp, "newest words", "late speaker matching must not clear the split remainder")
         XCTAssertEqual(captions.recentFinals.map(\.text), ["finished line"])
+        await controller.flush()
+    }
+
+    /// The wiring: a line too short to match shows the name the line before it gets.
+    func testFinalWithLessThanASecondOfAudioTakesThePreviousLinesSpeaker() async {
+        let captions = LiveCaptionsState()
+        defer { captions.clear() }
+        let matcher = SuspendedCaptionSpeakerMatcher()
+        let probe = CaptionEventProbe()
+        let factory: LiveTranscriptionController.NemotronPipelineFactory = { _, _, makeSink in
+            probe.appSink = makeSink(.app)
+            return (CaptionDeliveryPipeline(), CaptionDeliveryPipeline())
+        }
+        let controller = LiveTranscriptionController(
+            engine: nil,
+            vad: FluidVAD(threshold: 0.5),
+            captions: captions,
+            speakerMatcher: matcher,
+            engineLanguage: "de",
+            nemotronPipelineFactory: factory,
+        )
+        await controller.prepare()
+        probe.appSink?(.finalized(text: "so that was console then", audio: Self.matchableAudio))
+        probe.appSink?(.finalized(text: "terraform", audio: [Float](repeating: 0.1, count: 4096)))
+        await matcher.waitUntilMatching()
+        await matcher.complete(with: "Speaker A")
+        await waitFor(captions.recentFinals.first?.speaker == "Speaker A", timeout: .seconds(1))
+
+        XCTAssertEqual(captions.recentFinals.map(\.speaker), ["Speaker A", "Speaker A"])
+        let matchCount = await matcher.matchCount
+        XCTAssertEqual(matchCount, 1)
+        await controller.flush()
+    }
+
+    /// The wiring: with no confident match, the matcher's nearest voice decides whether the line
+    /// keeps the speaker of the line before it.
+    func testUnmatchedFinalKeepsThePreviousSpeakerWhenThatIsItsNearestVoice() async {
+        let captions = LiveCaptionsState()
+        defer { captions.clear() }
+        let matcher = SuspendedCaptionSpeakerMatcher()
+        let probe = CaptionEventProbe()
+        let factory: LiveTranscriptionController.NemotronPipelineFactory = { _, _, makeSink in
+            probe.appSink = makeSink(.app)
+            return (CaptionDeliveryPipeline(), CaptionDeliveryPipeline())
+        }
+        let controller = LiveTranscriptionController(
+            engine: nil,
+            vad: FluidVAD(threshold: 0.5),
+            captions: captions,
+            speakerMatcher: matcher,
+            engineLanguage: "de",
+            nemotronPipelineFactory: factory,
+        )
+        await controller.prepare()
+        probe.appSink?(.finalized(text: "we really just wanted", audio: Self.matchableAudio))
+        await matcher.waitUntilMatching()
+        await matcher.complete(with: "Speaker A")
+        await waitFor(captions.recentFinals.first?.speaker == "Speaker A", timeout: .seconds(1))
+        probe.appSink?(.finalized(text: "to go fast", audio: Self.matchableAudio))
+        await matcher.waitUntilMatching()
+        await matcher.complete(with: LiveSpeakerMatch(name: nil, nearest: "Speaker A"))
+        await waitFor(!captions.awaitsSpeaker(lineAt: 1), timeout: .seconds(1))
+
+        XCTAssertEqual(captions.recentFinals.map(\.speaker), ["Speaker A", "Speaker A"])
         await controller.flush()
     }
 
@@ -82,8 +147,11 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         await matcher.complete(with: "Alice")
         await waitFor(captions.recentFinals.last?.speaker == "Alice", timeout: .seconds(1))
 
-        XCTAssertEqual(captions.recentFinals.map(\.text), ["just too short", "line with audio"])
-        XCTAssertEqual(captions.recentFinals.map(\.speaker), ["Remote", "Alice"])
+        XCTAssertEqual(
+            captions.recentFinals.map(\.text),
+            ["line without audio", "single chunk", "just too short", "line with audio"],
+        )
+        XCTAssertEqual(captions.recentFinals.map(\.speaker), ["Remote", "Remote", "Remote", "Alice"])
         let matchCount = await matcher.matchCount
         XCTAssertEqual(matchCount, 1)
         await controller.flush()
@@ -170,9 +238,9 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         // captions.applyFinalized level: the matcher returns the canned
         // name, the controller calls captions with it.
         await controller.prepare()
-        let micName = await matcher.match(audio: [0.0, 0.1])
+        let micName = await matcher.match(audio: [0.0, 0.1]).name
         XCTAssertEqual(micName, "Speaker A", "fake matcher must return canned mic name")
-        let appName = await matcher.match(audio: [0.2, 0.3])
+        let appName = await matcher.match(audio: [0.2, 0.3]).name
         XCTAssertEqual(appName, "Anna", "fake matcher must return canned app name")
     }
 }
@@ -226,13 +294,13 @@ private actor CaptionDeliveryPipeline: LiveCaptionPipeline {
 }
 
 private actor SuspendedCaptionSpeakerMatcher: LiveSpeakerMatching {
-    private var pendingMatch: CheckedContinuation<String?, Never>?
+    private var pendingMatch: CheckedContinuation<LiveSpeakerMatch, Never>?
     private var waitingForMatch: CheckedContinuation<Void, Never>?
     private(set) var matchCount = 0
 
     func prepare() {}
 
-    func match(audio _: [Float]) async -> String? {
+    func match(audio _: [Float]) async -> LiveSpeakerMatch {
         matchCount += 1
         return await withCheckedContinuation { continuation in
             pendingMatch = continuation
@@ -247,7 +315,11 @@ private actor SuspendedCaptionSpeakerMatcher: LiveSpeakerMatching {
     }
 
     func complete(with speaker: String) {
-        pendingMatch?.resume(returning: speaker)
+        complete(with: LiveSpeakerMatch(name: speaker, nearest: speaker))
+    }
+
+    func complete(with match: LiveSpeakerMatch) {
+        pendingMatch?.resume(returning: match)
         pendingMatch = nil
     }
 }

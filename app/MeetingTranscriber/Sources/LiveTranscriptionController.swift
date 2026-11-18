@@ -1,4 +1,3 @@
-import AudioTapLib
 import FluidAudio
 import Foundation
 import os
@@ -162,34 +161,6 @@ final class LiveTranscriptionController {
     /// otherwise interleave with the next recording's ingests on the same actor —
     /// emitting the old tail as the new recording's caption or zeroing its ring.
     var pendingFlush: Task<Void, Never>?
-
-    /// Mic-channel live sink. Hand this to `DualSourceRecorder.micLiveSink`
-    /// before `recorder.start(...)`. Buffers arrive on the AVAudioEngine tap
-    /// thread; the closure yields into the channel's bounded feed and returns
-    /// immediately — no task spawn, no actor hop on the audio thread.
-    var micSink: LiveAudioSink {
-        let sink = micFeed.sink
-        let probe = micProbeFeed.sink
-        return { buffer in
-            sink(buffer)
-            probe(buffer)
-        }
-    }
-
-    /// App-channel live sink. Hand this to `DualSourceRecorder.appLiveSink`
-    /// before `recorder.start(...)`. Buffers arrive on the CATap IOProc
-    /// thread, normally already capture-time resampled to 16 kHz mono (raw
-    /// device rate only on the resampler-nil fallback) — the feed's consumer
-    /// runs them through `LiveAudioResampler`, which passes 16 kHz mono
-    /// through unchanged.
-    var appSink: LiveAudioSink {
-        let sink = appFeed.sink
-        let probe = appProbeFeed.sink
-        return { buffer in
-            sink(buffer)
-            probe(buffer)
-        }
-    }
 
     /// `verboseDiagnostics` stays the LAST parameter so a trailing closure binds
     /// to it (matching every existing call site + SwiftFormat's trailing-closure
@@ -392,7 +363,7 @@ final class LiveTranscriptionController {
         } catch {
             // Matcher load failure is non-fatal: the controller still
             // produces captions, just without per-utterance speaker names.
-            // `LiveSpeakerMatcher.match(audio:)` returns nil on cold-load
+            // `LiveSpeakerMatcher.match(audio:)` returns `.unknown` on cold-load
             // errors → channel default fallback at the caption call site.
             logger.warning("speaker matcher prewarm failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -533,7 +504,8 @@ final class LiveTranscriptionController {
     }
 
     /// 1 s at 16 kHz. The embedding extractor loops shorter audio up to its
-    /// window, so a short slice could put a wrong name on the line.
+    /// window, so a short slice could put a wrong name on the line; such a line
+    /// takes the speaker of the line before it instead (`inheritSpeaker`).
     static let minSpeakerMatchSamples = 16000
 
     /// Shared partial/final sink for both pipeline strategies: applies the
@@ -568,10 +540,18 @@ final class LiveTranscriptionController {
                     if self.verboseDiagnostics() {
                         logger.info("[\(logChannel, privacy: .public)] final: \(text, privacy: .private)")
                     }
-                    let sequence = self.captions.applyFinalized(text, channel: channel)
-                    guard audio.count >= Self.minSpeakerMatchSamples,
-                          let speaker = await self.speakerMatcher.match(audio: audio) else { return }
-                    self.captions.updateSpeaker(speaker, forFinal: sequence)
+                    let matchable = audio.count >= Self.minSpeakerMatchSamples
+                    let sequence = self.captions.applyFinalized(text, channel: channel, awaitingSpeaker: matchable)
+                    guard matchable else {
+                        self.captions.inheritSpeaker(forFinal: sequence)
+                        return
+                    }
+                    let match = await self.speakerMatcher.match(audio: audio)
+                    if let name = match.name {
+                        self.captions.updateSpeaker(name, forFinal: sequence)
+                    } else {
+                        self.captions.resolveUnmatched(forFinal: sequence, nearest: match.nearest)
+                    }
                 }
             }
         }
