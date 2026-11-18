@@ -1,7 +1,10 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// The same gate the app package runs under. `treatAllWarnings(as:)` is what
+// The app package's warnings-as-errors gate, with its type-check limit at
+// 300 ms: the app raises its own to 1000 ms because of its large `@Observable`
+// types (reason in app/MeetingTranscriber/Package.swift), which this package
+// does not have. `treatAllWarnings(as:)` is what
 // pins the manifest to tools-version 6.2; it does not exist in 6.0.
 //
 // One caveat, because the failure is not obvious from the error text: Xcode
