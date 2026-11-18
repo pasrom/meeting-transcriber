@@ -60,7 +60,7 @@ outputs:
   toolchain:
     description: >
       The compiler identity used in the cache keys, e.g.
-      `Xcode-27.0-Build-version-27A266a`, for a caller that keys a cache of
+      `Xcode-27.2-Build-version-27B52`, for a caller that keys a cache of
       its own on it. Empty when `cache-spm` is not `true`: the step is skipped
       then, so a build that uses no cache cannot fail over a key it never reads.
     value: ${{ steps.toolchain.outputs.id }}
@@ -73,7 +73,7 @@ runs:
     # the repo must already be present.
     #
     # The key carries the compiler the build runs under, as its version and
-    # build number (`Xcode-27.0-Build-version-27A266a`), not the Xcode path. A
+    # build number (`Xcode-27.2-Build-version-27B52`), not the Xcode path. A
     # tree built by another compiler is discarded by SwiftPM, and an exact hit
     # is never saved again, so without it a toolchain bump would leave every
     # run restoring a tree it cannot use until `Package.resolved` changes. The
@@ -93,7 +93,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # Two lines, "Xcode 27.0" and "Build version 27A266a", joined into one
+        # Two lines, "Xcode 27.2" and "Build version 27B52", joined into one
         # key-safe word: runs of blanks and newlines become one dash.
         id=$(xcodebuild -version | tr -s '[:space:]' '-')
         id=${id%-}

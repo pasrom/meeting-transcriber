@@ -132,9 +132,9 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: xcode-27
     env:
-      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
-      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
-      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      # Xcode 27.2 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.0 and 27.1, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     timeout-minutes: 10
     # No `Cancel run on failure` step, and so no `actions: write`: a required
     # check that blocks the merge on its own, and a red lint says nothing about
@@ -182,9 +182,9 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: xcode-27
     env:
-      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
-      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
-      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      # Xcode 27.2 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.0 and 27.1, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     timeout-minutes: 30
     # No `Cancel run on failure` step, and so no `actions: write`, as in `lint`.
     # A compile error, the one failure this shares with `test`, fails the `test`
@@ -253,9 +253,9 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: xcode-27
     env:
-      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
-      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
-      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      # Xcode 27.2 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.0 and 27.1, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     # 25 min job-timeout = 20 min setup (cold cache) + ~5 min margin. The
     # `Build tests` and `Swift tests` steps below have step-timeouts of
     # their own so a hang there surfaces as `timed_out` (clearly
@@ -440,9 +440,9 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: xcode-27
     env:
-      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
-      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
-      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      # Xcode 27.2 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.0 and 27.1, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     timeout-minutes: 10
     permissions:
       contents: read

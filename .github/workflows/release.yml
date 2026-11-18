@@ -80,9 +80,9 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: xcode-27
     env:
-      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
-      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
-      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      # Xcode 27.2 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.0 and 27.1, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     timeout-minutes: 30
     strategy:
       matrix:
