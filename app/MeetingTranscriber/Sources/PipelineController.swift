@@ -132,7 +132,9 @@ final class PipelineController {
             ?? PipelineQueue(
                 logDir: queueEnvironment.logDir, stagingDir: queueEnvironment.stagingDir,
             )
-        recordingRetention = Self.makeRecordingRetention(logDir: queueEnvironment.logDir, settings: settings)
+        recordingRetention = Self.makeRecordingRetention(
+            logDir: queueEnvironment.logDir, settings: settings, notifier: notifier,
+        )
     }
 
     /// Wire the active-engine source. Called once from `AppState.init` after its

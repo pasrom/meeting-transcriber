@@ -5,7 +5,7 @@ import os.log
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "PipelineController+Retention")
 
 /// When recording-retention passes run: at launch, hourly, after a queue
-/// rebuild and once either retention setting has settled after a change. A finished job
+/// rebuild and once any retention or storage-limit setting has settled after a change. A finished job
 /// starts one of its own from the queue.
 extension PipelineController {
     /// How often a pass runs on its own. Retention is counted in days, so an
@@ -17,18 +17,47 @@ extension PipelineController {
     static let retentionSettleDelay: Duration = .seconds(1)
 
     /// The registry in this controller's log folder, and a cleaner reading
-    /// both settings live on every pass, so a change applies without a rebuild.
-    static func makeRecordingRetention(logDir: URL, settings: AppSettings) -> RecordingRetention {
-        RecordingRetention(
+    /// the retention and storage-limit settings live on every pass, so a
+    /// change applies without a rebuild.
+    static func makeRecordingRetention(
+        logDir: URL, settings: AppSettings, notifier: any AppNotifying,
+    ) -> RecordingRetention {
+        let notifyLimitReached: (Int64, Int64) -> Void = { total, limit in
+            let note = storageLimitNotification(totalBytes: total, limitBytes: limit)
+            notifier.notify(title: note.title, body: note.body)
+        }
+        let showStatus: (RecordingStorageStatus?) -> Void = { [weak settings] status in
+            settings?.recordingStorageStatus = status
+        }
+        return RecordingRetention(
             registry: RecordingRetentionRegistry(
                 path: logDir.appendingPathComponent(RecordingRetentionRegistry.filename),
             ),
-        ) { [weak settings] in
-            RecordingRetentionSettings(
-                enabled: settings?.recordingRetentionEnabled ?? false,
-                days: settings?.recordingRetentionDays ?? 0,
-            )
-        }
+            settings: { [weak settings] in
+                RecordingRetentionSettings(
+                    enabled: settings?.recordingRetentionEnabled ?? false,
+                    days: settings?.recordingRetentionDays ?? 0,
+                )
+            },
+            storageLimit: { [weak settings] in
+                guard let settings else { return .off }
+                return .gigabytes(settings.recordingStorageLimitGB, enabled: settings.recordingStorageLimitEnabled)
+            },
+            alarm: settings.recordingStorageAlarm,
+            onLimitReached: notifyLimitReached,
+            onStatus: showStatus,
+        )
+    }
+
+    /// What the user is told when the recordings go over the storage limit.
+    static func storageLimitNotification(totalBytes: Int64, limitBytes: Int64) -> (title: String, body: String) {
+        let format = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .decimal) }
+        let hours = Int(RecordingStorageLimitPolicy.gracePeriod / 3600)
+        return (
+            "Recording storage limit reached",
+            "Recordings use \(format(totalBytes)) of the \(format(limitBytes)) limit. In \(hours) hours, the "
+                + "oldest recordings whose meeting notes are saved will be deleted until they fit.",
+        )
     }
 
     /// Run a retention pass for the current queue, which knows the output
@@ -49,7 +78,7 @@ extension PipelineController {
         }
         // Off, the pass would keep everything; skip the snapshot read and the
         // bookmark resolve it needs.
-        guard recordingRetention.effectiveSettings.enabled, !recordingRetention.registry.entries.isEmpty else { return }
+        guard recordingRetention.isActive, !recordingRetention.registry.entries.isEmpty else { return }
         let held: Set<String>
         do {
             held = try PipelineQueue.heldTrackKeys(of: PipelineSnapshotStore.latestJobs(in: queue.logDir) ?? [])
@@ -87,6 +116,7 @@ extension PipelineController {
     private func observeRetentionSettings() {
         withObservationTracking {
             _ = recordingRetention.currentSettings
+            _ = recordingRetention.currentStorageLimit
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }

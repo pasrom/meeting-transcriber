@@ -105,6 +105,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Vocabulary section · Live transcription (PoC) toggle |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Speaker Naming (open the naming window automatically, how long unnamed meetings wait) · Mic Speaker Name · Known Voices · Recognition Stats · Experimental: Diarization Tuning |
 | `Settings/OutputSettingsView.swift` | LLM provider · notes language · notify when meeting notes fail · output folder · recording retention · custom prompt |
+| `Settings/RecordingStorageLimitRows.swift` | The storage-limit toggle, stepper and status line (usage, what cannot be deleted yet, pending deletion) under recording retention |
 | `Settings/OpenAIConnectionControls.swift` | Saved OpenAI-compatible connection picker, name field, Add/Delete |
 | `Settings/OpenAIConnectionPrompts.swift` | State of the Add (name prompt) and Delete confirmation dialogs |
 | `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics |
@@ -186,6 +187,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `RecordingRetention.swift` | Runs retention passes: decides on the main actor, deletes off it via `RecordingFileDeleter`, rechecks each delete |
 | `RecordingRetentionPolicy.swift` | Pure decision per registry entry: delete, keep (with the reason) or drop |
 | `RecordingRetentionRegistry.swift` | The list of relocated recordings retention may delete (`retained_recordings.json`), the only thing the cleaner acts on |
+| `RecordingStorageLimitPolicy.swift` | Pure storage-limit step (clear, warn, wait, delete), the oldest-first pick, and the stored warning that says which recordings a delete may take |
 | `PipelineQueue+OrphanRecovery.swift` | Orphaned-recording recovery for `PipelineQueue`: the staging scan and the jobs it creates |
 | `PipelineQueue+EchoBleed.swift` | Warns when a dual-source recording carries the same speech on both tracks (loudspeaker bleeding into the microphone) — measurement half of the echo mitigation (issue #581) |
 | `PipelineQueue+EchoCancellation.swift` | Removes the far end from the microphone track before anything reads it — cancellation half of the echo mitigation, the other branch of `EchoRemedy` |
