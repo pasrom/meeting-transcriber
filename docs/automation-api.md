@@ -569,7 +569,10 @@ reports it here.
   carry the same audio.
 - `windowsScored` / `windowsAffected`: the counts the share is computed from. A
   verdict needs a minimum of both before it claims anything, so a share alone is
-  not the whole decision.
+  not the whole decision. Nor is it the only route to one: a recording is also
+  judged affected when the share is high over just the windows the far end was
+  talking in, or when most windows peak at one stable lag even though few of them
+  correlate strongly. So `"detected": true` can come with a share under 15 %.
 - `suppressedSegments`: how many microphone segments were left out of the written
   transcript because the app track already carries them. `0` when nothing was
   removed, which includes every recording that was never analysed.

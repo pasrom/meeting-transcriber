@@ -98,6 +98,35 @@ enum EchoBleedDetector {
     static let farEndActiveFloorDBFS = -60.0
     static let farEndActiveFrameShare = 0.05
 
+    /// Bleed travels one fixed path, so its windows peak at one lag even where
+    /// a louder local talker keeps them under `correlationThreshold`. The lock
+    /// is the share of scored windows peaking within `lagLockToleranceSeconds`
+    /// of the lag most hot windows peaked at. That lag has to sit at least
+    /// `lagLockEdgeMarginSeconds` inside both search edges: a clean call piles
+    /// its peaks up at an edge, wherever the correlation is still rising when
+    /// the search stops, and a pile-up there is not a path.
+    static let lagLockToleranceSeconds = 0.01
+    static let lockedShareThreshold = 0.3
+    static let lagLockEdgeMarginSeconds = 0.03
+
+    /// Which rule called a recording affected, for the log line that makes a
+    /// field report diagnosable.
+    enum Route: String {
+        /// Hot windows over every scored window: the original rule.
+        case share
+        /// Hot windows over the windows the far end talked in.
+        case farEndShare
+        /// Scored windows locked to one bleed path.
+        case lockedLag
+    }
+
+    /// The lag most hot windows peaked at, as an offset from the search centre,
+    /// and the share of scored windows within the tolerance of it.
+    struct LagLock: Equatable {
+        let offsetSeconds: Double
+        let lockedShare: Double
+    }
+
     /// One window's measurement, kept so a field report is diagnosable without
     /// the audio. The lag is what separates real bleed from a coincidence: bleed
     /// peaks at a stable lag near the recorder's own track offset, whereas two
@@ -124,9 +153,17 @@ enum EchoBleedDetector {
     }
 
     struct Result: Equatable {
-        /// Per-window measurements, in order, and the only stored state.
-        /// Never empty: a `Result` is only produced once a window scored.
+        /// Per-window measurements, in order. Never empty: a `Result` is only
+        /// produced once a window scored.
         let windowScores: [WindowScore]
+        /// The microphone delay the search was centred on, so a lag can be
+        /// read relative to the centre.
+        let micDelay: TimeInterval
+
+        init(windowScores: [WindowScore], micDelay: TimeInterval = 0) {
+            self.windowScores = windowScores
+            self.micDelay = micDelay
+        }
 
         var windowsScored: Int {
             windowScores.count
@@ -150,18 +187,78 @@ enum EchoBleedDetector {
             windowScores.filter(\.farEndActive)
         }
 
-        /// Affected when any of the routes fires. The share over every scored
-        /// window is the original rule; the share over the far-end windows
-        /// catches a call where the far end talks in few windows and bleeds in
-        /// all of them, which the first rule dilutes with windows nothing came
-        /// out of the loudspeaker in.
-        var isAffected: Bool {
-            EchoBleedDetector.sharePasses(scored: windowsScored, hot: windowsAffected)
-                || EchoBleedDetector.sharePasses(
-                    scored: farEndWindows.count,
-                    hot: farEndWindows.count(where: \.isHot),
-                )
+        /// `nil` when no window is hot, since the mode is taken over the hot
+        /// windows only: a cold window's peak lag is wherever a coincidence put
+        /// it. Ties go to the lag that locks the most windows, then to the one
+        /// the earliest hot window peaked at.
+        var lagLock: LagLock? {
+            let centre = EchoBleedDetector.frames(-micDelay)
+            let offsets = windowScores.map { EchoBleedDetector.frames($0.lagSeconds) - centre }
+            var counts: [Int: Int] = [:]
+            var firstSeen: [Int] = []
+            for (score, offset) in zip(windowScores, offsets) where score.isHot {
+                if counts[offset] == nil { firstSeen.append(offset) }
+                counts[offset, default: 0] += 1
+            }
+            guard let top = counts.values.max() else { return nil }
+            let tolerance = EchoBleedDetector.frames(EchoBleedDetector.lagLockToleranceSeconds)
+            var best: (locked: Int, offset: Int)?
+            for mode in firstSeen where counts[mode] == top {
+                let locked = offsets.count { abs($0 - mode) <= tolerance }
+                if locked > (best?.locked ?? -1) { best = (locked, mode) }
+            }
+            guard let best else { return nil }
+            return LagLock(
+                offsetSeconds: Double(best.offset) * EchoBleedDetector.frameSeconds,
+                lockedShare: Double(best.locked) / Double(windowsScored),
+            )
         }
+
+        /// Every rule that calls this recording affected, in the order above.
+        /// The share over every scored window is the original rule. The share
+        /// over the far-end windows catches a call where the far end talks in
+        /// few windows and bleeds in all of them, which the first rule dilutes
+        /// with windows nothing came out of the loudspeaker in. The lag lock
+        /// catches bleed masked by a louder local talker, which keeps all but a
+        /// few windows under the per-window threshold but not off the path.
+        var routes: [Route] {
+            var fired: [Route] = []
+            if EchoBleedDetector.sharePasses(scored: windowsScored, hot: windowsAffected) {
+                fired.append(.share)
+            }
+            let farEnd = farEndWindows
+            if EchoBleedDetector.sharePasses(scored: farEnd.count, hot: farEnd.count(where: \.isHot)) {
+                fired.append(.farEndShare)
+            }
+            if lagLockPasses {
+                fired.append(.lockedLag)
+            }
+            return fired
+        }
+
+        var isAffected: Bool {
+            !routes.isEmpty
+        }
+
+        /// The same two floors as the share rules, then a lock on a lag that
+        /// is not an edge of the search.
+        private var lagLockPasses: Bool {
+            guard windowsScored >= EchoBleedDetector.minScoredWindows,
+                  windowsAffected >= EchoBleedDetector.minAffectedWindows,
+                  let lock = lagLock,
+                  lock.lockedShare > EchoBleedDetector.lockedShareThreshold
+            else { return false }
+            let margin = EchoBleedDetector.frames(EchoBleedDetector.lagLockEdgeMarginSeconds)
+            let offset = EchoBleedDetector.frames(lock.offsetSeconds)
+            return EchoBleedDetector.frames(EchoBleedDetector.earliestLagSeconds) + margin <= offset
+                && offset <= EchoBleedDetector.frames(EchoBleedDetector.latestLagSeconds) - margin
+        }
+    }
+
+    /// Seconds as a whole number of envelope frames, rounded the way the
+    /// search centre is.
+    private static func frames(_ seconds: Double) -> Int {
+        Int((seconds / frameSeconds).rounded())
     }
 
     /// The share rule with its two floors, shared by every route that takes a
@@ -206,7 +303,7 @@ enum EchoBleedDetector {
         // one whole window.
         let windows = appEnvelope.count / framesPerWindow
 
-        let offsets = Int((earliestLagSeconds / frameSeconds).rounded()) ... Int((latestLagSeconds / frameSeconds).rounded())
+        let offsets = frames(earliestLagSeconds) ... frames(latestLagSeconds)
         // Negative, and the sign is the whole point. `micDelay > 0` means the
         // mic started LATE, so its file is missing that opening stretch and its
         // copy of the app audio sits *earlier* in file-index terms — the same
@@ -215,7 +312,7 @@ enum EchoBleedDetector {
         // `peakCorrelation` pairs `app[k]` with `mic[k + lag]`, so the match is
         // at `lag = -micDelay`. Getting this backwards is worse than passing no
         // delay at all: it searches twice the offset away from the peak.
-        let centreLag = -Int((micDelay / frameSeconds).rounded())
+        let centreLag = frames(-micDelay)
         let activity = farEndActivity(appEnvelope[0 ..< (windows * framesPerWindow)], framesPerWindow: framesPerWindow)
         let scores = (0 ..< windows).compactMap { w -> WindowScore? in
             let range = (w * framesPerWindow) ..< ((w + 1) * framesPerWindow)
@@ -233,7 +330,7 @@ enum EchoBleedDetector {
             )
         }
         guard !scores.isEmpty else { return nil }
-        return Result(windowScores: scores)
+        return Result(windowScores: scores, micDelay: micDelay)
     }
 
     // MARK: - Pieces
