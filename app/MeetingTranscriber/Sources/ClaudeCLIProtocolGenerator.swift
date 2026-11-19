@@ -397,9 +397,8 @@
 
         /// Strip `CLAUDECODE` (avoid nested-session detection by the child
         /// CLI), force `disableAutoMemoryVariable` and `safeModeVariable` to
-        /// `1` (see there), and
-        /// prepend `searchPaths` to `PATH` (app bundles inherit
-        /// a minimal `PATH`). `anthropicAPIKey`, when non-empty and not
+        /// `1` (see there), and prepend `searchPaths` to `PATH` (app bundles
+        /// inherit a minimal `PATH`). `anthropicAPIKey`, when non-empty and not
         /// already set in `baseEnvironment`, is injected so the subprocess
         /// can authenticate via API key instead of the CLI's own OAuth
         /// session. The key is never auto-discovered — it only arrives here
