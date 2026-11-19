@@ -43,6 +43,23 @@ enum EchoTestAudio {
         }
     }
 
+    /// A steady noise floor at `amplitude` (uniform, so RMS is about 0.58 of
+    /// it). Stands in for a quiet room or an idle line: low, but never the
+    /// digital zero that makes a window unscorable.
+    static func noise(seconds: Double, amplitude: Float, seed: UInt64) -> [Float] {
+        var state = seed &* 2_862_933_555_777_941_757 &+ 3_037_000_493
+        return (0 ..< Int(Double(rate) * seconds)).map { _ in
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            let unit = Float(UInt32(truncatingIfNeeded: state >> 33)) / Float(UInt32.max)
+            return (unit * 2 - 1) * amplitude
+        }
+    }
+
+    /// Sample-wise sum of two tracks, over the shorter length.
+    static func mix(_ a: [Float], _ b: [Float]) -> [Float] {
+        zip(a, b).map { $0 + $1 }
+    }
+
     /// The room path: the loudspeaker output reaching the microphone,
     /// attenuated and delayed.
     static func bleed(_ source: [Float], delayMs: Double, gain: Float) -> [Float] {
