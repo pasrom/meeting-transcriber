@@ -101,7 +101,7 @@ extension PipelineQueue {
         // windows peaked at one stable lag (bleed travels a fixed path) or
         // scattered across the search range (a coincidence). Numbers only — no
         // audio, no transcript, nothing derived from what was said.
-        let detail = Self.windowDetail(result.windowScores)
+        let detail = Self.windowDetail(result.windows)
         logger.info("echo_bleed windows=\(detail, privacy: .public)")
         guard result.isAffected else { return EchoBleedAnalysis(verdict: .clean, windowScores: result.windowScores) }
         return EchoBleedAnalysis(
@@ -191,10 +191,13 @@ extension PipelineQueue {
     }
 
     /// Renders the per-window series as `corr@lagms` pairs, e.g.
-    /// `0.79@20 0.83@20 0.87@10`. Compact on purpose: this goes out on every
-    /// dual-source job, and a long recording has dozens of windows.
-    nonisolated static func windowDetail(_ scores: [EchoBleedDetector.WindowScore]) -> String {
-        scores.map { score in
+    /// `0.79@20 - 0.87@10`. Compact on purpose: this goes out on every
+    /// dual-source job, and a long recording has dozens of windows. An
+    /// unscored window is a `-` at its own index rather than left out, so the
+    /// n-th entry stays the n-th ten seconds of the recording.
+    nonisolated static func windowDetail(_ windows: [EchoBleedDetector.WindowScore?]) -> String {
+        windows.map { score in
+            guard let score else { return "-" }
             let corr = String(format: "%.2f", score.correlation)
             let lagMs = Int((score.lagSeconds * 1000).rounded())
             return "\(corr)@\(lagMs)"
