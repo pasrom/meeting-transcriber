@@ -23,14 +23,16 @@ struct EchoBleedAnalysis {
     let windowScores: [EchoBleedDetector.WindowScore]
     /// Share of scored windows that carried bleed, and how many were scored.
     /// Only meaningful on an `.affected` analysis, which is the only one the
-    /// announcement says anything about.
-    let affectedPercent: Int
+    /// announcement says anything about. `nil` when the plain share rule did
+    /// not fire: the verdict then came from the far-end share or the lag lock,
+    /// and the share over every window understates what they found.
+    let affectedPercent: Int?
     let windowsScored: Int
 
     init(
         verdict: EchoVerdict,
         windowScores: [EchoBleedDetector.WindowScore] = [],
-        affectedPercent: Int = 0,
+        affectedPercent: Int? = nil,
         windowsScored: Int = 0,
     ) {
         self.verdict = verdict
@@ -94,7 +96,12 @@ extension PipelineQueue {
         // able to tell "analysed, nothing found" from "never analysed", and a
         // near-miss share is what makes a false negative diagnosable later.
         recordEchoVerdict(jobID: jobID, EchoDetectionDTO(result))
-        logger.info("echo_bleed share=\(percent, privacy: .public)% windows=\(scored, privacy: .public) affected=\(hits, privacy: .public)")
+        // Which rule fired, since the share alone no longer decides: a
+        // recording can be affected at a share under the threshold.
+        let routes = result.routes
+        let routeNames = routes.isEmpty ? "none" : routes.map(\.rawValue).joined(separator: ",")
+        let summary = "share=\(percent)% windows=\(scored) affected=\(hits) route=\(routeNames)"
+        logger.info("echo_bleed \(summary, privacy: .public)")
         // The per-window series, so a field report is diagnosable with no audio
         // attached. It answers the two questions the share alone cannot: whether
         // a miss sat just under the threshold or nowhere near it, and whether the
@@ -103,13 +110,13 @@ extension PipelineQueue {
         // audio, no transcript, nothing derived from what was said.
         let detail = Self.windowDetail(result.windows)
         logger.info("echo_bleed windows=\(detail, privacy: .public)")
-        guard result.isAffected else { return EchoBleedAnalysis(verdict: .clean, windowScores: result.windowScores) }
+        guard !routes.isEmpty else { return EchoBleedAnalysis(verdict: .clean, windowScores: result.windowScores) }
         return EchoBleedAnalysis(
             verdict: .affected, windowScores: result.windowScores,
             // Carried rather than recomputed later: the announcement says what
             // was measured, and the two numbers it says it by have to be the
             // ones the verdict came from.
-            affectedPercent: Int((result.affectedWindowShare * 100).rounded()),
+            affectedPercent: routes.contains(.share) ? percent : nil,
             windowsScored: scored,
         )
     }
@@ -129,7 +136,11 @@ extension PipelineQueue {
         // "1 minutes" is reachable: the minimum firing configuration is three
         // ten-second windows, and the E2E fixture produces four.
         let span = minutes == 1 ? "minute" : "minutes"
-        let head = "Speaker output was picked up by the microphone in \(analysis.affectedPercent)% of the \(minutes) \(span) analysed."
+        // Without the share when another rule made the call: a masked or
+        // intermittent far end can bleed wherever it talks and still light up
+        // only a few windows, and "in 5 %" would tell the user it hardly matters.
+        let share = analysis.affectedPercent.map { "\($0)% of " } ?? ""
+        let head = "Speaker output was picked up by the microphone in \(share)the \(minutes) \(span) analysed."
         let tail = echoRemoved
             ? "It was removed from the microphone track before transcription. Headphones still give the cleaner recording."
             : "Remote speech may appear twice in the transcript. Using headphones avoids it."

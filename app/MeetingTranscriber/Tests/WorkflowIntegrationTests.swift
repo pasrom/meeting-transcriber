@@ -1567,6 +1567,7 @@ final class WorkflowIntegrationTests: XCTestCase {
             warnings.contains("picked up by the microphone"),
             "expected an echo-bleed warning, got: \(warnings)",
         )
+        XCTAssertTrue(warnings.contains("% of the"), "the plain share fired, so the warning quotes it: \(warnings)")
     }
 
     /// The negative case guards the same path: two people on separate devices
@@ -1596,6 +1597,41 @@ final class WorkflowIntegrationTests: XCTestCase {
             warnings.contains("picked up by the microphone"),
             "independent tracks must not be reported as bleed, got: \(warnings)",
         )
+    }
+
+    /// Bleed under a louder local talker is called affected by its stable lag,
+    /// while only two of its windows clear the per-window threshold. Quoting
+    /// that share to the user ("in 10 %") would understate the problem and read
+    /// as contradicting the warning, so the sentence leaves the share out.
+    func testMaskedBleedWarnsWithoutQuotingTheShare() async throws {
+        let (h, _) = try makeHarness()
+        let recordings = tmpDir.appendingPathComponent("masked")
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+
+        let far = speechLike(seconds: 200, seed: 43)
+        let local = speechLike(seconds: 200, seed: 44)
+        var mic = EchoTestAudio.bleed(far, delayMs: 40, gain: 0.5)
+        for i in (20 * 16000) ..< mic.count {
+            mic[i] += local[i]
+        }
+        let appURL = recordings.appendingPathComponent("meeting_app.wav")
+        let micURL = recordings.appendingPathComponent("meeting_mic.wav")
+        try writeTrack(far, to: appURL)
+        try writeTrack(mic, to: micURL)
+
+        await runDualSource(h, app: appURL, mic: micURL)
+
+        let echo = try XCTUnwrap(h.queue.jobs.first?.echo)
+        XCTAssertTrue(echo.detected)
+        XCTAssertEqual(echo.windowsAffected, 2, "the fixture is the masked case, not a plain share")
+        let warning = try XCTUnwrap(
+            h.queue.jobs.first?.warnings.first { $0.contains("picked up by the microphone") },
+        )
+        XCTAssertTrue(
+            warning.hasPrefix("Speaker output was picked up by the microphone in the 3 minutes analysed."),
+            "got: \(warning)",
+        )
+        XCTAssertFalse(warning.contains("%"), "got: \(warning)")
     }
 
     // MARK: - Withholding a verdict beats guessing one

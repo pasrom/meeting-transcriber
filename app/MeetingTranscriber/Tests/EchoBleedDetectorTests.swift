@@ -30,6 +30,7 @@ final class EchoBleedDetectorTests: XCTestCase {
         let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
         XCTAssertGreaterThan(result.affectedWindowShare, 0.9, "a pure room copy must light up nearly every window")
         XCTAssertTrue(result.isAffected)
+        XCTAssertEqual(result.routes, [.share, .farEndShare, .lockedLag], "a full copy clears every rule")
     }
 
     func testIndependentTracksAreNotDetected() throws {
@@ -100,6 +101,7 @@ final class EchoBleedDetectorTests: XCTestCase {
         XCTAssertEqual(result.windowsScored, 30, "the idle windows still score, they are not digital zero")
         XCTAssertEqual(result.windowsAffected, 4, "exactly the windows the far end spoke in")
         XCTAssertTrue(result.isAffected, "share over all windows was \(result.affectedWindowShare)")
+        XCTAssertEqual(result.routes, [.farEndShare], "only the far-end share sees it")
     }
 
     /// Bleed in every window, but under a louder local talker, so only the
@@ -114,6 +116,7 @@ final class EchoBleedDetectorTests: XCTestCase {
         let atPath = result.windowScores.count { abs($0.lagSeconds - 0.04) <= 0.0105 }
         XCTAssertGreaterThan(atPath, 10, "most windows still peak on the bleed path")
         XCTAssertTrue(result.isAffected)
+        XCTAssertEqual(result.routes, [.lockedLag], "neither share rule sees it")
     }
 
     /// The same masked bleed with its path at the very edge of the search. A
