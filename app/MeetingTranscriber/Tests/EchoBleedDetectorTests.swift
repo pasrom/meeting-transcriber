@@ -72,6 +72,36 @@ final class EchoBleedDetectorTests: XCTestCase {
         XCTAssertFalse(result.isAffected)
     }
 
+    // MARK: - Bleed the plain share misses
+
+    /// A call where the far end speaks in only a few windows and bleeds in
+    /// every one of them, while the rest is an idle line and a quiet room. A
+    /// window with nothing coming out of the loudspeaker cannot carry bleed,
+    /// so counting it in the denominator dilutes the share below the
+    /// threshold however hard the far end bleeds when it does talk.
+    func testBleedInTheFewWindowsTheFarEndTalksIsDetected() throws {
+        let seconds = 300.0
+        var farEnd = [Float](repeating: 0, count: Int(seconds) * rate)
+        for window in [3, 9, 15, 21] {
+            let start = window * 10 * rate
+            for (i, sample) in speechLike(seconds: 10, seed: UInt64(window)).enumerated() {
+                farEnd[start + i] = sample
+            }
+        }
+        // The idle line's own noise stays on the app track only: crossing the
+        // room at half gain puts it under the room's noise, so the windows
+        // the far end spoke in are the only ones the two tracks share.
+        let line = EchoTestAudio.noise(seconds: seconds, amplitude: 0.002, seed: 31)
+        let room = EchoTestAudio.noise(seconds: seconds, amplitude: 0.002, seed: 32)
+        let app = EchoTestAudio.mix(farEnd, line)
+        let mic = EchoTestAudio.mix(bleed(farEnd, delayMs: 15, gain: 0.5), room)
+
+        let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
+        XCTAssertEqual(result.windowsScored, 30, "the idle windows still score, they are not digital zero")
+        XCTAssertEqual(result.windowsAffected, 4, "exactly the windows the far end spoke in")
+        XCTAssertTrue(result.isAffected, "share over all windows was \(result.affectedWindowShare)")
+    }
+
     // MARK: - No verdict is better than a wrong one
 
     func testSilentAppTrackYieldsNoVerdict() {

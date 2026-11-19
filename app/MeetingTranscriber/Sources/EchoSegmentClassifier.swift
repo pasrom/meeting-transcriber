@@ -213,7 +213,7 @@ enum EchoSegmentClassifier {
         micDelay: TimeInterval, windowScores: [EchoBleedDetector.WindowScore],
     ) -> TimeInterval {
         let hotLags = windowScores
-            .filter { $0.correlation > EchoBleedDetector.correlationThreshold }
+            .filter(\.isHot)
             .map(\.lagSeconds)
             .sorted()
         guard !hotLags.isEmpty else { return AudioMixer.clampMicDelay(micDelay) }

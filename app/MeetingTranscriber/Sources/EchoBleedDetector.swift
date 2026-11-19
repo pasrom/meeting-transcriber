@@ -85,6 +85,19 @@ enum EchoBleedDetector {
     /// anywhere. That is a different defect, handled by the channel-health path.
     static let silenceFloorDBFS = -70.0
 
+    /// When the far end is talking, judged from the app track alone. A frame
+    /// is active when its level is within `farEndActiveRangeDB` of the track's
+    /// own speech level (its `farEndLevelPercentile` frame level over the
+    /// analysed span) and above `farEndActiveFloorDBFS`; a window is far-end
+    /// active when at least `farEndActiveFrameShare` of its frames are. Relative
+    /// to the track rather than absolute, because call levels differ by tens of
+    /// dB between apps and devices, while an idle line sits far below whatever
+    /// level that call's speech has.
+    static let farEndLevelPercentile = 0.95
+    static let farEndActiveRangeDB = 25.0
+    static let farEndActiveFloorDBFS = -60.0
+    static let farEndActiveFrameShare = 0.05
+
     /// One window's measurement, kept so a field report is diagnosable without
     /// the audio. The lag is what separates real bleed from a coincidence: bleed
     /// peaks at a stable lag near the recorder's own track offset, whereas two
@@ -92,6 +105,22 @@ enum EchoBleedDetector {
     struct WindowScore: Equatable {
         let correlation: Double
         let lagSeconds: Double
+        /// Share of this window's frames in which the far end was talking.
+        let farEndActivity: Double
+
+        init(correlation: Double, lagSeconds: Double, farEndActivity: Double = 1) {
+            self.correlation = correlation
+            self.lagSeconds = lagSeconds
+            self.farEndActivity = farEndActivity
+        }
+
+        var isHot: Bool {
+            correlation > EchoBleedDetector.correlationThreshold
+        }
+
+        var farEndActive: Bool {
+            farEndActivity >= EchoBleedDetector.farEndActiveFrameShare
+        }
     }
 
     struct Result: Equatable {
@@ -107,7 +136,7 @@ enum EchoBleedDetector {
         /// the evidence it summarises cannot disagree — and so the threshold
         /// lives next to the field it defines instead of in the scoring loop.
         var windowsAffected: Int {
-            windowScores.count { $0.correlation > EchoBleedDetector.correlationThreshold }
+            windowScores.count(where: \.isHot)
         }
 
         /// Share of 10 s windows whose two tracks carry the same audio.
@@ -115,11 +144,32 @@ enum EchoBleedDetector {
             windowsScored > 0 ? Double(windowsAffected) / Double(windowsScored) : 0
         }
 
-        var isAffected: Bool {
-            windowsScored >= EchoBleedDetector.minScoredWindows
-                && windowsAffected >= EchoBleedDetector.minAffectedWindows
-                && affectedWindowShare > EchoBleedDetector.affectedShareThreshold
+        /// The scored windows in which the far end was talking: the only ones
+        /// that can carry bleed at all.
+        var farEndWindows: [WindowScore] {
+            windowScores.filter(\.farEndActive)
         }
+
+        /// Affected when any of the routes fires. The share over every scored
+        /// window is the original rule; the share over the far-end windows
+        /// catches a call where the far end talks in few windows and bleeds in
+        /// all of them, which the first rule dilutes with windows nothing came
+        /// out of the loudspeaker in.
+        var isAffected: Bool {
+            EchoBleedDetector.sharePasses(scored: windowsScored, hot: windowsAffected)
+                || EchoBleedDetector.sharePasses(
+                    scored: farEndWindows.count,
+                    hot: farEndWindows.count(where: \.isHot),
+                )
+        }
+    }
+
+    /// The share rule with its two floors, shared by every route that takes a
+    /// share so the floors cannot drift apart.
+    private static func sharePasses(scored: Int, hot: Int) -> Bool {
+        scored >= minScoredWindows
+            && hot >= minAffectedWindows
+            && Double(hot) / Double(scored) > affectedShareThreshold
     }
 
     /// Returns `nil` when no honest verdict is possible: either track silent, or
@@ -166,6 +216,7 @@ enum EchoBleedDetector {
         // at `lag = -micDelay`. Getting this backwards is worse than passing no
         // delay at all: it searches twice the offset away from the peak.
         let centreLag = -Int((micDelay / frameSeconds).rounded())
+        let activity = farEndActivity(appEnvelope[0 ..< (windows * framesPerWindow)], framesPerWindow: framesPerWindow)
         let scores = (0 ..< windows).compactMap { w -> WindowScore? in
             let range = (w * framesPerWindow) ..< ((w + 1) * framesPerWindow)
             guard let peak = peakCorrelation(
@@ -178,6 +229,7 @@ enum EchoBleedDetector {
             return WindowScore(
                 correlation: peak.correlation,
                 lagSeconds: Double(peak.lag) * frameSeconds,
+                farEndActivity: activity[w],
             )
         }
         guard !scores.isEmpty else { return nil }
@@ -207,6 +259,33 @@ enum EchoBleedDetector {
             out[f] = (acc / Double(samplesPerFrame)).squareRoot()
         }
         return out
+    }
+
+    /// Per window, the share of frames in which the far end was talking (see
+    /// `farEndLevelPercentile`). The percentile is taken over the whole span
+    /// passed in, which is every frame that belongs to a window.
+    private static func farEndActivity(_ envelope: ArraySlice<Double>, framesPerWindow: Int) -> [Double] {
+        // A digital-zero frame gets a finite, very low level rather than -inf,
+        // so it sorts below everything and is never active.
+        let levels = envelope.map { 20 * log10(max($0, 1e-10)) }
+        let threshold = max(
+            percentile(levels.sorted(), farEndLevelPercentile) - farEndActiveRangeDB,
+            farEndActiveFloorDBFS,
+        )
+        return stride(from: 0, to: levels.count, by: framesPerWindow).map { start in
+            let window = levels[start ..< min(start + framesPerWindow, levels.count)]
+            return Double(window.count { $0 > threshold }) / Double(window.count)
+        }
+    }
+
+    /// Linear interpolation between the closest ranks, so `p` of 0.95 over a
+    /// short span does not jump from one frame's level to the next.
+    private static func percentile(_ sorted: [Double], _ p: Double) -> Double {
+        guard !sorted.isEmpty else { return -.infinity }
+        let position = p * Double(sorted.count - 1)
+        let lower = Int(position.rounded(.down))
+        let upper = min(lower + 1, sorted.count - 1)
+        return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - Double(lower))
     }
 
     /// Highest normalised correlation of `b` against `a` over the lag range, and
