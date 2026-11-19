@@ -124,6 +124,38 @@ final class EchoDTODecodingTests: XCTestCase {
         XCTAssertFalse(json.contains("cancellationSeconds"), "got: \(json)")
     }
 
+    /// A verdict recorded before the measurement kept its alignment. Absent,
+    /// not zero: zero is a real alignment, and claiming it for a record that
+    /// never stored one would misplace every lag a reader works out from it.
+    func testVerdictWithoutTheMicDelayReadsAsUnrecorded() throws {
+        let dto = try decode(EchoDetectionDTO.self, """
+        {"detected":true,"affectedWindowShare":0.62,"windowsScored":34,"windowsAffected":21}
+        """)
+        XCTAssertNil(dto.micDelaySeconds)
+    }
+
+    func testVerdictKeepsTheMicDelay() throws {
+        let dto = try decode(EchoDetectionDTO.self, """
+        {"detected":false,"affectedWindowShare":0,"windowsScored":4,"windowsAffected":0,"micDelaySeconds":-0.25}
+        """)
+        XCTAssertEqual(dto.micDelaySeconds, -0.25)
+    }
+
+    /// The alignment the search was centred on travels from the measurement
+    /// to the stored shape and back, so a lag in the log can be read against
+    /// it later.
+    func testTheMicDelayOfTheMeasurementSurvivesARoundTrip() throws {
+        let result = EchoBleedDetector.Result(
+            windowScores: [EchoBleedDetector.WindowScore(correlation: 0.2, lagSeconds: -0.33)],
+            micDelay: 0.35,
+        )
+        let dto = EchoDetectionDTO(result)
+        XCTAssertEqual(dto.micDelaySeconds, 0.35)
+        let json = try XCTUnwrap(String(data: JSONEncoder().encode(dto), encoding: .utf8))
+        XCTAssertTrue(json.contains(#""micDelaySeconds":0.35"#), "got: \(json)")
+        XCTAssertEqual(try JSONDecoder().decode(EchoDetectionDTO.self, from: Data(json.utf8)), dto)
+    }
+
     // MARK: - TimestampedSegment
 
     /// Segments persisted with speaker naming, from before either field existed.

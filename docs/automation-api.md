@@ -514,7 +514,8 @@ Scope and limits:
     "windowsAffected": 21,
     "suppressedSegments": 12,
     "removed": false,
-    "cancellationSeconds": 41.2
+    "cancellationSeconds": 41.2,
+    "micDelaySeconds": 0.02
   }
 }
 ```
@@ -573,6 +574,11 @@ reports it here.
   judged affected when the share is high over just the windows the far end was
   talking in, or when most windows peak at one stable lag even though few of them
   correlate strongly. So `"detected": true` can come with a share under 15 %.
+- `micDelaySeconds`: the offset, in seconds, between the two tracks' starts that
+  the measurement was aligned to (positive means the microphone started later),
+  as the recorder estimated it and clamped to the same range the mix uses.
+  Absent on a verdict recorded before this field existed, which is not the same
+  as `0`.
 - `suppressedSegments`: how many microphone segments were left out of the written
   transcript because the app track already carries them. `0` when nothing was
   removed, which includes every recording that was never analysed.

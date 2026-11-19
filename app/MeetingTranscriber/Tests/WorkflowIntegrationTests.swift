@@ -1531,12 +1531,12 @@ final class WorkflowIntegrationTests: XCTestCase {
         try AudioMixer.saveWAV(samples: samples, sampleRate: 16000, url: url)
     }
 
-    private func runDualSource(_ h: Harness, app: URL, mic: URL) async {
+    private func runDualSource(_ h: Harness, app: URL, mic: URL, micDelay: TimeInterval = 0) async {
         h.queue.speakerNamingHandler = { _ in .skipped }
         h.queue.enqueue(PipelineJob(
             meetingTitle: "meeting", appName: "File",
             mixPath: nil, appPath: app, micPath: mic,
-            micDelay: 0,
+            micDelay: micDelay,
         ))
         await h.queue.processNext()
         await awaitJobTerminalState(h.queue)
@@ -1568,6 +1568,28 @@ final class WorkflowIntegrationTests: XCTestCase {
             "expected an echo-bleed warning, got: \(warnings)",
         )
         XCTAssertTrue(warnings.contains("% of the"), "the plain share fired, so the warning quotes it: \(warnings)")
+    }
+
+    /// The job records the alignment the measurement was centred on, so the
+    /// lags in a field report's log can be read against it. A microphone that
+    /// started half a second late is the case where it matters: without the
+    /// delay the bleed is outside the search and the recording reads as clean.
+    func testDualSourceVerdictRecordsTheMicDelayItWasMeasuredAt() async throws {
+        let (h, _) = try makeHarness()
+        let recordings = tmpDir.appendingPathComponent("late-mic")
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+
+        let far = speechLike(seconds: 40, seed: 13)
+        let appURL = recordings.appendingPathComponent("meeting_app.wav")
+        let micURL = recordings.appendingPathComponent("meeting_mic.wav")
+        try writeTrack(far, to: appURL)
+        try writeTrack(Array(EchoTestAudio.bleed(far, delayMs: 15, gain: 0.5).dropFirst(8000)), to: micURL)
+
+        await runDualSource(h, app: appURL, mic: micURL, micDelay: 0.5)
+
+        let echo = try XCTUnwrap(h.queue.jobs.first?.echo)
+        XCTAssertTrue(echo.detected, "centred on the recorded delay, the late copy is found")
+        XCTAssertEqual(echo.micDelaySeconds, 0.5)
     }
 
     /// The negative case guards the same path: two people on separate devices
