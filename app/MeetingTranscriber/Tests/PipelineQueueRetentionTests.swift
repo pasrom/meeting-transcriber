@@ -44,6 +44,36 @@ final class PipelineQueueRetentionTests: XCTestCase {
         XCTAssertFalse(tracks.contains(where: fixture.exists), "switched on later, the earlier recording is due")
     }
 
+    /// The recording sidecar leaves staging with the mix, under the stem the
+    /// tracks get and naming them, and the entry lists it, so a due pass
+    /// deletes it with them instead of leaving it to describe nothing.
+    func testTheRecordingSidecarMovesWithTheTracksAndGoesWithThem() async throws {
+        fixture.enabled = false
+        let queue = fixture.makeQueue()
+        let job = try fixture.makeRecordedJob()
+        let staged = try RecordingSidecar.writeTestRecordingSidecar(besideMix: XCTUnwrap(job.mixPath))
+        queue.enqueue(job)
+        await queue.processNext()
+
+        let tracks = try fixture.relocatedTracks(of: queue.jobs.first)
+        let stem = try XCTUnwrap(RecordingFileSuffix.stripSuffix(from: tracks[0].lastPathComponent)?.stem)
+        let moved = fixture.recordingsDir.appendingPathComponent(stem + RecordingSidecar.recordingFilenameSuffix)
+        XCTAssertFalse(fixture.exists(staged), "the sidecar stayed in staging")
+        let sidecar = try XCTUnwrap(RecordingSidecar.read(from: moved), "no sidecar beside the relocated tracks")
+        XCTAssertEqual(
+            [sidecar.files.mix, sidecar.files.app, sidecar.files.mic],
+            tracks.map { Optional($0.lastPathComponent) }, "the sidecar names the tracks as they are now called",
+        )
+        XCTAssertEqual(sidecar.micDelaySeconds, 0.25)
+        let entry = try XCTUnwrap(fixture.retention.registry.entries.first)
+        XCTAssertEqual(Set(entry.paths.map(\.standardizedFileURL)), Set((tracks + [moved]).map(\.standardizedFileURL)))
+
+        fixture.enabled = true
+        await queue.sweepRetainedRecordings()
+        XCTAssertFalse((tracks + [moved]).contains(where: fixture.exists), "a due pass left part of the recording")
+        XCTAssertTrue(fixture.retention.registry.entries.isEmpty)
+    }
+
     /// The entry fixture.exists from the moment the audio moved, before the job
     /// finishes. A job parked for speaker naming is the visible case; a quit
     /// while the protocol is generated is the one it guards against.

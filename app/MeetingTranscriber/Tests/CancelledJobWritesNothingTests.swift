@@ -131,6 +131,29 @@ final class CancelledJobWritesNothingTests: XCTestCase {
         XCTAssertEqual(files(endingIn: SpeakerNamingStore.namingJSONSuffix), [])
     }
 
+    /// The recording sidecar is part of the recording: it leaves staging with
+    /// the mix, so a re-import of the cancelled recording still finds it.
+    func testACancelledJobsRecordingSidecarMovesWithTheMix() async throws {
+        let diarizer = GatedDiarization(result: Self.diarization(withEmbeddings: true))
+        let queue = makeQueue(diarizer: diarizer, generator: MockProtocolGen())
+        diarizer.parkNextRun()
+        let job = try makeStagedJob()
+        let staged = try RecordingSidecar.writeTestRecordingSidecar(besideMix: XCTUnwrap(job.mixPath))
+        queue.enqueue(job)
+        await waitFor { await diarizer.gate.hasWaiter }
+
+        queue.cancelJob(id: job.id)
+        await queue.lastRecordingRelocation?.value
+        await diarizer.gate.open()
+        await waitFor(!queue.isProcessing, timeout: .seconds(10))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path), "the sidecar stayed in staging")
+        let recordings = files(in: "recordings")
+        let mix = try XCTUnwrap(recordings.first { $0.hasSuffix(RecordingFileSuffix.mix) }, "\(recordings)")
+        let stem = try XCTUnwrap(RecordingFileSuffix.stripSuffix(from: mix)?.stem)
+        XCTAssertEqual(Set(recordings), [mix, stem + RecordingSidecar.recordingFilenameSuffix])
+    }
+
     /// A file the user picked for import is theirs and stays where it is.
     func testACancelledImportLeavesItsSourceUntouched() async throws {
         let diarizer = GatedDiarization(result: Self.diarization(withEmbeddings: false))

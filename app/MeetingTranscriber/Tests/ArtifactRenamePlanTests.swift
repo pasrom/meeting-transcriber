@@ -45,6 +45,7 @@ final class ArtifactRenamePlanTests: XCTestCase {
             "_mic_16k.wav",
             "_segments.json",
             "_naming.json",
+            "_recording.json",
         ] {
             XCTAssertEqual(
                 stem("weekly_sync", existing: ["/out/recordings/weekly_sync\(suffix)"]),
@@ -83,7 +84,7 @@ final class ArtifactRenamePlanTests: XCTestCase {
             "/out/recordings/\(old)_mix.wav", "/out/recordings/\(old)_app.wav", "/out/recordings/\(old)_mic.wav",
             "/out/recordings/\(old)_16k.wav", "/out/recordings/\(old)_app_16k.wav",
             "/out/recordings/\(old)_mic_16k.wav", "/out/recordings/\(old)_segments.json",
-            "/out/recordings/\(old)_naming.json",
+            "/out/recordings/\(old)_naming.json", "/out/recordings/\(old)_recording.json",
         ]
         let moves = ArtifactRenamePlan.moves(
             from: old, to: "weekly_sync", in: dirs,

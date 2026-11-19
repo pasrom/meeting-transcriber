@@ -2776,6 +2776,35 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// The recording sidecar takes the AI title with the tracks and names them
+    /// by it, so a re-import of the renamed tracks still finds it.
+    func testAITitleRenamesTheRecordingSidecarWithTheTracks() async throws {
+        let (q, gen) = makeStraightThroughQueue(stagingDir: tmpDir)
+        gen.headingTitle = "Sprint Planning"
+        let job = try makeAITitleJob()
+        let mix = tmpDir.appendingPathComponent("20261014_120000" + RecordingFileSuffix.mix)
+        try FileManager.default.moveItem(at: XCTUnwrap(job.mixPath), to: mix)
+        try RecordingSidecar.writeTestRecordingSidecar(besideMix: mix)
+        var staged = PipelineJob(
+            meetingTitle: job.meetingTitle, appName: job.appName,
+            mixPath: mix, appPath: job.appPath, micPath: job.micPath, micDelay: 0,
+        )
+        staged.useAITitleForFilenames = true
+        q.enqueue(staged)
+        await q.processNext()
+
+        let sidecar = try XCTUnwrap(
+            RecordingSidecar.read(from: recordingsDir.appendingPathComponent("sprint_planning_recording.json")),
+            "\(names(in: recordingsDir))",
+        )
+        XCTAssertEqual(sidecar.files.mix, "sprint_planning_mix.wav")
+        XCTAssertEqual(sidecar.files.app, "sprint_planning_app.wav")
+        XCTAssertEqual(sidecar.files.mic, "sprint_planning_mic.wav")
+        XCTAssertEqual(names(in: recordingsDir).filter { $0.hasSuffix(RecordingSidecar.recordingFilenameSuffix) }, [
+            "sprint_planning_recording.json",
+        ])
+    }
+
     /// A quit between the rename and the protocol save restores from the
     /// snapshot, so the rename has to write one itself. The `.done` snapshot
     /// that follows a full run would hide a rename that forgot to.

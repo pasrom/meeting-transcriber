@@ -1302,6 +1302,11 @@ extension PipelineQueue {
             return oldStem
         }
         logger.info("[\(shortID, privacy: .public)] ai_title_rename moved=\(done.count, privacy: .public)")
+        // The recording sidecar moved with the tracks; its file names follow them.
+        let renamedSidecar = dirs.recordings.appendingPathComponent(newStem + RecordingSidecar.recordingFilenameSuffix)
+        if done.contains(where: { $0.to == renamedSidecar }) {
+            RecordingSidecar.moveRecordingSidecar(from: renamedSidecar, toDirectory: dirs.recordings, stem: newStem)
+        }
 
         if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
             func moved(_ url: URL?) -> URL? {
@@ -1465,9 +1470,10 @@ extension PipelineQueue {
     /// written. `outputDir` here is `<root>/recordings`, reachable because the
     /// queue holds the security scope on the root.
     ///
-    /// `moved` lists the destinations this run moved this job's audio to; the
-    /// retention registry records exactly these. Imports, files already in the output
-    /// folder and failed moves are never in it.
+    /// `moved` lists the destinations this run moved this job's audio to, and
+    /// the recording sidecar that moved with the mix; the retention registry
+    /// records exactly these. Imports, files already in the output folder and
+    /// failed moves are never in it.
     nonisolated private static func persistAudioToOutput(
         ctx: JobContext, outputDir: URL, stagingDir: URL,
     ) -> (paths: RelocatedAudioPaths, moved: [URL]) {
@@ -1546,6 +1552,15 @@ extension PipelineQueue {
             app: persist(appPath, RecordingFileSuffix.app),
             mic: persist(micPath, RecordingFileSuffix.mic),
         )
+        // The recording sidecar follows its mix out of staging, so a re-import
+        // of the relocated tracks finds it under their stem. Keyed on where the
+        // mix is now, not on this run moving it: a run restored after a quit
+        // finds the mix already relocated and still takes a sidecar left behind.
+        if let mixPath, let relocated = paths.mix, relocated != mixPath,
+           let staged = RecordingSidecar.recordingSidecarURL(besideMix: mixPath),
+           let sidecar = RecordingSidecar.moveRecordingSidecar(from: staged, toDirectory: outputDir, stem: ctx.slug) {
+            moved.append(sidecar)
+        }
         return (paths, moved)
     }
 }
