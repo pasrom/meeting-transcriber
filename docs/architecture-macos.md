@@ -699,7 +699,7 @@ always use the default handler.
 - **Input:** Meeting metadata + protocol prompt (with variables substituted) + transcript piped to stdin
 - **No tools:** `--tools ""` and `--strict-mcp-config` start the session without built-in tools or MCP servers, since the transcript is untrusted text. A CLI too old for these options fails the protocol with a message asking for an update; it is never run without them
 - **Output:** Stream-json parsed line-by-line (content_block_delta + assistant message)
-- **Environment:** `CLAUDECODE` env var stripped to allow nested invocation
+- **Environment:** `CLAUDECODE` env var stripped to allow nested invocation; `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and `CLAUDE_CODE_SAFE_MODE=1` forced, so the run uses no auto memory and does not load the user's `CLAUDE.md`, hooks, skills or plugins, while the `env` block and `apiKeyHelper` of their `settings.json` still apply
 - **Timeout:** 10 minutes
 
 ### Output Structure
