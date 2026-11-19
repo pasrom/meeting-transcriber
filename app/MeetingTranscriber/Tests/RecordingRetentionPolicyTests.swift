@@ -65,6 +65,42 @@ final class RecordingRetentionPolicyTests: XCTestCase {
         XCTAssertEqual(decide(entry()), .delete([mix, app, mic]))
     }
 
+    private var recordingSidecar: URL {
+        root.appendingPathComponent("recordings/20270115_1200_sync_ab12cd34" + RecordingSidecar.recordingFilenameSuffix)
+    }
+
+    private func entryWithSidecar(eligible: Bool = true) -> RetainedRecording {
+        var target = entry(eligible: eligible)
+        target.paths.append(recordingSidecar)
+        return target
+    }
+
+    /// The recording sidecar goes with the tracks it describes, after them.
+    func testADueEntryDeletesItsRecordingSidecarAfterTheTracks() {
+        XCTAssertEqual(decide(entryWithSidecar()), .delete([mix, app, mic, recordingSidecar]))
+    }
+
+    /// With the tracks gone the sidecar describes nothing. Counted as audio,
+    /// it would keep the entry, and every pass would be asked about it again.
+    /// Not due, it stays where it is, as a transcript beside deleted tracks would.
+    func testALeftoverRecordingSidecarDoesNotKeepTheEntry() {
+        XCTAssertEqual(
+            decide(entryWithSidecar(), now: recordedAt, days: 30, missing: [mix, app, mic]), .drop(.filesGone),
+        )
+        XCTAssertEqual(decide(entryWithSidecar(eligible: false), missing: [mix, app, mic]), .drop(.filesGone))
+    }
+
+    /// A due pass cut short after the tracks: the next pass deletes the
+    /// sidecar instead of dropping the entry and leaving it for good.
+    func testADueEntryWhoseTracksAreGoneDeletesItsLeftoverSidecar() {
+        XCTAssertEqual(decide(entryWithSidecar(), missing: [mix, app, mic]), .delete([recordingSidecar]))
+    }
+
+    /// Not due, the sidecar stays with the tracks, as they do.
+    func testARecordingSidecarIsKeptWhileTheTracksAre() {
+        XCTAssertEqual(decide(entryWithSidecar(), now: recordedAt, days: 30), .keep(.withinRetention))
+    }
+
     func testSwitchedOffKeepsEverything() {
         XCTAssertEqual(decide(entry(), enabled: false), .keep(.disabled))
     }

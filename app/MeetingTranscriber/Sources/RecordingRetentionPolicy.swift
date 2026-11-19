@@ -11,7 +11,8 @@ import Foundation
 struct RetainedRecording: Codable, Equatable, Sendable {
     let jobID: UUID
     /// The relocated tracks (`_mix.wav`, `_app.wav`, `_mic.wav`, whichever the
-    /// job had). Updated when a later rename moves them.
+    /// job had), and the recording sidecar when one moved with them, which
+    /// `decide` never counts as audio. Updated when a later rename moves them.
     var paths: [URL]
     /// The output folder the files were moved under, not its `recordings`
     /// child. Whether it exists is what tells an unplugged drive from files the
@@ -182,18 +183,31 @@ enum RecordingRetentionPolicy {
         // look missing, and dropping the entry then would leave the files on
         // the drive for good once it is mounted again.
         guard fileExists(entry.root) else { return .keep(.rootUnreachable) }
-        let inside = entry.paths.filter { isInRecordingsFolder($0, of: entry.root, in: environment) }
+        // The recording sidecar goes with the audio but never stands in for
+        // it: with the tracks gone, a leftover sidecar must not keep the entry.
+        let audio = entry.paths.filter { !isRecordingSidecar($0) }
+        let inside = audio.filter { isInRecordingsFolder($0, of: entry.root, in: environment) }
         let present = inside.filter(fileExists)
+        let presentSidecars = entry.paths.filter { path in
+            isRecordingSidecar(path) && isInRecordingsFolder(path, of: entry.root, in: environment) && fileExists(path)
+        }
         // A path outside the folder is never deleted and never forgotten.
         // Checked before eligibility and the period: an entry whose audio is
         // all gone has nothing left to keep, eligible or not, so it is dropped
         // rather than kept for good.
         guard !present.isEmpty else {
-            if inside.count < entry.paths.count { return .keep(.outsideRoot) }
+            if inside.count < audio.count { return .keep(.outsideRoot) }
             // Missing only counts as gone where the folder can be listed: with
             // no scope held, the sandbox can show the root and hide its files.
             let recordings = entry.root.appendingPathComponent("recordings", isDirectory: true)
-            return environment.canList(recordings) ? .drop(.filesGone) : .keep(.rootUnreachable)
+            guard environment.canList(recordings) else { return .keep(.rootUnreachable) }
+            // A due entry whose pass was cut short after the tracks: its
+            // sidecar goes now. Before then it stays, like a transcript the
+            // user kept beside tracks they deleted by hand.
+            if !presentSidecars.isEmpty, isDue(entry, now: now, settings: settings) {
+                return .delete(presentSidecars)
+            }
+            return .drop(.filesGone)
         }
         guard entry.eligibleAt != nil else { return .keep(.awaitingOutputs) }
         guard isDue(entry, now: now, settings: settings) else { return .keep(.withinRetention) }
@@ -204,7 +218,14 @@ enum RecordingRetentionPolicy {
         guard entry.outputExported || entry.outputPath.map(environment.hasContent) == true else {
             return .keep(.outputMissing)
         }
-        return .delete(present)
+        // Last, so a pass cut short leaves the sidecar beside what audio stays.
+        return .delete(present + presentSidecars)
+    }
+
+    /// Whether `url` is a recording sidecar (`RecordingSidecar.recordingFilenameSuffix`)
+    /// rather than one of the tracks.
+    static func isRecordingSidecar(_ url: URL) -> Bool {
+        url.lastPathComponent.hasSuffix(RecordingSidecar.recordingFilenameSuffix)
     }
 
     /// Whether `entry` is switched on, eligible and past the period. Also
