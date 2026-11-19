@@ -56,10 +56,22 @@ enum EchoBleedDetector {
     /// frequency response, which they always do.
     static let frameSeconds = 0.010
     static let windowSeconds = 10.0
-    /// The measured inter-track offset is 10 to 20 ms. A wider search adds no
-    /// reach and inflates every value, since taking a maximum over more
-    /// candidates is a multiple-comparisons bias.
-    static let maxLagSeconds = 0.2
+    /// The lag search around the recorder's own alignment, in seconds, and
+    /// asymmetric on purpose. Positive means the microphone copy arrives later.
+    ///
+    /// Bleed arrives late by the room path plus whatever the output device
+    /// adds: built-in speakers keep that small, but an external or Bluetooth
+    /// output puts the copy well past 200 ms, where a symmetric search found
+    /// nothing and the recording read as clean. Hence the longer upper edge.
+    /// The lower edge stays at 200 ms because the recorder's alignment itself
+    /// can overshoot, and narrowing it lost real detections in a replay over
+    /// the recorded calls the thresholds were calibrated on.
+    ///
+    /// Not wider than this, because taking a maximum over more candidates is a
+    /// multiple-comparisons bias that inflates every value; the same replay
+    /// found the extra 100 ms added almost no hot windows on clean calls.
+    static let earliestLagSeconds = -0.2
+    static let latestLagSeconds = 0.3
     static let correlationThreshold = 0.7
     static let affectedShareThreshold = 0.15
     /// A share is only evidence once there is something to take a share of.
@@ -144,7 +156,7 @@ enum EchoBleedDetector {
         // one whole window.
         let windows = appEnvelope.count / framesPerWindow
 
-        let maxLag = Int(maxLagSeconds / frameSeconds)
+        let offsets = Int((earliestLagSeconds / frameSeconds).rounded()) ... Int((latestLagSeconds / frameSeconds).rounded())
         // Negative, and the sign is the whole point. `micDelay > 0` means the
         // mic started LATE, so its file is missing that opening stretch and its
         // copy of the app audio sits *earlier* in file-index terms — the same
@@ -159,7 +171,7 @@ enum EchoBleedDetector {
             guard let peak = peakCorrelation(
                 appEnvelope[range],
                 micEnvelope[range],
-                maxLag: maxLag,
+                offsets: offsets,
                 centre: centreLag,
             )
             else { return nil }
@@ -199,15 +211,19 @@ enum EchoBleedDetector {
 
     /// Highest normalised correlation of `b` against `a` over the lag range, and
     /// the lag it peaked at. `nil` when either side is flat in this window,
-    /// which carries no evidence either way.
+    /// which carries no evidence either way. `offsets` is in frames around
+    /// `centre`; a candidate that leaves too little overlap is skipped, which
+    /// keeps a large `micDelay` from reading out of bounds. A delay longer than
+    /// a window skips every candidate, so no window scores and there is no
+    /// verdict.
     private static func peakCorrelation(
         _ a: ArraySlice<Double>,
         _ b: ArraySlice<Double>,
-        maxLag: Int,
+        offsets: ClosedRange<Int>,
         centre: Int,
     ) -> (correlation: Double, lag: Int)? {
         var best: (correlation: Double, lag: Int)?
-        for offset in -maxLag ... maxLag {
+        for offset in offsets {
             let lag = centre + offset
             // Shifting `b` right by `lag` and clipping both to the part that
             // still overlaps. Written once rather than as a mirrored pair of
