@@ -120,13 +120,6 @@ enum EchoBleedDetector {
         case lockedLag
     }
 
-    /// The lag most hot windows peaked at, as an offset from the search centre,
-    /// and the share of scored windows within the tolerance of it.
-    struct LagLock: Equatable {
-        let offsetSeconds: Double
-        let lockedShare: Double
-    }
-
     /// One window's measurement, kept so a field report is diagnosable without
     /// the audio. The lag is what separates real bleed from a coincidence: bleed
     /// peaks at a stable lag near the recorder's own track offset, whereas two
@@ -137,7 +130,7 @@ enum EchoBleedDetector {
         /// Share of this window's frames in which the far end was talking.
         let farEndActivity: Double
 
-        init(correlation: Double, lagSeconds: Double, farEndActivity: Double = 1) {
+        init(correlation: Double, lagSeconds: Double, farEndActivity: Double) {
             self.correlation = correlation
             self.lagSeconds = lagSeconds
             self.farEndActivity = farEndActivity
@@ -157,22 +150,14 @@ enum EchoBleedDetector {
         /// the window could not be scored. Kept with its gaps so the n-th entry
         /// is the n-th ten seconds of the recording.
         let windows: [WindowScore?]
-        /// The scored windows only, in order, which is what every rule counts.
-        /// Never empty: a `Result` is only produced once a window scored.
-        let windowScores: [WindowScore]
         /// The microphone delay the search was centred on, so a lag can be
         /// read relative to the centre.
         let micDelay: TimeInterval
 
-        init(windows: [WindowScore?], micDelay: TimeInterval = 0) {
-            self.windows = windows
-            windowScores = windows.compactMap(\.self)
-            self.micDelay = micDelay
-        }
-
-        /// A series with no unscored windows in it.
-        init(windowScores: [WindowScore], micDelay: TimeInterval = 0) {
-            self.init(windows: windowScores, micDelay: micDelay)
+        /// The scored windows only, in order, which is what every rule counts.
+        /// Never empty: a `Result` is only produced once a window scored.
+        var windowScores: [WindowScore] {
+            windows.compactMap(\.self)
         }
 
         var windowsScored: Int {
@@ -191,37 +176,28 @@ enum EchoBleedDetector {
             windowsScored > 0 ? Double(windowsAffected) / Double(windowsScored) : 0
         }
 
-        /// The scored windows in which the far end was talking: the only ones
-        /// that can carry bleed at all.
-        var farEndWindows: [WindowScore] {
-            windowScores.filter(\.farEndActive)
-        }
-
-        /// `nil` when no window is hot, since the mode is taken over the hot
-        /// windows only: a cold window's peak lag is wherever a coincidence put
-        /// it. Ties go to the lag that locks the most windows, then to the one
-        /// the earliest hot window peaked at.
-        var lagLock: LagLock? {
+        /// The lag most hot windows peaked at, in frames from the search
+        /// centre, and how many scored windows peaked within the tolerance of
+        /// it. `nil` when no window is hot, since the mode is taken over the
+        /// hot windows only: a cold window's peak lag is wherever a coincidence
+        /// put it. Ties go to the lag that locks the most windows, then to the
+        /// one the earliest hot window peaked at (`max(by:)` keeps the first of
+        /// equal elements).
+        private func lagLock(_ scores: [WindowScore]) -> (offset: Int, locked: Int)? {
             let centre = EchoBleedDetector.frames(-micDelay)
-            let offsets = windowScores.map { EchoBleedDetector.frames($0.lagSeconds) - centre }
+            let offsets = scores.map { EchoBleedDetector.frames($0.lagSeconds) - centre }
             var counts: [Int: Int] = [:]
             var firstSeen: [Int] = []
-            for (score, offset) in zip(windowScores, offsets) where score.isHot {
+            for (score, offset) in zip(scores, offsets) where score.isHot {
                 if counts[offset] == nil { firstSeen.append(offset) }
                 counts[offset, default: 0] += 1
             }
             guard let top = counts.values.max() else { return nil }
             let tolerance = EchoBleedDetector.frames(EchoBleedDetector.lagLockToleranceSeconds)
-            var best: (locked: Int, offset: Int)?
-            for mode in firstSeen where counts[mode] == top {
-                let locked = offsets.count { abs($0 - mode) <= tolerance }
-                if locked > (best?.locked ?? -1) { best = (locked, mode) }
-            }
-            guard let best else { return nil }
-            return LagLock(
-                offsetSeconds: Double(best.offset) * EchoBleedDetector.frameSeconds,
-                lockedShare: Double(best.locked) / Double(windowsScored),
-            )
+            return firstSeen
+                .filter { counts[$0] == top }
+                .map { mode in (offset: mode, locked: offsets.count { abs($0 - mode) <= tolerance }) }
+                .max { $0.locked < $1.locked }
         }
 
         /// Every rule that calls this recording affected, in the order above.
@@ -232,15 +208,17 @@ enum EchoBleedDetector {
         /// catches bleed masked by a louder local talker, which keeps all but a
         /// few windows under the per-window threshold but not off the path.
         var routes: [Route] {
+            let scores = windowScores
+            let hot = scores.count(where: \.isHot)
             var fired: [Route] = []
-            if EchoBleedDetector.sharePasses(scored: windowsScored, hot: windowsAffected) {
+            if EchoBleedDetector.sharePasses(scored: scores.count, hot: hot) {
                 fired.append(.share)
             }
-            let farEnd = farEndWindows
+            let farEnd = scores.filter(\.farEndActive)
             if EchoBleedDetector.sharePasses(scored: farEnd.count, hot: farEnd.count(where: \.isHot)) {
                 fired.append(.farEndShare)
             }
-            if lagLockPasses {
+            if lagLockPasses(scores, hot: hot) {
                 fired.append(.lockedLag)
             }
             return fired
@@ -252,16 +230,14 @@ enum EchoBleedDetector {
 
         /// The same two floors as the share rules, then a lock on a lag that
         /// is not an edge of the search.
-        private var lagLockPasses: Bool {
-            guard windowsScored >= EchoBleedDetector.minScoredWindows,
-                  windowsAffected >= EchoBleedDetector.minAffectedWindows,
-                  let lock = lagLock,
-                  lock.lockedShare > EchoBleedDetector.lockedShareThreshold
+        private func lagLockPasses(_ scores: [WindowScore], hot: Int) -> Bool {
+            guard EchoBleedDetector.floorsPass(scored: scores.count, hot: hot),
+                  let lock = lagLock(scores),
+                  Double(lock.locked) / Double(scores.count) > EchoBleedDetector.lockedShareThreshold
             else { return false }
             let margin = EchoBleedDetector.frames(EchoBleedDetector.lagLockEdgeMarginSeconds)
-            let offset = EchoBleedDetector.frames(lock.offsetSeconds)
-            return EchoBleedDetector.frames(EchoBleedDetector.earliestLagSeconds) + margin <= offset
-                && offset <= EchoBleedDetector.frames(EchoBleedDetector.latestLagSeconds) - margin
+            return EchoBleedDetector.frames(EchoBleedDetector.earliestLagSeconds) + margin <= lock.offset
+                && lock.offset <= EchoBleedDetector.frames(EchoBleedDetector.latestLagSeconds) - margin
         }
     }
 
@@ -271,12 +247,14 @@ enum EchoBleedDetector {
         Int((seconds / frameSeconds).rounded())
     }
 
-    /// The share rule with its two floors, shared by every route that takes a
-    /// share so the floors cannot drift apart.
+    /// The two floors every route has to clear, in one place so they cannot
+    /// drift apart between routes.
+    private static func floorsPass(scored: Int, hot: Int) -> Bool {
+        scored >= minScoredWindows && hot >= minAffectedWindows
+    }
+
     private static func sharePasses(scored: Int, hot: Int) -> Bool {
-        scored >= minScoredWindows
-            && hot >= minAffectedWindows
-            && Double(hot) / Double(scored) > affectedShareThreshold
+        floorsPass(scored: scored, hot: hot) && Double(hot) / Double(scored) > affectedShareThreshold
     }
 
     /// Returns `nil` when no honest verdict is possible: either track silent, or
@@ -370,7 +348,8 @@ enum EchoBleedDetector {
 
     /// Per window, the share of frames in which the far end was talking (see
     /// `farEndLevelPercentile`). The percentile is taken over the whole span
-    /// passed in, which is every frame that belongs to a window.
+    /// passed in, which is every frame that belongs to a window: a non-empty
+    /// whole number of windows, so neither helper needs an empty or ragged case.
     private static func farEndActivity(_ envelope: ArraySlice<Double>, framesPerWindow: Int) -> [Double] {
         // A digital-zero frame gets a finite, very low level rather than -inf,
         // so it sorts below everything and is never active.
@@ -380,7 +359,7 @@ enum EchoBleedDetector {
             farEndActiveFloorDBFS,
         )
         return stride(from: 0, to: levels.count, by: framesPerWindow).map { start in
-            let window = levels[start ..< min(start + framesPerWindow, levels.count)]
+            let window = levels[start ..< (start + framesPerWindow)]
             return Double(window.count { $0 > threshold }) / Double(window.count)
         }
     }
@@ -388,7 +367,6 @@ enum EchoBleedDetector {
     /// Linear interpolation between the closest ranks, so `p` of 0.95 over a
     /// short span does not jump from one frame's level to the next.
     private static func percentile(_ sorted: [Double], _ p: Double) -> Double {
-        guard !sorted.isEmpty else { return -.infinity }
         let position = p * Double(sorted.count - 1)
         let lower = Int(position.rounded(.down))
         let upper = min(lower + 1, sorted.count - 1)
