@@ -101,6 +101,7 @@ final class LiveTranscriptionController {
     /// Auto-detect's EOU model load, at most once per controller: nil on failure, never retried.
     var eouLoad: Task<EouManagers?, Never>?
     private let reTranscribePipelineFactory: ReTranscribePipelineFactory?
+    private let echoCancellerFactory: LiveCaptionEchoCanceller.Factory
     let eouSessionFactory: EouSessionFactory
     private let nemotronPipelineFactory: NemotronPipelineFactory
     /// Gate for caption-text logging. Caption strings are spoken user content
@@ -123,6 +124,9 @@ final class LiveTranscriptionController {
     /// `flush()`/`retireFeeds()`.
     let micFeed: CaptionChannelFeed
     let appFeed: CaptionChannelFeed
+    let echoReference = LiveCaptionEchoReference()
+    /// The mic feed's consumer chain; flushed at stop so its held tail reaches ASR.
+    var micCaptionChain: (any LiveCaptionPipeline)?
     /// True once `prepare()` resolved to a kept streaming session (German/English),
     /// which `prepareForNextRecording()` keeps instead of rebuilding.
     var usingStreamingSession = false
@@ -183,6 +187,7 @@ final class LiveTranscriptionController {
         reTranscribePipelineFactory: ReTranscribePipelineFactory? = nil,
         maxQueuedSeconds: TimeInterval = 10,
         speechDetector: CaptionLanguageProbe.SpeechDetector? = nil,
+        echoCancellerFactory: @escaping LiveCaptionEchoCanceller.Factory = LiveCaptionEchoCanceller.makeDefaultProcessor,
         verboseDiagnostics: @escaping () -> Bool = { false },
     ) {
         micFeed = CaptionChannelFeed(maxQueuedSeconds: maxQueuedSeconds)
@@ -192,6 +197,7 @@ final class LiveTranscriptionController {
         self.engine = engine
         self.speechDetector = speechDetector
         self.reTranscribePipelineFactory = reTranscribePipelineFactory
+        self.echoCancellerFactory = echoCancellerFactory
         self.vad = vad
         self.captions = captions
         self.speakerMatcher = speakerMatcher
@@ -454,8 +460,10 @@ final class LiveTranscriptionController {
     /// instance + per-recording reset.
     func bindFeeds() async {
         await retireFeeds()
+        echoReference.clear()
+        micCaptionChain = nil
         if let micPipeline {
-            await micFeed.bind(to: micPipeline)
+            await micFeed.bind(to: makeMicCaptionPipeline(micPipeline))
         }
         if let appPipeline {
             await appFeed.bind(to: appPipeline) {
@@ -463,6 +471,12 @@ final class LiveTranscriptionController {
                 return { resampler.resample($0) }
             }
         }
+    }
+
+    func makeMicCaptionPipeline(_ pipeline: any LiveCaptionPipeline) -> any LiveCaptionPipeline {
+        let chain = LiveCaptionEchoCanceller(pipeline: pipeline, reference: echoReference, factory: echoCancellerFactory)
+        micCaptionChain = chain
+        return chain
     }
 
     /// Build the engine-independent low-latency English streaming session for one

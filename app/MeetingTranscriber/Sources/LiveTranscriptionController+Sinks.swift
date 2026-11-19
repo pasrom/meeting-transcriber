@@ -24,7 +24,9 @@ extension LiveTranscriptionController {
     var appSink: LiveAudioSink {
         let sink = appFeed.sink
         let probe = appProbeFeed.sink
+        let reference = echoReference
         return { buffer in
+            reference.append(buffer)
             sink(buffer)
             probe(buffer)
         }

@@ -184,7 +184,7 @@ enum EchoBleedDetector {
         return rms > 0 ? 20 * log10(rms) : -.infinity
     }
 
-    private static func envelope(_ samples: [Float], count: Int, samplesPerFrame: Int) -> [Double] {
+    static func envelope(_ samples: [Float], count: Int, samplesPerFrame: Int) -> [Double] {
         let frames = count / samplesPerFrame
         var out = [Double](repeating: 0, count: frames)
         for f in 0 ..< frames {
@@ -200,7 +200,7 @@ enum EchoBleedDetector {
     /// Highest normalised correlation of `b` against `a` over the lag range, and
     /// the lag it peaked at. `nil` when either side is flat in this window,
     /// which carries no evidence either way.
-    private static func peakCorrelation(
+    static func peakCorrelation(
         _ a: ArraySlice<Double>,
         _ b: ArraySlice<Double>,
         maxLag: Int,
@@ -233,7 +233,7 @@ enum EchoBleedDetector {
     /// Iterated pairwise over the slices rather than copied into arrays first:
     /// this runs once per candidate lag per window, so the copies added up
     /// without buying anything.
-    private static func correlation(_ x: ArraySlice<Double>, _ y: ArraySlice<Double>) -> Double? {
+    static func correlation(_ x: ArraySlice<Double>, _ y: ArraySlice<Double>) -> Double? {
         let n = x.count
         guard n > 1 else { return nil }
         let mx = x.reduce(0, +) / Double(n)
