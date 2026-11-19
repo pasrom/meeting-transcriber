@@ -123,6 +123,9 @@ final class LiveTranscriptionController {
     /// `flush()`/`retireFeeds()`.
     let micFeed: CaptionChannelFeed
     let appFeed: CaptionChannelFeed
+    let echoReference = LiveCaptionEchoReference()
+    /// The mic feed's consumer chain; flushed at stop so its held tail reaches ASR.
+    var micCaptionChain: (any LiveCaptionPipeline)?
     /// True once `prepare()` resolved to a kept streaming session (German/English),
     /// which `prepareForNextRecording()` keeps instead of rebuilding.
     var usingStreamingSession = false
@@ -454,8 +457,10 @@ final class LiveTranscriptionController {
     /// instance + per-recording reset.
     func bindFeeds() async {
         await retireFeeds()
+        echoReference.clear()
+        micCaptionChain = nil
         if let micPipeline {
-            await micFeed.bind(to: micPipeline)
+            await micFeed.bind(to: makeMicCaptionPipeline(micPipeline))
         }
         if let appPipeline {
             await appFeed.bind(to: appPipeline) {
@@ -463,6 +468,12 @@ final class LiveTranscriptionController {
                 return { resampler.resample($0) }
             }
         }
+    }
+
+    func makeMicCaptionPipeline(_ pipeline: any LiveCaptionPipeline) -> any LiveCaptionPipeline {
+        let chain = LiveCaptionEchoGate(pipeline: pipeline, reference: echoReference)
+        micCaptionChain = chain
+        return chain
     }
 
     /// Build the engine-independent low-latency English streaming session for one
