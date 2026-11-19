@@ -153,6 +153,14 @@ struct EchoDetectionDTO: Codable, Equatable {
     /// with it present a run the self-check or the file swap turned down.
     var cancellationSeconds: Double?
 
+    /// The microphone delay, in seconds and already clamped, that the lag
+    /// search was centred on. Without it the per-window lags in a field
+    /// report's log cannot be read: they are absolute, and whether a peak sat
+    /// on the recorder's alignment or a quarter of a second after it depends
+    /// on this. Absent only on a verdict recorded before the field existed,
+    /// which is not the same as zero.
+    var micDelaySeconds: Double?
+
     /// The detector's own result, narrowed to what belongs on a wire and in a
     /// persisted job. The per-window series stays behind: it grows with the
     /// recording, and a caller polling a job does not want it.
@@ -161,6 +169,7 @@ struct EchoDetectionDTO: Codable, Equatable {
         affectedWindowShare = result.affectedWindowShare
         windowsScored = result.windowsScored
         windowsAffected = result.windowsAffected
+        micDelaySeconds = result.micDelay
     }
 
     /// Spelled out because a synthesized decoder demands every key. This shape
@@ -176,6 +185,7 @@ struct EchoDetectionDTO: Codable, Equatable {
         suppressedSegments = try container.decodeIfPresent(Int.self, forKey: .suppressedSegments) ?? 0
         removed = try container.decodeIfPresent(Bool.self, forKey: .removed)
         cancellationSeconds = try container.decodeIfPresent(Double.self, forKey: .cancellationSeconds)
+        micDelaySeconds = try container.decodeIfPresent(Double.self, forKey: .micDelaySeconds)
     }
 }
 
