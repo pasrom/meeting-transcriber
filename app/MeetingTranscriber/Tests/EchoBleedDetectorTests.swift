@@ -161,6 +161,28 @@ final class EchoBleedDetectorTests: XCTestCase {
         return (app, mic)
     }
 
+    // MARK: - The logged series
+
+    /// A window with a flat envelope scores nothing, but it still took ten
+    /// seconds. The logged series keeps a placeholder at its index, so the
+    /// n-th entry is the n-th ten seconds of the recording; dropping it would
+    /// shift every later window and put a field report's evidence at the
+    /// wrong time.
+    func testTheLoggedSeriesKeepsAnUnscoredWindowInPlace() throws {
+        var app = speechLike(seconds: 40, seed: 51)
+        for i in (10 * rate) ..< (20 * rate) {
+            app[i] = 0
+        }
+        let mic = bleed(app, delayMs: 20, gain: 0.5)
+        let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
+        XCTAssertEqual(result.windowsScored, 3)
+
+        let entries = PipelineQueue.windowDetail(result.windows).split(separator: " ")
+        XCTAssertEqual(entries.count, 4, "one entry per ten seconds")
+        XCTAssertEqual(entries[1], "-")
+        XCTAssertTrue(entries[2].hasSuffix("@20"), "the window after the gap stays at its own index: \(entries)")
+    }
+
     // MARK: - No verdict is better than a wrong one
 
     func testSilentAppTrackYieldsNoVerdict() {

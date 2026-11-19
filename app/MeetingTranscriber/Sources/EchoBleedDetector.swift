@@ -153,16 +153,26 @@ enum EchoBleedDetector {
     }
 
     struct Result: Equatable {
-        /// Per-window measurements, in order. Never empty: a `Result` is only
-        /// produced once a window scored.
+        /// Every analysed window in order, `nil` where an envelope was flat and
+        /// the window could not be scored. Kept with its gaps so the n-th entry
+        /// is the n-th ten seconds of the recording.
+        let windows: [WindowScore?]
+        /// The scored windows only, in order, which is what every rule counts.
+        /// Never empty: a `Result` is only produced once a window scored.
         let windowScores: [WindowScore]
         /// The microphone delay the search was centred on, so a lag can be
         /// read relative to the centre.
         let micDelay: TimeInterval
 
-        init(windowScores: [WindowScore], micDelay: TimeInterval = 0) {
-            self.windowScores = windowScores
+        init(windows: [WindowScore?], micDelay: TimeInterval = 0) {
+            self.windows = windows
+            windowScores = windows.compactMap(\.self)
             self.micDelay = micDelay
+        }
+
+        /// A series with no unscored windows in it.
+        init(windowScores: [WindowScore], micDelay: TimeInterval = 0) {
+            self.init(windows: windowScores, micDelay: micDelay)
         }
 
         var windowsScored: Int {
@@ -314,7 +324,7 @@ enum EchoBleedDetector {
         // delay at all: it searches twice the offset away from the peak.
         let centreLag = frames(-micDelay)
         let activity = farEndActivity(appEnvelope[0 ..< (windows * framesPerWindow)], framesPerWindow: framesPerWindow)
-        let scores = (0 ..< windows).compactMap { w -> WindowScore? in
+        let scores = (0 ..< windows).map { w -> WindowScore? in
             let range = (w * framesPerWindow) ..< ((w + 1) * framesPerWindow)
             guard let peak = peakCorrelation(
                 appEnvelope[range],
@@ -329,8 +339,8 @@ enum EchoBleedDetector {
                 farEndActivity: activity[w],
             )
         }
-        guard !scores.isEmpty else { return nil }
-        return Result(windowScores: scores, micDelay: micDelay)
+        guard scores.contains(where: { $0 != nil }) else { return nil }
+        return Result(windows: scores, micDelay: micDelay)
     }
 
     // MARK: - Pieces
