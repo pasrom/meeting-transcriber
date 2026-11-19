@@ -60,17 +60,20 @@ actor LiveCaptionEchoCanceller: LiveCaptionPipeline {
             await pipeline.ingest(buffer, backlog: backlog)
             return
         }
-        let end = SampleRateDriftDetector.machTicksToSeconds(buffer.hostTime)
-        let start = end - Double(buffer.samples.count) / 16000
-        // Callback timestamps jitter; use the gate's discontinuity tolerance.
-        if let lastEnd, abs(start - lastEnd) > 0.1 {
+        let duration = Double(buffer.samples.count) / 16000
+        let stampedStart = SampleRateDriftDetector.machTicksToSeconds(buffer.hostTime) - duration
+        // Stamps carry callback delivery delay; a mid-context alignment shift stops LocalVQE cancelling,
+        // so advance by sample count and re-anchor only on a real gap.
+        if let lastEnd, abs(stampedStart - lastEnd) > 0.1 {
             await deliverPending(backlog: backlog)
             recreateProcessor()
             await pipeline.flush()
             await pipeline.reset()
+            self.lastEnd = nil
         }
+        let start = lastEnd ?? stampedStart
         if pending.isEmpty { pendingStart = start }
-        lastEnd = end
+        lastEnd = start + duration
         pending.append(contentsOf: buffer.samples)
         while let processor, pending.count >= processor.hopLength {
             await deliver(count: processor.hopLength, backlog: backlog)

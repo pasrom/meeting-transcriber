@@ -43,6 +43,45 @@ final class LiveCaptionEchoCancellerTests: XCTestCase {
         XCTAssertEqual(calls.references, [[1, 2, 3, 0, 0, 0, 7, 8]])
     }
 
+    func testLateCallbackStampDoesNotShiftReferenceAlignment() async {
+        let calls = HopCalls()
+        let pipeline = EchoOutputPipeline()
+        let reference = LiveCaptionEchoReference()
+        let start = 10.0
+        reference.append(buffer((0 ..< 1600).map(Float.init), endingAt: start + 0.1))
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: reference) {
+            FakeCaptionHop(calls: calls) { mic, _ in mic }
+        }
+        await canceller.ingest(buffer(Array(repeating: 1, count: 8), endingAt: start + 8.0 / 16000)) { 0 }
+        // Callback delivered 50 ms late: its stamp is not when the audio was captured.
+        await canceller.ingest(buffer(Array(repeating: 1, count: 8), endingAt: start + 16.0 / 16000 + 0.05)) { 0 }
+        await canceller.flush()
+
+        XCTAssertEqual(calls.references, [(0 ..< 8).map(Float.init), (8 ..< 16).map(Float.init)])
+    }
+
+    func testGapOver100msReanchorsRecreatesProcessorAndResetsPipeline() async {
+        let calls = HopCalls()
+        let pipeline = EchoOutputPipeline()
+        let reference = LiveCaptionEchoReference()
+        let start = 10.0
+        reference.append(buffer((0 ..< 1600).map(Float.init), endingAt: start + 0.1))
+        reference.append(buffer((10000 ..< 11600).map(Float.init), endingAt: start + 0.6))
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: reference) {
+            calls.recordCreation()
+            return FakeCaptionHop(calls: calls) { mic, _ in mic }
+        }
+        await canceller.ingest(buffer(Array(repeating: 1, count: 8), endingAt: start + 8.0 / 16000)) { 0 }
+        await canceller.ingest(buffer(Array(repeating: 1, count: 8), endingAt: start + 0.5 + 8.0 / 16000)) { 0 }
+
+        XCTAssertEqual(calls.creations, 2, "a gap over 0.1 s must start a fresh context")
+        XCTAssertEqual(calls.references, [(0 ..< 8).map(Float.init), (10000 ..< 10008).map(Float.init)])
+        let flushCount = await pipeline.flushCount
+        let resetCount = await pipeline.resetCount
+        XCTAssertEqual(flushCount, 1)
+        XCTAssertEqual(resetCount, 1)
+    }
+
     func testFlushPadsPartialHopButDeliversOnlyValidSamples() async {
         let calls = HopCalls()
         let pipeline = EchoOutputPipeline()
@@ -219,12 +258,14 @@ private final class FakeCaptionHop: LiveCaptionHopCancelling {
 private actor EchoOutputPipeline: LiveCaptionPipeline {
     private(set) var buffers: [LiveAudioBuffer] = []
     private(set) var flushCount = 0
+    private(set) var resetCount = 0
 
     func ingest(_ buffer: LiveAudioBuffer, backlog _: @Sendable () -> TimeInterval) {
         buffers.append(buffer)
     }
 
     func reset() {
+        resetCount += 1
         buffers = []
     }
 
