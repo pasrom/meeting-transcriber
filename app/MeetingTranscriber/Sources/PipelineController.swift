@@ -454,7 +454,7 @@ final class PipelineController {
         var ids: [UUID] = []
 
         for group in resolution.paired {
-            let sidecar = RecordingSidecar.read(
+            let sidecar = RecordingSidecar.readForReimport(
                 fromDirectory: group.directory,
                 basename: group.stem,
             )
