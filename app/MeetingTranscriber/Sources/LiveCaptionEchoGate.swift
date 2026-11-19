@@ -190,4 +190,28 @@ final class LiveCaptionEchoReference: Sendable {
         guard offset >= 0, offset < samples.count else { return [] }
         return Array(samples[offset ..< min(offset + count, samples.count)])
     }
+
+    func samples(from start: TimeInterval, count: Int) -> [Float] {
+        let end = start + Double(count) / 16000
+        let buffers = storage.withLock { state in
+            state.buffers.filter { buffer in
+                let bufferEnd = SampleRateDriftDetector.machTicksToSeconds(buffer.hostTime)
+                let bufferStart = bufferEnd - Double(buffer.samples.count) / 16000
+                return bufferEnd > start && bufferStart < end
+            }
+        }
+        var samples = [Float](repeating: 0, count: count)
+        for buffer in buffers {
+            let bufferEnd = SampleRateDriftDetector.machTicksToSeconds(buffer.hostTime)
+            let bufferStart = bufferEnd - Double(buffer.samples.count) / 16000
+            let offset = Int(((bufferStart - start) * 16000).rounded())
+            let first = max(0, offset)
+            let last = min(count, offset + buffer.samples.count)
+            guard first < last else { continue }
+            for index in first ..< last {
+                samples[index] = buffer.samples[index - offset]
+            }
+        }
+        return samples
+    }
 }

@@ -4,31 +4,42 @@ import XCTest
 
 @MainActor
 final class LiveCaptionEchoSelectionTests: XCTestCase {
-    func testConfiguredCaptionChainGatesMicrophoneEcho() async {
-        let micPipeline = SelectionPipeline()
-        let appPipeline = SelectionPipeline()
-        let backend: LiveTranscriptionController.NemotronPipelineFactory = { _, _, _ in
-            (micPipeline, appPipeline)
-        }
-        let controller = LiveTranscriptionController(
-            engine: nil,
-            vad: FluidVAD(threshold: 0.5),
-            captions: LiveCaptionsState(),
-            speakerMatcher: FakeLiveSpeakerMatcher(),
-            engineLanguage: "de",
-            nemotronPipelineFactory: backend,
-        )
-        await controller.prepare()
-        let app = signal(frames: 120)
-        controller.appSink(buffer(app, endingAt: 11.2))
-        controller.micSink(buffer(Array(app[1600 ..< 17600]).map { $0 * 0.25 }, endingAt: 11.2))
-        await controller.flush()
+    func testConfiguredCaptionChainSelectsCancellerOrGateFromFactory() async {
+        for cancellationAvailable in [true, false] {
+            let micPipeline = SelectionPipeline()
+            let appPipeline = SelectionPipeline()
+            let backend: LiveTranscriptionController.NemotronPipelineFactory = { _, _, _ in
+                (micPipeline, appPipeline)
+            }
+            let factory: LiveCaptionEchoCanceller.Factory = {
+                cancellationAvailable ? SelectionHop() : nil
+            }
+            let controller = LiveTranscriptionController(
+                engine: nil,
+                vad: FluidVAD(threshold: 0.5),
+                captions: LiveCaptionsState(),
+                speakerMatcher: FakeLiveSpeakerMatcher(),
+                engineLanguage: "de",
+                nemotronPipelineFactory: backend,
+                echoCancellerFactory: factory,
+            )
+            await controller.prepare()
+            let app = signal(frames: 120)
+            controller.appSink(buffer(app, endingAt: 11.2))
+            controller.micSink(buffer(Array(app[1600 ..< 17600]).map { $0 * 0.25 }, endingAt: 11.2))
+            await controller.flush()
 
-        let received = await micPipeline.samples
-        XCTAssertTrue(received.isEmpty, "the acoustic echo must not reach caption ASR")
+            let received = await micPipeline.samples
+            if cancellationAvailable {
+                XCTAssertEqual(received, Array(repeating: 9, count: 16000), "factory success must route through cancellation")
+            } else {
+                XCTAssertTrue(received.isEmpty, "factory nil must keep the acoustic echo gate")
+            }
+        }
     }
 
     func testStopFlushDeliversTheGatesShortTail() async {
+        let noCanceller: LiveCaptionEchoCanceller.Factory = { nil }
         let micPipeline = SelectionPipeline()
         let appPipeline = SelectionPipeline()
         let backend: LiveTranscriptionController.NemotronPipelineFactory = { _, _, _ in
@@ -41,6 +52,7 @@ final class LiveCaptionEchoSelectionTests: XCTestCase {
             speakerMatcher: FakeLiveSpeakerMatcher(),
             engineLanguage: "de",
             nemotronPipelineFactory: backend,
+            echoCancellerFactory: noCanceller,
         )
         await controller.prepare()
         let speech = signal(frames: 50)
@@ -51,13 +63,14 @@ final class LiveCaptionEchoSelectionTests: XCTestCase {
         XCTAssertEqual(received, speech, "speech shorter than the gate's window must reach ASR at stop")
     }
 
-    func testLanguageProbeInstallGatesMicrophoneEcho() async {
+    func testLanguageProbeInstallUsesCancellerFactory() async {
         let engine = SelectionLanguageEngine()
         let micPipeline = SelectionPipeline()
         let appPipeline = SelectionPipeline()
         let factory: LiveTranscriptionController.ReTranscribePipelineFactory = { channel, _, _ in
             channel == .mic ? micPipeline : appPipeline
         }
+        let cancellerFactory: LiveCaptionEchoCanceller.Factory = { SelectionHop() }
         let controller = LiveTranscriptionController(
             engine: engine,
             vad: FluidVAD(threshold: 0.5),
@@ -65,6 +78,7 @@ final class LiveCaptionEchoSelectionTests: XCTestCase {
             speakerMatcher: FakeLiveSpeakerMatcher(),
             reTranscribePipelineFactory: factory,
             speechDetector: \.self,
+            echoCancellerFactory: cancellerFactory,
         )
         await controller.prepare()
         await controller.prepareForNextRecording()
@@ -72,16 +86,15 @@ final class LiveCaptionEchoSelectionTests: XCTestCase {
         await waitForDetection(engine)
         XCTAssertEqual(engine.detections, 1)
         await controller.waitForLanguageSwitch()
-        let app = signal(frames: 120)
-        controller.appSink(buffer(app, endingAt: 11.2))
-        controller.micSink(buffer(Array(app[1600 ..< 17600]).map { $0 * 0.25 }, endingAt: 11.2))
+        controller.micSink(buffer(Array(repeating: 1, count: 8), endingAt: 12))
         await controller.flush()
 
         let received = await micPipeline.samples
-        XCTAssertFalse(received.contains { $0 != 0.1 }, "held-feed installation must keep the echo gate")
+        XCTAssertEqual(Array(received.suffix(8)), Array(repeating: 9, count: 8), "held-feed installation must use the selected canceller")
     }
 
     func testBindFeedsClearsStaleEchoReference() async {
+        let noCanceller: LiveCaptionEchoCanceller.Factory = { nil }
         let micPipeline = SelectionPipeline()
         let appPipeline = SelectionPipeline()
         let backend: LiveTranscriptionController.NemotronPipelineFactory = { _, _, _ in
@@ -94,6 +107,7 @@ final class LiveCaptionEchoSelectionTests: XCTestCase {
             speakerMatcher: FakeLiveSpeakerMatcher(),
             engineLanguage: "de",
             nemotronPipelineFactory: backend,
+            echoCancellerFactory: noCanceller,
         )
         await controller.prepare()
         let app = signal(frames: 120)
@@ -109,12 +123,14 @@ final class LiveCaptionEchoSelectionTests: XCTestCase {
 
     func testFlushAndLanguageProbeClearEchoReference() async {
         let engine = SelectionLanguageEngine()
+        let noCanceller: LiveCaptionEchoCanceller.Factory = { nil }
         let controller = LiveTranscriptionController(
             engine: engine,
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
             speakerMatcher: FakeLiveSpeakerMatcher(),
             speechDetector: \.self,
+            echoCancellerFactory: noCanceller,
         )
         await controller.prepare()
         let app = signal(frames: 120)
@@ -157,6 +173,13 @@ final class LiveCaptionEchoSelectionTests: XCTestCase {
             let amplitude = Double((frame * 37 + 11) % 97 + 3) / 100
             return Float(amplitude * sin(Double(index) * 2 * .pi * 1000 / 16000))
         }
+    }
+}
+
+private final class SelectionHop: LiveCaptionHopCancelling {
+    let hopLength = 160
+    func process(mic: [Float], reference _: [Float]) -> [Float] {
+        Array(repeating: 9, count: mic.count)
     }
 }
 

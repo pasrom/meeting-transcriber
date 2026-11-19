@@ -101,6 +101,7 @@ final class LiveTranscriptionController {
     /// Auto-detect's EOU model load, at most once per controller: nil on failure, never retried.
     var eouLoad: Task<EouManagers?, Never>?
     private let reTranscribePipelineFactory: ReTranscribePipelineFactory?
+    private let echoCancellerFactory: LiveCaptionEchoCanceller.Factory
     let eouSessionFactory: EouSessionFactory
     private let nemotronPipelineFactory: NemotronPipelineFactory
     /// Gate for caption-text logging. Caption strings are spoken user content
@@ -186,6 +187,7 @@ final class LiveTranscriptionController {
         reTranscribePipelineFactory: ReTranscribePipelineFactory? = nil,
         maxQueuedSeconds: TimeInterval = 10,
         speechDetector: CaptionLanguageProbe.SpeechDetector? = nil,
+        echoCancellerFactory: @escaping LiveCaptionEchoCanceller.Factory = LiveCaptionEchoCanceller.makeDefaultProcessor,
         verboseDiagnostics: @escaping () -> Bool = { false },
     ) {
         micFeed = CaptionChannelFeed(maxQueuedSeconds: maxQueuedSeconds)
@@ -195,6 +197,7 @@ final class LiveTranscriptionController {
         self.engine = engine
         self.speechDetector = speechDetector
         self.reTranscribePipelineFactory = reTranscribePipelineFactory
+        self.echoCancellerFactory = echoCancellerFactory
         self.vad = vad
         self.captions = captions
         self.speakerMatcher = speakerMatcher
@@ -471,7 +474,7 @@ final class LiveTranscriptionController {
     }
 
     func makeMicCaptionPipeline(_ pipeline: any LiveCaptionPipeline) -> any LiveCaptionPipeline {
-        let chain = LiveCaptionEchoGate(pipeline: pipeline, reference: echoReference)
+        let chain = LiveCaptionEchoCanceller(pipeline: pipeline, reference: echoReference, factory: echoCancellerFactory)
         micCaptionChain = chain
         return chain
     }
