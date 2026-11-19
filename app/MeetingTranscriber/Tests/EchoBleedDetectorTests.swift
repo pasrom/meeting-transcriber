@@ -110,9 +110,25 @@ final class EchoBleedDetectorTests: XCTestCase {
     /// Bleed at a delay inside the search window is still bleed.
     func testDelayInsideTheLagWindowIsDetected() throws {
         let app = speechLike(seconds: 60, seed: 21)
-        let mic = bleed(app, delayMs: 150, gain: 0.5) // maxLagSeconds is 0.2
+        let mic = bleed(app, delayMs: 150, gain: 0.5)
         let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
         XCTAssertTrue(result.isAffected)
+    }
+
+    /// An external or Bluetooth output adds its own latency to the room path,
+    /// so the microphone copy can arrive well over 200 ms after the point the
+    /// recorder aligned the tracks to. A search that stops at 200 ms finds
+    /// nothing there, and the miss is silent. The fixture sits close to the
+    /// upper edge rather than just past 200 ms: its envelope is smoother than
+    /// speech, so a copy only 50 ms past the old edge still correlated there
+    /// and the test would not have failed without the wider search.
+    func testBleedThroughASlowOutputDeviceIsDetected() throws {
+        let app = speechLike(seconds: 60, seed: 25)
+        let mic = bleed(app, delayMs: 290, gain: 0.5)
+        let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
+        XCTAssertTrue(result.isAffected, "share was \(result.affectedWindowShare)")
+        let lags = Set(result.windowScores.map { Int(($0.lagSeconds * 1000).rounded()) })
+        XCTAssertEqual(lags, [290], "every window peaks on the path the copy took")
     }
 
     /// The failure this guards is invisible: a mic that starts late puts real
@@ -137,7 +153,7 @@ final class EchoBleedDetectorTests: XCTestCase {
         let mic = Array(bleed(app, delayMs: 15, gain: 0.5).dropFirst(lateStart))
 
         let blind = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
-        XCTAssertFalse(blind.isAffected, "500 ms is outside the +/-200 ms window, so nothing is found")
+        XCTAssertFalse(blind.isAffected, "500 ms early is outside the 200 ms the search reaches early, so nothing is found")
 
         let informed = try XCTUnwrap(EchoBleedDetector.analyse(
             app: app, mic: mic, sampleRate: rate, micDelay: 0.5,
