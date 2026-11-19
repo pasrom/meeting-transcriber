@@ -1,4 +1,5 @@
 import Foundation
+@testable import MeetingTranscriber
 
 /// Synthetic audio for the echo-bleed tests, shared so the detector's unit
 /// tests and the pipeline-level tests measure the same signal. They did not
@@ -69,5 +70,21 @@ enum EchoTestAudio {
             out[i] = source[i - d] * gain
         }
         return out
+    }
+}
+
+/// Hand-built detector results for tests that need a verdict, not a
+/// measurement. They live in the test target so production code always states
+/// the far-end activity and the delay it measured; here every window counts as
+/// far-end active, which makes the far-end share equal the plain share.
+extension EchoBleedDetector.WindowScore {
+    init(correlation: Double, lagSeconds: Double) {
+        self.init(correlation: correlation, lagSeconds: lagSeconds, farEndActivity: 1)
+    }
+}
+
+extension EchoBleedDetector.Result {
+    init(windowScores: [EchoBleedDetector.WindowScore], micDelay: TimeInterval = 0) {
+        self.init(windows: windowScores, micDelay: micDelay)
     }
 }
