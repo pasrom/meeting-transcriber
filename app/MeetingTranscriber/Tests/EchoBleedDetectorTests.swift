@@ -102,6 +102,65 @@ final class EchoBleedDetectorTests: XCTestCase {
         XCTAssertTrue(result.isAffected, "share over all windows was \(result.affectedWindowShare)")
     }
 
+    /// Bleed in every window, but under a louder local talker, so only the
+    /// two windows the local side is quiet in clear the per-window threshold.
+    /// What still gives it away is the lag: bleed travels one fixed path, so
+    /// the masked windows keep peaking where the clear ones did.
+    func testMaskedBleedAtAStableLagIsDetected() throws {
+        let (app, mic) = maskedBleed(delayMs: 40)
+        let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
+        XCTAssertEqual(result.windowsScored, 20)
+        XCTAssertEqual(result.windowsAffected, 2, "only the unmasked windows are hot")
+        let atPath = result.windowScores.count { abs($0.lagSeconds - 0.04) <= 0.0105 }
+        XCTAssertGreaterThan(atPath, 10, "most windows still peak on the bleed path")
+        XCTAssertTrue(result.isAffected)
+    }
+
+    /// The same masked bleed with its path at the very edge of the search. A
+    /// clean call piles its peaks up at an edge too, wherever the correlation
+    /// is still rising when the search stops, so a lag mode there is not
+    /// evidence of one path.
+    func testALagModeAtTheSearchEdgeIsNotEvidence() throws {
+        let (app, mic) = maskedBleed(delayMs: 300)
+        let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
+        XCTAssertEqual(result.windowsAffected, 2)
+        let atEdge = result.windowScores.count { abs($0.lagSeconds - 0.3) <= 0.0105 }
+        XCTAssertGreaterThan(atEdge, 10, "the fixture does lock, just at the edge")
+        XCTAssertFalse(result.isAffected)
+    }
+
+    /// Two windows that happen to correlate on an otherwise clean pair, each at
+    /// its own lag. Two hot windows clear the count floor, but nothing locks.
+    func testTwoCoincidentalHotWindowsAtScatteredLagsStayClean() throws {
+        let app = speechLike(seconds: 300, seed: 41)
+        var mic = speechLike(seconds: 300, seed: 42)
+        // A negative delay is a copy that sits early in the mic file.
+        for (window, delayMs) in [(5, -120.0), (20, 180.0)] {
+            let start = window * 10 * rate
+            let shift = Int(delayMs / 1000 * Double(rate))
+            for i in start ..< (start + 10 * rate) {
+                mic[i] = app[i - shift] * 0.5
+            }
+        }
+        let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
+        XCTAssertEqual(result.windowsAffected, 2, "the two planted windows are hot")
+        let hotLags = Set(result.windowScores.filter(\.isHot).map { Int(($0.lagSeconds * 1000).rounded()) })
+        XCTAssertEqual(hotLags, [-120, 180])
+        XCTAssertFalse(result.isAffected)
+    }
+
+    /// The far end talks throughout and bleeds at `delayMs` in every window;
+    /// a louder, independent local talker covers all but the first two.
+    private func maskedBleed(delayMs: Double) -> (app: [Float], mic: [Float]) {
+        let app = speechLike(seconds: 200, seed: 43)
+        let local = speechLike(seconds: 200, seed: 44)
+        var mic = bleed(app, delayMs: delayMs, gain: 0.5)
+        for i in (20 * rate) ..< mic.count {
+            mic[i] += local[i]
+        }
+        return (app, mic)
+    }
+
     // MARK: - No verdict is better than a wrong one
 
     func testSilentAppTrackYieldsNoVerdict() {
