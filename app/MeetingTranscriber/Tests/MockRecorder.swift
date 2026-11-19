@@ -78,6 +78,10 @@ class MockRecorder: RecordingProvider {
     /// specific meeting-start time (e.g. filename-anchoring tests).
     var recordingStartDate: Date?
 
+    /// What `stop()` reports as the mic offset and the mute times.
+    var micDelay: TimeInterval = 0
+    var micMuteIntervals: [MicMuteInterval] = []
+
     func start(source: RecordingSource, micDeviceUID: String?, debugLogging _: Bool) {
         startCalled = true
         capturedSource = source
@@ -93,8 +97,9 @@ class MockRecorder: RecordingProvider {
             mixPath: mix,
             appPath: appPath,
             micPath: micPath,
-            micDelay: 0,
+            micDelay: micDelay,
             recordingStartDate: recordingStartDate ?? Date(),
+            micMuteIntervals: micMuteIntervals,
         )
     }
 }

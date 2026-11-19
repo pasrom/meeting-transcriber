@@ -1,5 +1,8 @@
 import AudioTapLib
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "RecordingSidecar")
 
 /// Metadata sidecar written next to dual-source recordings. In record-only
 /// mode it is `<basename>_meta.json`, consumed by an external
@@ -128,6 +131,51 @@ struct RecordingSidecar: Codable {
     /// Decode `<directory>/<basename>\(filenameSuffix)`, or nil when missing/malformed.
     static func read(fromDirectory directory: URL, basename: String) -> Self? {
         read(from: directory.appendingPathComponent("\(basename)\(filenameSuffix)"))
+    }
+
+    /// The sidecar a re-import of `<directory>/<basename>_*.wav` goes by: the
+    /// record-only one, else the one the pipeline keeps beside its recordings.
+    static func readForReimport(fromDirectory directory: URL, basename: String) -> Self? {
+        read(fromDirectory: directory, basename: basename)
+            ?? read(from: directory.appendingPathComponent("\(basename)\(recordingFilenameSuffix)"))
+    }
+
+    /// Write the recording sidecar of `recording` beside its mix, for a
+    /// dual-source recording the pipeline is about to process. Stage 3 moves
+    /// it out of staging with the mix. Without it a later re-import of the
+    /// tracks would take the mic offset as zero and lose the mute times. A
+    /// recording with one track has no offset to keep and gets none. A failed
+    /// write is logged and costs only that re-import.
+    static func writeRecordingSidecar(
+        for recording: RecordingResult,
+        title: String,
+        appName: String,
+        trigger: Trigger,
+        participants: [String],
+    ) {
+        guard let app = recording.appPath, let mic = recording.micPath,
+              let url = recordingSidecarURL(besideMix: recording.mixPath) else { return }
+        let sidecar = Self(
+            title: title,
+            appName: appName,
+            startedAt: recording.recordingStartDate,
+            // Never before the start, as in record-only: a clock stepped back
+            // during the meeting must not make a negative duration.
+            stoppedAt: max(Date(), recording.recordingStartDate),
+            participants: participants,
+            micDelaySeconds: recording.micDelay,
+            trigger: trigger,
+            mixFilename: recording.mixPath.lastPathComponent,
+            appFilename: app.lastPathComponent,
+            micFilename: mic.lastPathComponent,
+            micMuteIntervals: recording.micMuteIntervals,
+        )
+        do {
+            try sidecar.write(to: url)
+        } catch {
+            // Redacted: the error names the file, whose name can carry the title.
+            logger.warning("Recording sidecar not written: \(error.localizedDescription, privacy: .private)")
+        }
     }
 
     /// The recording sidecar of the recording whose mix is `mix`, a file named

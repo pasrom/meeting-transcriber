@@ -534,6 +534,10 @@ class WatchLoop {
             return
         }
 
+        // Kept with the tracks for a later re-import; stage 3 moves it with them.
+        RecordingSidecar.writeRecordingSidecar(
+            for: recording, title: title, appName: appName, trigger: trigger, participants: participants,
+        )
         let job = PipelineJob(
             meetingTitle: title,
             appName: appName,
