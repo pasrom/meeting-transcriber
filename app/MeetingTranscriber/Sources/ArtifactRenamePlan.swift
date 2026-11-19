@@ -26,7 +26,7 @@ enum ArtifactRenamePlan {
     static func artifactURLs(stem: String, in dirs: Directories) -> [URL] {
         let recordingSuffixes = [
             RecordingFileSuffix.mix, RecordingFileSuffix.app, RecordingFileSuffix.mic,
-        ] + SpeakerNamingStore.sidecarSuffixes + [SpeakerNamingStore.namingJSONSuffix]
+        ] + SpeakerNamingStore.sidecarSuffixes + [SpeakerNamingStore.namingJSONSuffix, RecordingSidecar.recordingFilenameSuffix]
         return ["\(stem).md", "\(stem).txt"].map { dirs.protocols.appendingPathComponent($0) }
             + recordingSuffixes.map { dirs.recordings.appendingPathComponent("\(stem)\($0)") }
     }

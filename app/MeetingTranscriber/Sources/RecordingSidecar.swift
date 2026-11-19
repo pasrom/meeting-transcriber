@@ -1,14 +1,23 @@
 import AudioTapLib
 import Foundation
 
-/// Metadata sidecar written next to dual-source recordings when record-only
-/// mode is enabled. Consumed by an external transcription/diarization
-/// pipeline (e.g. on a Linux GPU host) so it doesn't have to re-detect
-/// context the macOS client already knows.
+/// Metadata sidecar written next to dual-source recordings. In record-only
+/// mode it is `<basename>_meta.json`, consumed by an external
+/// transcription/diarization pipeline (e.g. on a Linux GPU host) so it doesn't
+/// have to re-detect context the macOS client already knows. A recording the
+/// app processes itself carries the same content as
+/// `<basename>_recording.json`, for a later re-import.
 struct RecordingSidecar: Codable {
     /// Filename suffix appended to the recording basename to form the sidecar
     /// filename (e.g. `20260503_120000` → `20260503_120000_meta.json`).
     static let filenameSuffix = "_meta.json"
+
+    /// The suffix of the sidecar of a recording the pipeline processes. Not
+    /// `filenameSuffix`: those recordings end up in the same `recordings/`
+    /// folder as record-only output, and a consumer of that folder can take a
+    /// new `_meta.json` as the sign that a recording is complete and waiting
+    /// for it. A re-import reads it after `filenameSuffix`.
+    static let recordingFilenameSuffix = "_recording.json"
 
     /// Schema version stamped into every new sidecar. Bump when fields are
     /// added/removed/repurposed so downstream consumers can branch on it.
@@ -36,7 +45,7 @@ struct RecordingSidecar: Codable {
     let micDelaySeconds: TimeInterval
     /// Seconds of the mic track the user muted. Nil on sidecars before version 3.
     let micMuteIntervals: [MicMuteInterval]? // swiftlint:disable:this discouraged_optional_collection
-    let files: Files
+    private(set) var files: Files
 
     /// Raw storage so an unrecognised value decodes as `nil` instead of
     /// throwing. `read()` swallows decode errors, so a strict `Trigger?` would
@@ -118,7 +127,48 @@ struct RecordingSidecar: Codable {
 
     /// Decode `<directory>/<basename>\(filenameSuffix)`, or nil when missing/malformed.
     static func read(fromDirectory directory: URL, basename: String) -> Self? {
-        let url = directory.appendingPathComponent("\(basename)\(Self.filenameSuffix)")
+        read(from: directory.appendingPathComponent("\(basename)\(filenameSuffix)"))
+    }
+
+    /// The recording sidecar of the recording whose mix is `mix`, a file named
+    /// `<stem>_mix.wav`: `<stem>_recording.json` beside it. Nil for any other name.
+    static func recordingSidecarURL(besideMix mix: URL) -> URL? {
+        guard let (stem, suffix) = RecordingFileSuffix.stripSuffix(from: mix.lastPathComponent),
+              suffix == RecordingFileSuffix.mix else { return nil }
+        return mix.deletingLastPathComponent().appendingPathComponent(stem + recordingFilenameSuffix)
+    }
+
+    /// Rewrite the recording sidecar at `source` as
+    /// `<directory>/<stem>_recording.json`, its file names following the
+    /// tracks onto `stem`, and remove `source` when that is another file.
+    /// Returns the file written. Nil when `source` holds no sidecar this build
+    /// can read or the write failed; `source` stays then.
+    @discardableResult
+    static func moveRecordingSidecar(from source: URL, toDirectory directory: URL, stem: String) -> URL? {
+        guard var sidecar = read(from: source) else { return nil }
+        sidecar.files = Files(
+            mix: stem + RecordingFileSuffix.mix,
+            app: sidecar.files.app.map { _ in stem + RecordingFileSuffix.app },
+            mic: sidecar.files.mic.map { _ in stem + RecordingFileSuffix.mic },
+        )
+        let target = directory.appendingPathComponent(stem + recordingFilenameSuffix)
+        let fm = FileManager.default
+        let replacing = fm.fileExists(atPath: target.path)
+        do {
+            try sidecar.write(to: target)
+        } catch {
+            // Written but not made owner-only: still the file to keep. Only
+            // when nothing was there before, which could be the old content.
+            guard !replacing, fm.fileExists(atPath: target.path) else { return nil }
+        }
+        if target.standardizedFileURL != source.standardizedFileURL {
+            try? fm.removeItem(at: source)
+        }
+        return target
+    }
+
+    /// Decode the sidecar at `url`, or nil when missing/malformed.
+    static func read(from url: URL) -> Self? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
