@@ -82,6 +82,102 @@ final class LiveCaptionEchoCancellerTests: XCTestCase {
         XCTAssertEqual(resetCount, 1)
     }
 
+    func testBacklogPassesMicrophoneThroughThenResumesWithFreshContext() async {
+        let calls = HopCalls()
+        let clock = FakeClock()
+        let pipeline = EchoOutputPipeline()
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: LiveCaptionEchoReference(), factory: {
+            calls.recordCreation()
+            return FakeCaptionHop(calls: calls) { mic, _ in
+                clock.advance(0.001)
+                return mic.map { $0 + 10 }
+            }
+        }, clock: clock.now)
+        await canceller.ingest(buffer(Array(repeating: 0, count: 8), endingAt: 10 + 8.0 / 16000)) { 0 }
+        await canceller.ingest(buffer(Array(repeating: 1, count: 8), endingAt: 10 + 16.0 / 16000)) { 0.9 }
+        await canceller.ingest(buffer(Array(repeating: 2, count: 8), endingAt: 10 + 24.0 / 16000)) { 1.1 }
+        await canceller.ingest(buffer(Array(repeating: 3, count: 8), endingAt: 10 + 32.0 / 16000)) { 0.5 }
+        await canceller.ingest(buffer(Array(repeating: 4, count: 8), endingAt: 10 + 40.0 / 16000)) { 0.25 }
+        await canceller.flush()
+
+        let buffers = await pipeline.buffers
+        let expected = ([10, 11, 2, 3, 14] as [Float]).flatMap { Array(repeating: $0, count: 8) }
+        XCTAssertEqual(
+            buffers.flatMap(\.samples),
+            expected,
+            "a backed-up queue must bypass past bypassBacklog, stay bypassed above resumeBacklog, and resume at resumeBacklog",
+        )
+        XCTAssertEqual(
+            buffers.map(\.hostTime),
+            [8, 16, 24, 32, 40].map { SampleRateDriftDetector.secondsToMachTicks(10 + Double($0) / 16000) },
+        )
+        XCTAssertEqual(calls.creations, 2, "resuming starts a fresh context")
+    }
+
+    func testBacklogFromSlowASRKeepsCancelling() async {
+        let calls = HopCalls()
+        let clock = FakeClock()
+        // Each 8-sample hand-off (0.5 ms of audio) keeps ASR busy for 1 ms, as a re-transcribe decode does.
+        let pipeline = EchoOutputPipeline { clock.advance(0.001) }
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: LiveCaptionEchoReference(), factory: {
+            FakeCaptionHop(calls: calls) { mic, _ in mic.map { $0 + 10 } }
+        }, clock: clock.now)
+        await canceller.ingest(buffer(Array(repeating: 1, count: 8), endingAt: 10 + 8.0 / 16000)) { 0 }
+        await canceller.ingest(buffer(Array(repeating: 2, count: 8), endingAt: 10 + 16.0 / 16000)) { 3 }
+        await canceller.flush()
+
+        let received = await pipeline.buffers.flatMap(\.samples)
+        XCTAssertEqual(
+            received,
+            Array(repeating: 11, count: 8) + Array(repeating: 12, count: 8),
+            "passing through cannot drain a queue that ASR itself fills",
+        )
+    }
+
+    func testBacklogWithFastCancellerAndFastASRKeepsCancelling() async {
+        let calls = HopCalls()
+        let clock = FakeClock()
+        let pipeline = EchoOutputPipeline { clock.advance(0.00005) }
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: LiveCaptionEchoReference(), factory: {
+            FakeCaptionHop(calls: calls) { mic, _ in
+                clock.advance(0.0001)
+                return mic.map { $0 + 10 }
+            }
+        }, clock: clock.now)
+        // Mirrors a held language-probe replay (initial backlog > 1 s) followed by a draining backlog.
+        await canceller.ingest(buffer(Array(repeating: 1, count: 8), endingAt: 10 + 8.0 / 16000)) { 8 }
+        await canceller.ingest(buffer(Array(repeating: 2, count: 8), endingAt: 10 + 16.0 / 16000)) { 3 }
+        await canceller.flush()
+
+        let received = await pipeline.buffers.flatMap(\.samples)
+        XCTAssertEqual(
+            received,
+            Array(repeating: 11, count: 8) + Array(repeating: 12, count: 8),
+            "a backlog that canceller + ASR already drain faster than real time must stay cancelled",
+        )
+    }
+
+    func testMidBufferSlowHopBypassesRemainingHops() async {
+        let calls = HopCalls()
+        let clock = FakeClock()
+        let backlog = OSAllocatedUnfairLock(initialState: 0.0)
+        let pipeline = EchoOutputPipeline()
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: LiveCaptionEchoReference(), factory: {
+            FakeCaptionHop(calls: calls) { mic, _ in
+                clock.advance(0.001)
+                backlog.withLock { $0 = 2.0 }
+                return mic.map { $0 + 10 }
+            }
+        }, clock: clock.now)
+        let twoHops = Array(repeating: Float(1), count: 8) + Array(repeating: Float(2), count: 8)
+        await canceller.ingest(buffer(twoHops, endingAt: 10 + 16.0 / 16000)) { backlog.withLock { $0 } }
+        await canceller.flush()
+
+        let received = await pipeline.buffers.flatMap(\.samples)
+        XCTAssertEqual(received, Array(repeating: 11, count: 8) + Array(repeating: 2, count: 8))
+        XCTAssertEqual(calls.microphones.count, 1, "a stalled hop must bypass the rest of the same buffer")
+    }
+
     func testFlushPadsPartialHopButDeliversOnlyValidSamples() async {
         let calls = HopCalls()
         let pipeline = EchoOutputPipeline()
@@ -255,12 +351,30 @@ private final class FakeCaptionHop: LiveCaptionHopCancelling {
     }
 }
 
+private final class FakeClock: Sendable {
+    private let time = OSAllocatedUnfairLock(initialState: 0.0)
+    func advance(_ seconds: TimeInterval) {
+        time.withLock { $0 += seconds }
+    }
+
+    @Sendable
+    func now() -> TimeInterval {
+        time.withLock { $0 }
+    }
+}
+
 private actor EchoOutputPipeline: LiveCaptionPipeline {
     private(set) var buffers: [LiveAudioBuffer] = []
     private(set) var flushCount = 0
     private(set) var resetCount = 0
+    private let onIngest: @Sendable () -> Void
+
+    init(onIngest: @escaping @Sendable () -> Void = {}) {
+        self.onIngest = onIngest
+    }
 
     func ingest(_ buffer: LiveAudioBuffer, backlog _: @Sendable () -> TimeInterval) {
+        onIngest()
         buffers.append(buffer)
     }
 

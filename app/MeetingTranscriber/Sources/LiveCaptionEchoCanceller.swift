@@ -16,6 +16,7 @@ actor LiveCaptionEchoCanceller: LiveCaptionPipeline {
     private let pipeline: any LiveCaptionPipeline
     private let reference: LiveCaptionEchoReference
     private let factory: Factory
+    private let clock: @Sendable () -> TimeInterval
     private var processor: (any LiveCaptionHopCancelling)?
     private var gate: LiveCaptionEchoGate?
     private var initialized = false
@@ -25,15 +26,21 @@ actor LiveCaptionEchoCanceller: LiveCaptionPipeline {
     private var lastEnd: TimeInterval?
     private var processedSamples = 0
     private var processingSeconds: TimeInterval = 0
+    private var bypassing = false
+    private var bypassedSamples = 0
+    private var cancellerLoad = BusyWindow()
+    private var asrLoad = BusyWindow()
     private var loggedEnd = false
 
     init(
         pipeline: any LiveCaptionPipeline,
         reference: LiveCaptionEchoReference,
         factory: @escaping Factory = LiveCaptionEchoCanceller.makeDefaultProcessor,
+        clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
     ) {
         self.pipeline = pipeline
         self.reference = reference
+        self.clock = clock
         self.factory = factory
     }
 
@@ -75,15 +82,23 @@ actor LiveCaptionEchoCanceller: LiveCaptionPipeline {
         if pending.isEmpty { pendingStart = start }
         lastEnd = start + duration
         pending.append(contentsOf: buffer.samples)
-        while let processor, pending.count >= processor.hopLength {
+        updateBypass(backlog: backlog)
+        while !bypassing, let processor, pending.count >= processor.hopLength {
             await deliver(count: processor.hopLength, backlog: backlog)
+            if !failed { updateBypass(backlog: backlog) }
         }
-        if failed { await deliverPending(backlog: backlog) }
+        if bypassing {
+            bypassedSamples += pending.count
+            await deliverPending(backlog: backlog)
+        } else if failed {
+            await deliverPending(backlog: backlog)
+        }
     }
 
     func reset() async {
         pending = []
         lastEnd = nil
+        cancellerLoad = BusyWindow()
         if let gate {
             await gate.reset()
         } else {
@@ -104,8 +119,27 @@ actor LiveCaptionEchoCanceller: LiveCaptionPipeline {
             let seconds = Double(processedSamples) / 16000
             logger
                 .notice(
-                    "Live caption echo cancellation finished processed=\(seconds, privacy: .public)s processing=\(self.processingSeconds, privacy: .public)s",
+                    "Live caption echo cancellation finished processed=\(seconds, privacy: .public)s processing=\(self.processingSeconds, privacy: .public)s bypassed=\(Double(self.bypassedSamples) / 16000, privacy: .public)s",
                 )
+        }
+    }
+
+    private func updateBypass(backlog: @Sendable () -> TimeInterval) {
+        // Under memory pressure a hop can take seconds; uncancelled audio beats audio the full queue drops.
+        // Pass through only when canceller + ASR fall behind real time and ASR alone still keeps up, so a
+        // slow Whisper decode or a held language-probe replay does not disable cancellation while draining.
+        let queued = backlog()
+        if bypassing, queued <= Self.resumeBacklog {
+            bypassing = false
+            cancellerLoad = BusyWindow()
+            recreateProcessor()
+            logger.notice("Live caption echo cancellation resumed")
+        } else if !bypassing,
+                  queued > Self.bypassBacklog,
+                  asrLoad.share < Self.bypassASRShare,
+                  cancellerLoad.share + asrLoad.share >= Self.bypassASRShare {
+            bypassing = true
+            logger.notice("Live caption echo cancellation behind by \(queued, privacy: .public)s; passing microphone through")
         }
     }
 
@@ -152,36 +186,68 @@ actor LiveCaptionEchoCanceller: LiveCaptionPipeline {
     private func deliver(count: Int, backlog: @Sendable () -> TimeInterval) async {
         let mic = Array(pending.prefix(count))
         let start = pendingStart
+        let audioSeconds = Double(count) / 16000
         pending.removeFirst(count)
-        pendingStart += Double(count) / 16000
+        pendingStart += audioSeconds
         var output = mic
-        if let processor {
+        if let processor, !bypassing {
             var padded = mic
             padded.append(contentsOf: repeatElement(0, count: processor.hopLength - count))
             let app = reference.samples(from: start, count: processor.hopLength)
-            let began = ProcessInfo.processInfo.systemUptime
+            let began = clock()
             do {
                 output = try Array(processor.process(mic: padded, reference: app).prefix(count))
                 processedSamples += count
             } catch {
                 fail(String(describing: error))
             }
-            processingSeconds += ProcessInfo.processInfo.systemUptime - began
+            let hopBusy = clock() - began
+            processingSeconds += hopBusy
+            cancellerLoad.record(audio: audioSeconds, busy: hopBusy)
         }
+        let handedOff = clock()
         await pipeline.ingest(
             LiveAudioBuffer(
                 samples: output, channelCount: 1, sampleRate: 16000,
-                hostTime: SampleRateDriftDetector.secondsToMachTicks(max(0, start + Double(count) / 16000)),
+                hostTime: SampleRateDriftDetector.secondsToMachTicks(max(0, start + audioSeconds)),
             ),
             backlog: backlog,
         )
+        asrLoad.record(audio: audioSeconds, busy: clock() - handedOff)
     }
+
+    private static let bypassBacklog: TimeInterval = 1
+    private static let resumeBacklog: TimeInterval = 0.25
+    /// Processing seconds per audio second above which the consumer cannot keep up with real time.
+    private static let bypassASRShare = 1.0
 
     nonisolated static func makeDefaultProcessor() throws -> (any LiveCaptionHopCancelling)? {
         switch LocalVQEModel.resolve() {
         case let .found(path): try LocalVQELiveHopProcessor(modelPath: path)
         case .absent: nil
         case .overrideMissing: throw EchoCancellationError.modelLoadFailed("model override missing")
+        }
+    }
+}
+
+/// Time spent per second of audio, over the last second of audio.
+private struct BusyWindow {
+    private var entries: [(audio: TimeInterval, busy: TimeInterval)] = []
+    private var audio: TimeInterval = 0
+    private var busy: TimeInterval = 0
+
+    var share: Double {
+        audio > 0 ? busy / audio : 0
+    }
+
+    mutating func record(audio: TimeInterval, busy: TimeInterval) {
+        entries.append((audio, busy))
+        self.audio += audio
+        self.busy += busy
+        while let first = entries.first, self.audio - first.audio >= 1 {
+            entries.removeFirst()
+            self.audio -= first.audio
+            self.busy -= first.busy
         }
     }
 }
@@ -194,7 +260,13 @@ private final class LocalVQELiveHopProcessor: LiveCaptionHopCancelling {
     }
 
     init(modelPath: String) throws {
-        let ctx = localvqe_new(modelPath)
+        // One thread: the default four wait on each other every 16 ms hop, so one descheduled
+        // thread stalls the hop; under load one thread had the shorter tail.
+        let options = localvqe_options_new()
+        localvqe_options_set_model_path(options, modelPath)
+        localvqe_options_set_threads(options, 1)
+        let ctx = localvqe_new_with_options(options)
+        localvqe_options_free(options)
         guard ctx != 0 else {
             throw EchoCancellationError.modelLoadFailed(LocalVQECanceller.lastError(ctx: 0))
         }
