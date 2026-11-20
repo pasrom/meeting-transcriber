@@ -102,18 +102,25 @@ struct SpeakersSettingsView: View {
 
     // MARK: - Diarization Section
 
+    /// Hint under the mode picker. The cap holds per diarized input, not per
+    /// meeting: a dual-source recording diarizes the app track and the
+    /// microphone track separately and merges the results. With "No
+    /// Microphone" set, or for an imported file, there is one input.
+    static func speakerCapHint(for mode: DiarizerMode) -> String {
+        "\(mode.shortLabel) supports up to \(mode.speakerCap) speakers per input. "
+            + "A call recorded with your microphone has two inputs, the call audio and the microphone, each with this limit. "
+            + "Switch to Offline mode for meetings with more participants."
+    }
+
     private var diarizationSection: some View {
         Section("Diarization") {
             Toggle("Speaker Diarization", isOn: $settings.diarize)
             if settings.diarize {
                 diarizationModePicker
                 if settings.diarizerMode != .offline {
-                    Label(
-                        "\(settings.diarizerMode.shortLabel) supports up to \(settings.diarizerMode.speakerCap) speakers per meeting. Switch to Offline mode for meetings with more participants.",
-                        systemImage: "info.circle",
-                    )
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
+                    Label(Self.speakerCapHint(for: settings.diarizerMode), systemImage: "info.circle")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
                 }
                 expectedSpeakersRow
                 Label(
