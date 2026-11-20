@@ -31,6 +31,7 @@ extension AppSettings {
         switch transcriptionEngine {
         case .whisperKit: whisperLanguageOrNil
         case .parakeet: parakeetLanguageOrNil
+        case .gigaAM: "ru"
         }
     }
 
@@ -49,6 +50,7 @@ extension AppSettings {
         if watchFaceTime { apps.append(AppMeetingPattern.faceTime.appName) }
         if watchWhatsApp { apps.append(AppMeetingPattern.whatsApp.appName) }
         if watchSlack { apps.append(AppMeetingPattern.slack.appName) }
+        if watchDiscord { apps.append(AppMeetingPattern.discord.appName) }
         return apps
     }
 }

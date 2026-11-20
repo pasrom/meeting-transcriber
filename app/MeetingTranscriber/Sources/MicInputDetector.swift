@@ -12,7 +12,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MicInpu
 ///
 /// Complements `PowerAssertionDetector` for call apps whose in-call power
 /// assertions are absent, unnamed, or undocumented (WeChat, Tencent Meeting,
-/// FaceTime, WhatsApp, Slack): a call ALWAYS captures the mic, so
+/// FaceTime, WhatsApp, Slack, Discord): an open microphone is the signal, so
 /// `kAudioProcessPropertyIsRunningInput` flipping true on a watched bundle ID
 /// is a reliable signal.
 ///
@@ -106,6 +106,11 @@ class MicInputDetector: MeetingDetecting {
         // also holds the mic while recording a voice or video clip, so a long
         // clip looks like a huddle and records, as a WhatsApp voice message does.
         MicPattern(appName: "Slack", bundleIDs: ["com.tinyspeck.slackmacgap"], matchesHelpers: true),
+        MicPattern(
+            appName: AppMeetingPattern.discord.appName,
+            bundleIDs: [AppMeetingPattern.discordBundleID],
+            matchesHelpers: true,
+        ),
     ]
 
     /// Safari browser meetings, measured during a Google Meet call in Safari

@@ -28,6 +28,9 @@ enum TranscriptionFailureScope: Equatable {
         case let TranscriptionError.transcriptionFailed(underlying):
             of(underlying)
 
+        case is GigaAMEngine.AudioFileError:
+            .file
+
         case let error as WhisperError:
             switch error {
             case .loadAudioFailed:

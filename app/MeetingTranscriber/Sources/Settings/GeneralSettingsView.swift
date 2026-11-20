@@ -56,6 +56,8 @@ struct GeneralSettingsView: View {
                 Toggle("WhatsApp", isOn: $settings.watchWhatsApp)
                 Toggle("Slack", isOn: $settings.watchSlack)
                     .accessibilityIdentifier(A11yID.watchSlackToggle)
+                Toggle("Discord", isOn: $settings.watchDiscord)
+                    .accessibilityIdentifier(A11yID.watchDiscordToggle)
                 customApps
                 Toggle("Browser Web Meetings", isOn: $settings.watchBrowserMeetings)
                     .accessibilityIdentifier(A11yID.watchBrowserToggle)

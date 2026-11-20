@@ -57,8 +57,24 @@ final class DualSourceRecorderResolveTapPIDsTests: XCTestCase {
             bundleURL: bundle,
             enumerate: { _ in [42, 200] },
             widen: { Array(Set($0 + [300])).sorted() },
-            select: { $0.filter { $0 != 300 } },
+            select: { pids, _ in pids.filter { $0 != 300 } },
         )
         XCTAssertEqual(pids, [42, 200], "the helper selection must run on the widened set, not before it")
+    }
+
+    func testEnablesChromiumRendererCaptureForDiscordOnly() {
+        let bundle = URL(fileURLWithPath: "/Applications/Discord.app")
+        func selectedPIDs(_ bundleID: String) -> [pid_t] {
+            DualSourceRecorder.resolveTapPIDs(
+                rootPID: 42,
+                bundleURL: bundle,
+                bundleIdentifier: bundleID,
+                enumerate: { _ in [42, 200, 300] },
+                select: { pids, includeRenderers in includeRenderers ? pids : pids.filter { $0 != 300 } },
+            )
+        }
+
+        XCTAssertEqual(selectedPIDs("com.hnc.Discord"), [42, 200, 300])
+        XCTAssertEqual(selectedPIDs("com.google.Chrome"), [42, 200])
     }
 }

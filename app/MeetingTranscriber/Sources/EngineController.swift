@@ -4,7 +4,7 @@ import Observation
 // MARK: - EngineController
 
 /// Owns the transcription-engine concern: the engine instances
-/// (`WhisperKitEngine`, `ParakeetEngine`),
+/// (`WhisperKitEngine`, `ParakeetEngine`, `GigaAMEngine`),
 /// the active-engine selection, and keeping each engine's model / language /
 /// vocabulary in line with `AppSettings` (both an up-front sync at construction
 /// and a self-rearming reactive observer for runtime changes).
@@ -26,6 +26,7 @@ import Observation
 final class EngineController {
     let whisperKit: WhisperKitEngine
     let parakeetEngine: ParakeetEngine
+    let gigaAMEngine: GigaAMEngine
     /// The Settings row for WhisperKit models earlier builds left in
     /// `Documents`, built once here rather than on every Settings body pass.
     let legacyWhisperModels: LegacyWhisperModelsState?
@@ -95,6 +96,10 @@ final class EngineController {
         ParakeetEngine()
     }
 
+    private static func makeGigaAM() -> GigaAMEngine {
+        GigaAMEngine()
+    }
+
     /// Nil in the App Store build, which leaves the row out. Its `Documents` is
     /// the container's own, which iCloud does not sync, and that sync was the
     /// reason for the row; worse, a sandboxed `trashItem` moves container items
@@ -113,6 +118,7 @@ final class EngineController {
         self.warmupQueue = warmupQueue
         self.whisperKit = Self.makeWhisperKit()
         self.parakeetEngine = Self.makeParakeet()
+        self.gigaAMEngine = Self.makeGigaAM()
         self.legacyWhisperModels = Self.makeLegacyWhisperModels(settings: settings)
 
         // Bring engines in line with the current settings up front so the first
@@ -130,14 +136,18 @@ final class EngineController {
 
         case .whisperKit:
             whisperKit
+
+        case .gigaAM:
+            gigaAMEngine
         }
     }
 
-    private var inactiveTranscriptionEngineState: EngineModelState {
-        switch settings.transcriptionEngine {
-        case .whisperKit: parakeetEngine.modelState
-        case .parakeet: whisperKit.modelState
-        }
+    private var inactiveEngineIsResident: Bool {
+        let active = settings.transcriptionEngine
+        let whisperKitIsResident = active != .whisperKit && whisperKit.modelState != .unloaded
+        let parakeetIsResident = active != .parakeet && parakeetEngine.modelState != .unloaded
+        let gigaAMIsResident = active != .gigaAM && gigaAMEngine.modelState != .unloaded
+        return whisperKitIsResident || parakeetIsResident || gigaAMIsResident
     }
 
     /// Pre-load the active engine's model (applying its settings-derived config
@@ -152,6 +162,7 @@ final class EngineController {
                 switch settings.transcriptionEngine {
                 case .whisperKit: await fetchTokenizer(afterDownload: whisperKit.downloadModelIfMissing())
                 case .parakeet: await parakeetEngine.downloadModelIfMissing()
+                case .gigaAM: await gigaAMEngine.downloadModelIfMissing()
                 }
             }
             return
@@ -216,6 +227,9 @@ final class EngineController {
             if parakeetEngine.customVocabularyBookmark != nextBookmark { parakeetEngine.customVocabularyBookmark = nextBookmark }
             let nextLang = settings.parakeetLanguageOrNil
             if parakeetEngine.language != nextLang { parakeetEngine.language = nextLang }
+
+        case .gigaAM:
+            break
         }
     }
 
@@ -246,11 +260,10 @@ final class EngineController {
         // Retire it only after their work (including the caption tail) finishes.
         // Off keeps it: the queue runs on its engine until it is rebuilt.
         if current.unloadWhenIdle,
-           pendingInactiveRelease || previous.busy || pendingDrain || inactiveTranscriptionEngineState != .unloaded {
-            switch current.engine {
-            case .whisperKit: parakeetEngine.releaseModel()
-            case .parakeet: whisperKit.releaseModel()
-            }
+           pendingInactiveRelease || previous.busy || pendingDrain || inactiveEngineIsResident {
+            if current.engine != .whisperKit { whisperKit.releaseModel() }
+            if current.engine != .parakeet { parakeetEngine.releaseModel() }
+            if current.engine != .gigaAM { gigaAMEngine.releaseModel() }
             pendingInactiveRelease = false
         }
         if current.unloadWhenIdle,
@@ -259,6 +272,7 @@ final class EngineController {
                 switch current.engine {
                 case .whisperKit: whisperKit.releaseModel()
                 case .parakeet: parakeetEngine.releaseModel()
+                case .gigaAM: gigaAMEngine.releaseModel()
                 }
             }
             queueProvider()?.vad = nil
@@ -282,7 +296,7 @@ final class EngineController {
             // retired engine later, release it too; never observe the active
             // model here, so an explicit Load Model remains effective.
             // A stale warm-up on the active engine keeps its load until the next drain.
-            _ = inactiveTranscriptionEngineState
+            _ = inactiveEngineIsResident
             _ = settings.transcriptionEngine
             _ = settings.whisperKitModel
             _ = settings.whisperKitCustomModelEnabled

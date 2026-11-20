@@ -387,7 +387,7 @@
             }
 
             struct Transcription: Codable {
-                /// `TranscriptionEngineSetting` raw value ("whisperKit" | "parakeet").
+                /// `TranscriptionEngineSetting` raw value ("whisperKit" | "parakeet" | "gigaAM").
                 let engine: String
                 let whisperKitModel: String
                 /// Empty string = auto-detect (mirrors the UserDefaults sentinel).
