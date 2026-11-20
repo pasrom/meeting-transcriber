@@ -122,11 +122,12 @@ enum ProtocolGenerator {
         diarized: Bool,
         language: String,
         meetingStartTime: Date?,
+        title: String? = nil,
         promptURL: URL = AppPaths.customPromptFile,
         timeZone: TimeZone = .autoupdatingCurrent,
     ) -> String {
         let metadata = meetingStartTime.map { meetingMetadata(for: $0, timeZone: timeZone) }
-        var prompt = meetingTimeContext(metadata: metadata) + applyVariables(
+        var prompt = meetingTimeContext(metadata: metadata, title: promptTitle(from: title)) + applyVariables(
             loadPrompt(from: promptURL),
             language: language,
             metadata: metadata,
@@ -149,16 +150,44 @@ enum ProtocolGenerator {
         )
     }
 
-    private static func meetingTimeContext(metadata: MeetingPromptMetadata?) -> String {
-        guard let metadata else { return "" }
-        return [
-            "Meeting metadata:",
-            "Date: \(metadata.date)",
-            "Time: \(metadata.time)",
-            "The date and time above are authoritative. Interpret relative time expressions",
-            "in the transcript relative to this meeting date. Do not rely on the model's",
-            "assumed current date.",
-        ].joined(separator: "\n") + "\n\n"
+    /// The meeting title as the model should see it, or `nil` when it carries no
+    /// information. A window title often reads "Subject | Organisation | account":
+    /// only the subject is kept (the rest is the user's own organisation and
+    /// account, which has no business in the prompt). Generic titles ("Join
+    /// meeting", "New Recording 1") and file stems (`20250101_0900_…`, what a
+    /// re-imported recording is called) are dropped: a title the model cannot
+    /// learn a spelling from only invites it to reuse it as the document title.
+    static func promptTitle(from raw: String?) -> String? {
+        guard let first = raw?.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).first else {
+            return nil
+        }
+        let title = first.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty,
+              title.range(of: genericTitlePattern, options: [.regularExpression, .caseInsensitive]) == nil,
+              title.range(of: #"^\d{8}_\d{4}_"#, options: .regularExpression) == nil
+        else { return nil }
+        return title
+    }
+
+    private static let genericTitlePattern =
+        #"^(rejoindre la réunion|join meeting|réunion|meeting|call|appel|new recording( \d+)?|"#
+            + #"whatsapp( call)?|facetime|\d+ min meeting)$"#
+
+    private static func meetingTimeContext(metadata: MeetingPromptMetadata?, title: String?) -> String {
+        guard metadata != nil || title != nil else { return "" }
+        var lines = ["Meeting metadata:"]
+        if let metadata {
+            lines += ["Date: \(metadata.date)", "Time: \(metadata.time)"]
+        }
+        if let title { lines.append("Title: \(title)") }
+        if metadata != nil {
+            lines += [
+                "The date and time above are authoritative. Interpret relative time expressions",
+                "in the transcript relative to this meeting date. Do not rely on the model's",
+                "assumed current date.",
+            ]
+        }
+        return lines.joined(separator: "\n") + "\n\n"
     }
 
     // MARK: - File Operations
