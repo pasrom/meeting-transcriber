@@ -36,9 +36,12 @@ Two layers of defense, both enforced on every request:
 1. **Bearer token.** Send `Authorization: Bearer <token>`. The token is a
    64-character hex string (32 bytes of entropy) stored at
    `~/Library/Application Support/MeetingTranscriber/.rpc-token` (mode `0600`).
-   It is generated on first launch and reused across launches. Toggling the
-   server off then on rotates the token (invalidating any previously leaked
-   value). A missing or wrong token returns `401`. Comparison is constant-time.
+   A new token is written every time the server starts: at each app launch
+   with the API on, and each time the toggle is switched off and back on. The
+   file is replaced just after the server starts listening, and the old value
+   stops working with the server it belonged to, so read the file when you make
+   the request (or again after a `401`) rather than keeping a copy. A missing or
+   wrong token returns `401`. Comparison is constant-time.
 2. **Origin / Host guard.** Any request carrying a non-empty browser `Origin`
    header, the literal `null` included, is rejected with `403`, which blocks
    CSRF and DNS-rebinding from a page running locally. The `Host` header, when

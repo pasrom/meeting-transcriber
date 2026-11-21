@@ -19,8 +19,8 @@ default and binds to `127.0.0.1` only.
 Enabling it writes a bearer token to
 `~/Library/Application Support/MeetingTranscriber/.rpc-token` (mode `0600`).
 Everything below reads that file at run time rather than copying the value, so
-nothing breaks when the token rotates — which it does every time you switch the
-toggle off and back on.
+nothing breaks when the token rotates, which it does every time the app starts
+with the API on and every time you switch the toggle off and back on.
 
 ## A Stream Deck plugin, if you want live state
 
@@ -71,8 +71,8 @@ curl -sS --fail-with-body -X POST http://127.0.0.1:9876/v1/watch \
 ```
 
 The token is read at run time rather than baked in, so the Shortcut keeps
-working when the token rotates — which happens every time the API toggle is
-switched off and back on.
+working when the token rotates, which happens at every app launch and every
+time the API toggle is switched off and back on.
 
 Then duplicate it as **Stop Meeting Watching** with `"action":"stop"`. Two keys
 rather than one is the recommendation of this guide, not an accident — see
@@ -196,7 +196,7 @@ told.
 
 | Symptom | Cause |
 | --- | --- |
-| `401` | Token rotated, or the API was toggled off and on. Re-read the file — do not cache it. |
+| `401` | Token rotated: the app restarted, or the API was toggled off and on. Re-read the file, do not cache it. |
 | Connection refused | App not running, or **Settings → Advanced → Local Automation API** is off. |
 | Token file missing | Same — the file is written when the API starts. |
 | `409` | A recording already owns the loop: from the app picker, or a detected meeting. Stop it first. |

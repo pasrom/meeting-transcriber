@@ -461,20 +461,32 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             // Exercises buildDebugRPCServer's wiring, including the /v1 automation
             // closures (enqueueReturningIDs + jobStatus). Construction does not
             // start a listener, so boundPort is nil until start() is called.
-            let server = state.buildDebugRPCServer(token: "test-token")
+            let server = state.buildDebugRPCServer(token: "test-token", tokenFile: nil)
             XCTAssertNil(server.boundPort)
         }
 
+        /// The token file handed to `buildDebugRPCServer` reaches the server, so
+        /// the `AppState`-built server publishes its token where clients read it.
+        func testBuildDebugRPCServerPublishesItsTokenToTheGivenFile() async throws {
+            let (state, _) = makeState()
+            let url = makeTempFile(suffix: "-rpc-token")
+            // The server writes the file before it reports its port, so once
+            // this returns the file must hold the token.
+            _ = try await startWiredServer(state, token: "wired-token", tokenFile: url)
+            XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "wired-token")
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            XCTAssertEqual((attrs[.posixPermissions] as? Int) ?? -1, 0o600)
+        }
+
         /// Boots the `AppState`-wired server on an OS-assigned port and returns
-        /// its base URL. Shared by the two socket tests below, which are separate
-        /// only because one function cannot hold both under the length cap.
+        /// its base URL. Shared by the socket tests around it.
         /// `DebugRPCServerIntegrationTests.startServer` cannot stand in: it
         /// builds a bare `DebugRPCServer`, and driving the `AppState`-built one
         /// is the whole point here.
         private func startWiredServer(
-            _ state: AppState, token: String,
+            _ state: AppState, token: String, tokenFile: URL?,
         ) async throws -> (server: DebugRPCServer, baseURL: URL) {
-            let server = state.buildDebugRPCServer(port: 0, token: token)
+            let server = state.buildDebugRPCServer(token: token, tokenFile: tokenFile, port: 0)
             server.start()
             addTeardownBlock { await server.stop() }
             for _ in 0 ..< 50 {
@@ -492,7 +504,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         func testBuildDebugRPCServerServesV1OverSocket() async throws {
             let (state, _) = makeState()
             let token = "appstate-rpc-e2e-token"
-            let baseURL = try await startWiredServer(state, token: token).baseURL
+            let baseURL = try await startWiredServer(state, token: token, tokenFile: nil).baseURL
 
             func send(_ method: String, _ path: String, body: Data? = nil) async throws -> Int {
                 var req = URLRequest(url: baseURL.appendingPathComponent(path))
@@ -582,7 +594,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             // the 200 distinguishes the wired control closure from `.failed`.
             state.permissions.handle(HealthCheckResult(screenRecording: .healthy, microphone: .denied))
             let token = "appstate-rpc-record-token"
-            let baseURL = try await startWiredServer(state, token: token).baseURL
+            let baseURL = try await startWiredServer(state, token: token, tokenFile: nil).baseURL
 
             var req = URLRequest(url: baseURL.appendingPathComponent("v1/record"))
             req.httpMethod = "POST"

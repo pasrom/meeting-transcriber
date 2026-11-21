@@ -65,9 +65,18 @@ for _ in $(seq 1 60); do
 done
 [ -s "$TOKEN_FILE" ] || fail "RPC token never appeared — the app didn't start the RPC server"
 lsof -i :9876 >/dev/null 2>&1 || fail "nothing bound :9876 within 30s"
-TOKEN=$(cat "$TOKEN_FILE")
+# The app writes a new token at every start, once its listener is ready, so the
+# port can be open a moment before the file holds this run's token (a file left
+# by an earlier run passes the -s check above). Re-read it until it is accepted.
+TOKEN=""
+for _ in $(seq 1 30); do
+    TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null || true)
+    [ -n "$TOKEN" ] && curl -sf --max-time 2 -H "Authorization: Bearer $TOKEN" -o /dev/null "$BASE/healthz" && break
+    TOKEN=""
+    sleep 0.5
+done
+[ -n "$TOKEN" ] || fail "RPC on :9876 never accepted the token in $TOKEN_FILE"
 AUTH=(-H "Authorization: Bearer $TOKEN")
-curl -sf --max-time 15 "${AUTH[@]}" -o /dev/null "$BASE/healthz" || fail "RPC not reachable on :9876"
 ok "RPC listening + authenticated"
 
 step "Open Settings"

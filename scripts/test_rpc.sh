@@ -73,9 +73,19 @@ done
 lsof -i :9876 >/dev/null 2>&1 || fail "server did not bind to :9876 within 6s"
 ok "listening on :9876"
 
-[ -s "$TOKEN_FILE" ] || fail "token file not created"
-TOKEN=$(cat "$TOKEN_FILE")
-ok "token file present (chmod $(stat -f '%Lp' "$TOKEN_FILE"))"
+# The app writes a new token at every start, once its listener is ready, so
+# the port can be open a moment before the file holds this run's token (and
+# the file left by an earlier run is still there). Re-read it until the
+# server accepts it.
+TOKEN=""
+for _ in $(seq 1 30); do
+    TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null || true)
+    [ -n "$TOKEN" ] && curl -sf --max-time 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:9876/healthz" >/dev/null && break
+    TOKEN=""
+    sleep 0.2
+done
+[ -n "$TOKEN" ] || fail "the server never accepted the token in $TOKEN_FILE"
+ok "token file accepted (chmod $(stat -f '%Lp' "$TOKEN_FILE"))"
 
 # --- Endpoint roundtrips. ---
 step "Auth gate"
