@@ -88,7 +88,12 @@ describes.
 
 **Don't:** chase snapshot coverage; use `/ui/press` to arrange state (it's for testing
 the pressed control); test SwiftUI framework behavior (e.g. that `.keyboardShortcut`
-fires). **Manual-QA-only, accepted:** menu-bar dropdown interaction, modal panels
+fires); build an `NSOpenPanel` or `NSSavePanel` in a test: when `CFFIXED_USER_HOME` holds a
+`//` (`$TMPDIR/home` does, as `$TMPDIR` ends in `/`), the panel service it starts grows
+past 1.5 GB within seconds in `_CFURLIsProtectedDirectory` (issue #1024, macOS 27.3; measured
+for `NSOpenPanel`, inferred for `NSSavePanel` from `-[NSRemoteSavePanel _initContentView]` in the
+sampled stack). Set a panel's options through a protocol the test fakes, as
+`VoiceEnrollmentView.makeFilePanel` does. **Manual-QA-only, accepted:** menu-bar dropdown interaction, modal panels
 (NSOpenPanel/NSAlert), TCC prompts, drag/focus order, visual appearance beyond dev-only
 snapshots.
 

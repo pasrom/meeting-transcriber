@@ -19,15 +19,6 @@ final class PairedImportPanelDelegateTests: XCTestCase {
         XCTAssertEqual(label?.stringValue, " ", "empty selection keeps a non-empty string so the label preserves its baseline height")
     }
 
-    func testPanelSelectionDidChangeWithEmptyPanelShowsBlank() {
-        let delegate = PairedImportPanelDelegate()
-        let panel = NSOpenPanel()
-        // Fresh panel has no urls — same fallback as nil sender.
-        delegate.panelSelectionDidChange(panel)
-        let label = (delegate.accessoryView.subviews.compactMap { $0 as? NSTextField }).first
-        XCTAssertEqual(label?.stringValue, " ")
-    }
-
     func testPanelSelectionDidChangeWithNonPanelSenderShowsBlank() {
         // Defensive branch: sender is not an NSOpenPanel → urls fallback to [].
         let delegate = PairedImportPanelDelegate()
