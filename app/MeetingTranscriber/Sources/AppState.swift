@@ -178,7 +178,7 @@ final class AppState {
     #if !APPSTORE
         /// Debug RPC server lifecycle (launch gate, settings-driven start/stop,
         /// token rotation), extracted into its own controller. `AppState` supplies
-        /// the wired server via `buildDebugRPCServer()` and keeps the state
+        /// the wired server via `buildDebugRPCServer(token:tokenFile:)` and keeps the state
         /// projection (`rpcStateSnapshot`) + speaker-DB actions.
         let rpcController: RPCServerController
 
@@ -279,7 +279,7 @@ final class AppState {
 
         #if !APPSTORE
             // Not trailing-closure: `isEnabled` is the first param (the other two
-            // have defaults), so a trailing closure would bind to `rotateToken`.
+            // have defaults), so a trailing closure would bind to `makeToken`.
             // swiftlint:disable:next trailing_closure
             self.rpcController = RPCServerController(isEnabled: { [settings] in settings.debugRPCEnabled })
         #endif
@@ -305,7 +305,7 @@ final class AppState {
             // in RPCServerController.activate; AppState only supplies the wired
             // server. The closure is set here (post stored-property init) so it
             // can capture self.
-            rpcController.activate { [weak self] in self?.buildDebugRPCServer() }
+            rpcController.activate { [weak self] in self?.buildDebugRPCServer(token: $0, tokenFile: DebugRPCServer.tokenFileURL) }
             // The diagnostic log's launch steps (cleanup of expired files, the
             // orphan reap and `startPersistentLogStreamer`) run from the app's
             // entry point, not here: tests construct `AppState` too, and those
@@ -361,13 +361,12 @@ final class AppState {
     #if !APPSTORE
         /// Build a fully-wired debug RPC server (state snapshot + speaker-DB
         /// actions + skip-naming + file-enqueue closures). `RPCServerController`
-        /// owns when to start/stop it; this just constructs it. port/token
-        /// default to production values but are parameterised so a test can
-        /// build the wired server on an OS-assigned port with a known token and
-        /// exercise the injected closures over a real socket.
+        /// owns when to start/stop it and hands in a fresh token for each start.
+        /// Every caller names the token file (nil publishes none); tests that start it use port 0.
         func buildDebugRPCServer(
+            token: String,
+            tokenFile: URL?,
             port: UInt16 = DebugRPCServer.defaultPort,
-            token: String = DebugRPCServer.loadOrCreateToken(),
         ) -> DebugRPCServer {
             let snapshot: () -> RPCStateSnapshot = { [weak self] in
                 self?.rpcStateSnapshot() ?? RPCStateSnapshot.empty
@@ -432,6 +431,7 @@ final class AppState {
             return DebugRPCServer(
                 port: port,
                 token: token,
+                tokenFile: tokenFile,
                 snapshot: snapshot,
                 speakerActions: makeSpeakerDBActions(),
                 skipNaming: skipNaming,

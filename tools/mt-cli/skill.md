@@ -75,9 +75,10 @@ cd tools/mt-cli && swift build
   isn't running, or the toggle / env flag was off when it launched. Ask the
   user to enable Settings → Advanced → Local Automation API, or relaunch with
   `MEETINGTRANSCRIBER_DEBUG_RPC=1 ./scripts/run_app.sh`.
-- **"RPC token not found"** → same as above; the token is created on first
-  successful start.
-- **HTTP 401** → token rotated. Restart the app or delete the token file.
+- **"RPC token not found"** → same as above; the app writes a new token each
+  time its server starts listening.
+- **HTTP 401** → token rotated: the app restarted (it writes a new token at
+  every start) between reading the file and sending. Run the command again.
 - **HTTP 403 with Origin header** → You're hitting it from a browser. Use curl
   or `mt-cli` instead.
 

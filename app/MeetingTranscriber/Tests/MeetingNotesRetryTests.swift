@@ -390,7 +390,7 @@ final class MeetingNotesRetryTests: XCTestCase {
                 settings: AppSettings(defaults: XCTUnwrap(DefaultsSuite.open(suite))),
                 notifier: SilentNotifier(),
             )
-            let server = state.buildDebugRPCServer(token: "t")
+            let server = state.buildDebugRPCServer(token: "t", tokenFile: nil)
 
             let response = await server.route(HTTPRequest(
                 method: "POST", path: "/v1/jobs/\(id.uuidString)/notes/retry", headers: ["authorization": "Bearer t"],

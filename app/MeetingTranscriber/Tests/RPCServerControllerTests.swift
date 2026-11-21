@@ -3,9 +3,9 @@
     import XCTest
 
     /// Unit tests for `RPCServerController`'s lifecycle — the launch gate, the
-    /// settings-driven start/stop, and the security token rotation on re-enable.
+    /// settings-driven start/stop, and a fresh token for every start.
     ///
-    /// Drives the controller against a spy `RPCServing` + injected enable/rotate
+    /// Drives the controller against a spy `RPCServing` + injected enable/token
     /// closures, so the lifecycle (previously buried in `AppState` as private
     /// methods, covered only by the real-socket integration test) is testable
     /// without binding a socket.
@@ -23,17 +23,29 @@
             }
         }
 
-        func testActivateStartsWhenEnvForcedWithoutTokenRotation() {
+        /// A launch with the server on must not reuse the token of an earlier
+        /// run: whoever held the port while the app was not running could have
+        /// collected that token from a client. The fresh token is the one the
+        /// server is built with.
+        func testActivateRotatesTokenAndBuildsTheServerWithIt() {
             let spy = SpyServer()
-            var rotations = 0
+            var tokensMade = 0
+            var builtWith: [String] = []
             let controller = RPCServerController(
                 isEnabled: { false },
                 envForceEnabled: { true },
-                rotateToken: { rotations += 1 },
+                makeToken: {
+                    tokensMade += 1
+                    return "token-\(tokensMade)"
+                },
             )
-            controller.activate { spy }
+            controller.activate { token in
+                builtWith.append(token)
+                return spy
+            }
             XCTAssertEqual(spy.startCount, 1, "env-forced launch should start the server")
-            XCTAssertEqual(rotations, 0, "the launch gate must NOT rotate the token")
+            XCTAssertEqual(tokensMade, 1, "every server start, the launch included, must rotate the token")
+            XCTAssertEqual(builtWith, ["token-1"], "the server must be built with the freshly rotated token")
             XCTAssertNotNil(controller.server)
         }
 
@@ -42,9 +54,9 @@
             let controller = RPCServerController(
                 isEnabled: { false },
                 envForceEnabled: { false },
-                rotateToken: {},
+                makeToken: { "token" },
             )
-            controller.activate { spy }
+            controller.activate { _ in spy }
             XCTAssertEqual(spy.startCount, 0)
             XCTAssertNil(controller.server)
         }
@@ -52,18 +64,21 @@
         func testApplyRotatesTokenAndStartsOnEnable() {
             let spy = SpyServer()
             var enabled = false
-            var rotations = 0
+            var tokensMade = 0
             let controller = RPCServerController(
                 isEnabled: { enabled },
                 envForceEnabled: { false },
-                rotateToken: { rotations += 1 },
+                makeToken: {
+                    tokensMade += 1
+                    return "token"
+                },
             )
-            controller.activate { spy } // disabled → no start
+            controller.activate { _ in spy } // disabled → no start
             XCTAssertEqual(spy.startCount, 0)
 
             enabled = true
             controller.apply() // off → on: rotate the bearer token, then start
-            XCTAssertEqual(rotations, 1, "off→on must rotate the bearer token")
+            XCTAssertEqual(tokensMade, 1, "off→on must rotate the bearer token")
             XCTAssertEqual(spy.startCount, 1)
             XCTAssertNotNil(controller.server)
         }
@@ -74,9 +89,9 @@
             let controller = RPCServerController(
                 isEnabled: { enabled },
                 envForceEnabled: { true },
-                rotateToken: {},
+                makeToken: { "token" },
             )
-            controller.activate { spy } // forced → started
+            controller.activate { _ in spy } // forced → started
             XCTAssertEqual(spy.startCount, 1)
 
             enabled = false
@@ -90,11 +105,35 @@
             let controller = RPCServerController(
                 isEnabled: { true },
                 envForceEnabled: { true },
-                rotateToken: {},
+                makeToken: { "token" },
             )
-            controller.activate { spy } // started (count 1)
+            controller.activate { _ in spy } // started (count 1)
             controller.apply() // still enabled + server != nil → no restart
             XCTAssertEqual(spy.startCount, 1, "apply while already running must not restart")
+        }
+
+        /// Each start asks for a new token rather than reusing the first one.
+        func testEveryStartBuildsTheServerWithANewToken() {
+            var enabled = true
+            var tokensMade = 0
+            var builtWith: [String] = []
+            let controller = RPCServerController(
+                isEnabled: { enabled },
+                envForceEnabled: { false },
+                makeToken: {
+                    tokensMade += 1
+                    return "token-\(tokensMade)"
+                },
+            )
+            controller.activate { token in
+                builtWith.append(token)
+                return SpyServer()
+            }
+            enabled = false
+            controller.apply() // stop
+            enabled = true
+            controller.apply() // start again
+            XCTAssertEqual(builtWith, ["token-1", "token-2"])
         }
     }
 #endif

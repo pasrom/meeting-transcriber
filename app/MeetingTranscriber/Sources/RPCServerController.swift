@@ -19,7 +19,7 @@
     // MARK: - RPCServerController
 
     /// Owns the debug RPC server's lifecycle: the launch-time enable gate, the
-    /// settings-driven start/stop, and the security token rotation on re-enable.
+    /// settings-driven start/stop, and a fresh bearer token for every start.
     ///
     /// Extracted from `AppState` as a concern-specific controller (see the AppState
     /// god-class split). `AppState` keeps the state projection (`rpcStateSnapshot`)
@@ -34,28 +34,27 @@
 
         private let isEnabled: () -> Bool
         private let envForceEnabled: () -> Bool
-        private let rotateToken: () -> Void
-        private var makeServer: (() -> (any RPCServing)?)?
+        private let makeToken: () -> String
+        private var makeServer: ((String) -> (any RPCServing)?)?
 
         init(
             isEnabled: @escaping () -> Bool,
             envForceEnabled: @escaping () -> Bool = { DebugRPCServer.enabled },
-            rotateToken: @escaping () -> Void = { _ = DebugRPCServer.rotateToken() },
+            makeToken: @escaping () -> String = { DebugRPCServer.makeToken() },
         ) {
             self.isEnabled = isEnabled
             self.envForceEnabled = envForceEnabled
-            self.rotateToken = rotateToken
+            self.makeToken = makeToken
         }
 
         /// Wire the server factory, run the launch-time enable gate, and arm the
         /// settings observer. Called once from `AppState.init`.
         ///
         /// Launch gate: the env var force-enables OR the persisted setting is on.
-        /// No token rotation here — that's intentional, preserving back-compat with
-        /// `scripts/test_rpc.sh` + CI which set the env var at launch. After init,
-        /// the setting is the sole driver via `apply()`, so toggling off mid-session
-        /// works even when the env var was set at launch.
-        func activate(makeServer: @escaping () -> (any RPCServing)?) {
+        /// After init, the setting is the sole driver via `apply()`, so toggling
+        /// off mid-session works even when the env var was set at launch.
+        /// `makeServer` receives the bearer token the server must accept.
+        func activate(makeServer: @escaping (String) -> (any RPCServing)?) {
             self.makeServer = makeServer
             if envForceEnabled() || isEnabled() {
                 start()
@@ -63,14 +62,11 @@
             observe()
         }
 
-        /// Reconcile the server with the current setting (the toggle path). On a
-        /// toggle off → on we rotate the bearer token before starting the listener:
-        /// any token scraped while the server was previously running is invalidated
-        /// by the act of turning it off and on again — the same gesture a user
-        /// already performs to "reset" the feature.
+        /// Reconcile the server with the current setting (the toggle path). A
+        /// toggle off → on starts a new server, and with it a new token (see
+        /// `start()`).
         func apply() {
             if isEnabled(), server == nil {
-                rotateToken()
                 start()
             } else if !isEnabled(), let server {
                 server.stop()
@@ -87,8 +83,17 @@
             // `self.server`, dropping the last strong ref to the live instance #1
             // while instance #2 fails to bind the already-held port. The toggle-off
             // path that stops + nils `server` re-opens this gate as intended.
-            guard server == nil else { return }
-            guard let server = makeServer?() else { return }
+            guard server == nil, let makeServer else { return }
+            // A fresh token for every start, the launch included. A token that
+            // outlived the previous run may already be known to another local
+            // process: clients send it to whoever listens on the port, and while
+            // the app is not running that can be anyone, who could then replay it
+            // once the app is back. The server takes the token from here rather
+            // than re-reading the file, so the two cannot disagree. `mt-cli` and
+            // the scripts read the file for each run, so a restart costs them
+            // nothing.
+            let token = makeToken()
+            guard let server = makeServer(token) else { return }
             server.start()
             self.server = server
         }
