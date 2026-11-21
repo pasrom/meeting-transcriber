@@ -1434,6 +1434,30 @@ record_only_violation() {
     fi
 }
 
+# echo_suppressed_violation <job-json> <min>: why the job left fewer than <min>
+# microphone segments out of its transcript, or nothing at all when it left
+# enough. A missing or non-numeric count and a record jq cannot read fail too:
+# none of them shows that anything was removed, and jq orders every string
+# above every number, so a count of "0" would otherwise clear any floor. An
+# empty record is refused before jq, which reads it as no input and says nothing.
+# jq's output is kept only when it succeeds, so a record that is not JSON, not
+# shaped like a job or followed by junk gives one reason, not a partial verdict
+# with the error appended.
+echo_suppressed_violation() {
+    case "$2" in
+        '' | *[!0-9]*) printf 'the floor %s is not a count' "${2:-<empty>}"; return 0 ;;
+    esac
+    [ -n "$1" ] || { printf 'the job record is empty'; return 0; }
+    local out
+    out="$(jq -r --argjson min "$2" '
+        .echo.suppressedSegments as $n
+        | if ($n | type) != "number" then "no suppressedSegments count in the verdict"
+          elif $n < $min then "\($n) segment(s) suppressed, below the floor of \($min)"
+          else empty end' <<<"$1" 2>/dev/null)" \
+        || { printf 'jq could not read the job record (not JSON, or not shaped like a job)'; return 0; }
+    printf '%s' "$out"
+}
+
 # NOT LOOKING IS NOT THE SAME AS FINDING NOTHING, and both callers read this
 # function's OUTPUT, so the distinction has to live in its status. Two ways to
 # come back empty without having looked, both measured:

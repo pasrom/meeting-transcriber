@@ -65,19 +65,26 @@ pauses inside the source add to the gate's rather than fighting it.
 Standard library only: the runner has no third-party Python and this must not
 grow a dependency to keep working.
 
-Measured by the lane itself with the defaults below, app=two_speakers_de.wav
-(49.8 s), local=three_speakers_de.wav:
+Measured by the lane itself on the CI runner with the defaults below,
+app=two_speakers_de.wav (49.8 s), local=three_speakers_de.wav:
 
   --bleed 0    0 of 4 windows affected  → not detected, 0 segments removed
-  --bleed 1.0  4 of 4 windows affected  → detected,     4 segments removed
+  --bleed 1.0  4 of 4 windows affected  → detected,     3 segments removed,
+                                          23 transcript lines left
 
 Both margins are wide, and they are wide in opposite directions, which is the
-property the lane depends on. The removal count is reported rather than
-asserted at that exact value: it is a yield, and a yield moves with the ASR.
-What the lane pins is that the affected pair loses segments and the control
-loses none. Against the linear pair the same run removed 10 and left a 15 line
-transcript, against this one it removes 4 and leaves 20 — the same classifier,
-the same source audio, and the difference is entirely the two terms above.
+property the lane depends on. The removal count is a yield of segmentation and
+the ASR, and the lane now asserts it as a floor on purpose: every retained run
+since late August 2026 removed 3 and left 23 lines (49 of 49 runs, 24 Aug to
+21 Nov, across FluidAudio 0.15.5 to 0.18.3), so one fewer is a change to look
+at rather than noise. The count depends on the machine and the ASR, and a run
+elsewhere may read a different number; the floor and how to re-measure it sit
+next to _ECHO_BLEED_MIN_SUPPRESSED in e2e-app.sh. The control loses nothing on
+any machine.
+
+Against the linear pair the classifier removed far more: one run measured 10
+segments removed and 15 lines left, against 4 and 20 for this pair (numbers
+the runner has never read), the difference being entirely the two terms above.
 
 The bleed gain sits near unity rather than well below it because that is what
 an affected recording looks like: a microphone a few centimetres from the
