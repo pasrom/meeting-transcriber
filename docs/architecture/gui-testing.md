@@ -129,6 +129,8 @@ wiring and `/state` pins the resulting window/job state.
 never a `SecureField`). It posts real key events, because an AX set-value does *not*
 fire the SwiftUI binding; that asymmetry is why there is no `/ui/setValue`. Pass
 `clear: true` to replace rather than append, or the assertion depends on the field's
-prior contents. Reaching a control outside the General tab needs a tab switch first,
-and only `POST /ui/press` with `"via": "click"` performs one — the AX press reports
-success on a sidebar row without selecting it.
+prior contents. Plain text only: characters a key event turns into a command are
+refused (the list is in `docs/architecture/debug-rpc.md`). Reaching a control
+outside the General tab needs a tab switch first, and only `POST /ui/press` with
+`"via": "click"` performs one — the AX press reports success on a sidebar row
+without selecting it.

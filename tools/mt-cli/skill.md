@@ -49,7 +49,7 @@ The app writes a 64-hex bearer token to
 | `GET /screenshot`   | `mt-cli screenshot` | PNG of the largest visible app window (Settings only) |
 | `GET /ui/tree`      | `mt-cli ui-tree`    | Accessibility tree JSON (allowlisted windows) |
 | `POST /ui/press`    | `mt-cli ui-press`   | Press a control by identifier (allowlisted windows); assert via `state` |
-| `POST /ui/type`     | (curl)              | Type text into an allowlisted plain text field; assert via `state` |
+| `POST /ui/type`     | (curl)              | Type text into an allowlisted plain text field; assert via `state`. Plain text only; what gets 400 is listed in `docs/architecture/debug-rpc.md` |
 | `POST /action/openSettings` / `closeSettings` | `mt-cli open-settings` / `close-settings` | Show or hide the Settings window |
 | `POST /action/confirmBrowserConsent` | `mt-cli confirm-browser-consent` | Answer a parked browser-meeting consent prompt |
 | `POST /action/skipNaming` | (curl)         | Skip every pending speaker-naming job |

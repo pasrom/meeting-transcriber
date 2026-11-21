@@ -299,6 +299,41 @@
             XCTAssertEqual(response.status, 400)
         }
 
+        /// Text that a key event would turn into a command is refused before any
+        /// window work (why: `DebugRPCServer.containsKeyCommand`).
+        @MainActor
+        func testRouteRejectsTextThatWouldBeAKeyCommand() async {
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            // JSON escapes: Tab, Return, line feed, Escape, backtab, delete, a C1
+            // control (NEL), line and paragraph separators, CR LF (one Character
+            // of two scalars, so one key event), and the AppKit function-key
+            // range (down arrow, the range's ends).
+            for escaped in [
+                #"a\tb"#, #"a\rb"#, #"a\nb"#, #"a\u001bb"#, #"a\u0019b"#, #"a\u007fb"#, #"a\u0085b"#,
+                #"a\u2028b"#, #"a\u2029b"#, #"a\r\nb"#,
+                #"a\uf701b"#, #"a\uf700b"#, #"a\uf8feb"#,
+            ] {
+                let response = await server.route(authed(#"{"identifier":"micNameField","text":"\#(escaped)"}"#))
+                XCTAssertEqual(response.status, 400, "text \(escaped) must be refused")
+            }
+        }
+
+        /// The filter must not catch ordinary names: accents, other scripts,
+        /// emoji (including a joined sequence), the Apple logo, a code point just
+        /// below the function-key range, and spaces are text.
+        @MainActor
+        func testRouteAcceptsOrdinaryNameText() async {
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            let name = "Speaker A \u{00E9}\u{00F1} \u{5F20}\u{4F1F} \u{1F44B}\u{1F3FD} \u{1F469}\u{200D}\u{1F4BB} \u{F8FF} \u{F6FF}"
+            XCTAssertFalse(DebugRPCServer.containsKeyCommand(name))
+            let body = try? JSONEncoder().encode(["identifier": "micNameField", "text": name])
+
+            let response = await server.route(authed(String(data: body ?? Data(), encoding: .utf8) ?? ""))
+
+            // 503: past every request check, but this process has no live window.
+            XCTAssertEqual(response.status, 503)
+        }
+
         @MainActor
         func testTextAtTheCapIsAccepted() async {
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }

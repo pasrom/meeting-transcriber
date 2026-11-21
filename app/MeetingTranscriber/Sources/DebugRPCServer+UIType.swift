@@ -18,7 +18,8 @@
         /// field. Select-all only selects; the replacement happens because the
         /// following keystroke overwrites the selection, so with nothing typed the
         /// old text survives. Emptying a field would need a delete keystroke,
-        /// which this endpoint does not send.
+        /// which this endpoint does not send and refuses in `text` (see
+        /// `containsKeyCommand`).
         let clear: Bool
 
         /// Hand-rolled so `clear` can be omitted by the caller yet stay a plain
@@ -108,6 +109,29 @@
             uiTypeAllowedIdentifiers.contains(identifier)
         }
 
+        /// Whether `text` holds a character that a key event turns into a
+        /// command instead of text: a control character (Tab, Return, Escape,
+        /// backtab, delete, C1 controls), a line or paragraph separator, or a
+        /// character in the range AppKit reserves for function keys (arrows,
+        /// page and function keys), U+F700 to U+F8FE. U+F8FF stays allowed: it
+        /// is the Apple logo, ordinary text a keyboard types.
+        ///
+        /// The allowlists only decide which field is focused before the first
+        /// keystroke; each character then goes to whatever is first responder at
+        /// that moment. Measured on a live Settings window: a Tab moved focus out
+        /// of the allowlisted field into the sidebar, and the following letters
+        /// (or a down arrow) switched the Settings tab, a navigation only the
+        /// `/ui/press` allowlist is meant to grant. Text for a name field needs
+        /// none of these characters.
+        nonisolated static func containsKeyCommand(_ text: String) -> Bool {
+            text.unicodeScalars.contains { scalar in
+                switch scalar.properties.generalCategory {
+                case .control, .lineSeparator, .paragraphSeparator: true
+                default: (0xF700 ... 0xF8FE).contains(scalar.value)
+                }
+            }
+        }
+
         /// Depth-first search for the first element whose identifier matches, then
         /// act on it: `.disabled` (found but not accepting input, never typed
         /// into), `.typed` (found, enabled, filled), or `.notFound`. Identifiers
@@ -187,14 +211,15 @@
             }
         }
 
-        /// `POST /ui/type` handler. 400 undecodable body / empty identifier, 403
-        /// window or identifier off its allowlist, 503 allowed window not open,
-        /// 404 identifier absent, 409 present-but-disabled, 200 dispatched
-        /// (`{"dispatched":<bool>}`).
+        /// `POST /ui/type` handler. 400 undecodable body / empty identifier /
+        /// text over the cap or holding a key command, 403 window or identifier
+        /// off its allowlist, 503 allowed window not open, 404 identifier absent,
+        /// 409 present-but-disabled, 200 dispatched (`{"dispatched":<bool>}`).
         func uiTypeResponse(body: Data) -> HTTPResponse {
             guard let payload = try? JSONDecoder().decode(UITypePayload.self, from: body),
                   !payload.identifier.isEmpty,
-                  payload.text.count <= Self.uiTypeMaxTextLength
+                  payload.text.count <= Self.uiTypeMaxTextLength,
+                  !Self.containsKeyCommand(payload.text)
             else { return HTTPResponse.badRequest() }
             let windowID = payload.window ?? Self.defaultUITypeWindow
             guard Self.isWindowAllowedForUIType(identifier: windowID),
