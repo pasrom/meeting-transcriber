@@ -4574,6 +4574,18 @@ _echo_enqueue() {
 # report a two-minute wait instead of the error that caused it.
 _ECHO_SETTLED='.echo != null or .state == "done" or .state == "error"'
 
+# Segments the affected pair of --echo-bleed must have left out of its
+# transcript: the count every measured run reported, not a token 1. On the CI
+# runner it read 3 in every retained E2E (Production App) log since late August
+# 2026: 49 of 49 runs, 24 Aug to 21 Nov, across FluidAudio 0.15.5 to 0.18.3
+# (for example main runs 43807053481 and 44866705316). The fixture is
+# deterministic, but the count is a yield of segmentation and the ASR on the
+# machine that runs the lane, so a run elsewhere may read another number and a
+# model or VAD change can move it. To re-measure, read the log line
+# "[echo-bleed]: N microphone segment(s) left out of the transcript"; MEASURED
+# in scripts/tests/test_echo_suppressed_violation.sh moves with this value.
+_ECHO_BLEED_MIN_SUPPRESSED=3
+
 # Waits for the verdict on $1 and leaves it in $_ECHO_STATUS (the caller's,
 # through bash's dynamic scoping: the lane declares it for the post-loop
 # assertions, the same shape the naming lanes use).
@@ -4649,7 +4661,7 @@ run_echo_bleed() {
     local affected_status="$_ECHO_STATUS"
 
     jq -e '.echo.detected == true' <<<"$affected_status" >/dev/null \
-        || fail "$label: affected pair NOT detected. The microphone track is the app track delayed 15 ms at unit gain, which is the condition itself: $(jq -c '.echo' <<<"$affected_status")"
+        || fail "$label: affected pair NOT detected. Its microphone track carries the app track delayed 15 ms at bleed gain 1.0, with a room tail and a slow gain swing on top, beside gated local speech, which is the condition itself: $(jq -c '.echo' <<<"$affected_status")"
     # Measured 4 of 4 windows on this fixture. Asserting a floor well under that
     # keeps the lane from re-litigating the threshold, while still failing if the
     # verdict decays to a single lucky window.
@@ -4698,9 +4710,11 @@ run_echo_bleed() {
     # bleed copy is not stable enough to grep for, while "how many microphone
     # segments were left out" is exactly the effect, and it is the number a fleet
     # caller reads.
-    jq -e '.echo.suppressedSegments >= 1' <<<"$final" >/dev/null \
-        || fail "$label: affected pair had nothing suppressed. Its microphone track IS the app track, so every microphone segment is a duplicate: $(jq -c '.echo' <<<"$final")"
-    log "$label: $(jq -r '.echo.suppressedSegments' <<<"$final") microphone segment(s) left out of the transcript ✅"
+    local violation
+    violation="$(echo_suppressed_violation "$final" "$_ECHO_BLEED_MIN_SUPPRESSED")"
+    [ -z "$violation" ] \
+        || fail "$label: affected pair: $violation. Either a duplicate of the far end reached the transcript, or segmentation or the ASR changed what this pair yields and the floor _ECHO_BLEED_MIN_SUPPRESSED needs re-measuring: $(jq -c '.echo' <<<"$final")"
+    log "$label: $(jq -r '.echo.suppressedSegments' <<<"$final") microphone segment(s) left out of the transcript (floor $_ECHO_BLEED_MIN_SUPPRESSED) ✅"
 
     # The control that stops this from being "drop the microphone track". Without
     # it the lane passes against a build that removes the user's own words from
