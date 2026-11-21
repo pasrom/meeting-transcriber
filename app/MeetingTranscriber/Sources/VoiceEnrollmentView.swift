@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Three-stage sheet that seeds `speakers.json` from an existing audio file:
 /// 1. Pick file → 2. Diarize → 3. Name speakers (reuses `SpeakerNamingView`)
@@ -171,18 +172,19 @@ struct VoiceEnrollmentView: View {
 
     // MARK: - Actions
 
-    /// Builds the configured file panel. Split out of `pickFile` so a test can
-    /// assert what the panel actually offers — `runModal()` is a modal loop and
-    /// stays manual-QA-only, but its configuration does not have to be.
-    static func makeFilePanel() -> NSOpenPanel {
-        let panel = NSOpenPanel()
+    /// Builds the configured file panel from `make`. Split out of `pickFile` so a
+    /// test can assert it on a stand-in: a real `NSOpenPanel` under a
+    /// `CFFIXED_USER_HOME` with `//` in it starts a panel service that grows by
+    /// gigabytes (#1024).
+    static func makeFilePanel<P: FilePanelSettings>(_ make: () -> P) -> P {
+        let panel = make()
         panel.allowedContentTypes = AudioImportTypes.enrollmentTypes
         panel.allowsMultipleSelection = false
         return panel
     }
 
     private func pickFile(initialDirectory: URL?) {
-        let panel = Self.makeFilePanel()
+        let panel = Self.makeFilePanel { NSOpenPanel() }
         if let initialDirectory {
             try? FileManager.default.createDirectory(
                 at: initialDirectory, withIntermediateDirectories: true,
@@ -353,3 +355,12 @@ enum VoiceEnrollmentLogic {
         )
     }
 }
+
+/// The `NSOpenPanel` settings `VoiceEnrollmentView` applies.
+@MainActor
+protocol FilePanelSettings: AnyObject {
+    var allowedContentTypes: [UTType] { get set }
+    var allowsMultipleSelection: Bool { get set }
+}
+
+extension NSOpenPanel: FilePanelSettings {}
