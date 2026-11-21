@@ -163,16 +163,21 @@ final class VoiceEnrollmentViewTests: XCTestCase { // swiftlint:disable:this bal
 
     /// Enrolling a voice from a phone call recording is a prime use case, and
     /// `public.3gpp` conforms to `.audiovisualContent` only — an `.audio`-only
-    /// filter hides `.3gp` files. Asserted against the real panel object, so it
-    /// covers the binding and not just the type list feeding it.
+    /// filter hides `.3gp` files. Asserted on a stand-in: a real panel can start
+    /// a panel service that grows by gigabytes (#1024).
     func testFilePanelAcceptsPhoneRecordings() throws {
-        let panel = VoiceEnrollmentView.makeFilePanel()
+        let panel = VoiceEnrollmentView.makeFilePanel { PanelSettingsSpy() }
         let threeGP = try XCTUnwrap(UTType(filenameExtension: "3gp"))
         XCTAssertTrue(
             panel.allowedContentTypes.contains { threeGP.conforms(to: $0) },
             "enrollment panel must offer phone call recordings",
         )
         XCTAssertFalse(panel.allowsMultipleSelection, "enrollment takes exactly one voice sample")
+    }
+
+    private final class PanelSettingsSpy: FilePanelSettings {
+        var allowedContentTypes: [UTType] = []
+        var allowsMultipleSelection = true
     }
 
     // MARK: - Inlined namingBody closure (covers the call-site switch on Outcome)
