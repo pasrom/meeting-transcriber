@@ -38,6 +38,8 @@ extension XCTestCase {
     ///   `WatchingControllerChannelFaultTests` for when that is not enough.
     /// - Parameter captionFlushOverride: replaces starting the live-caption flush
     ///   on leaving `.recording`; nil keeps the production flush.
+    /// - Parameter liveTranscription: the coordinator to use; nil builds one with
+    ///   live captions off.
     func makeWatchingController(
         logDir: URL,
         notifier: any AppNotifying = RecordingNotifier(),
@@ -54,6 +56,7 @@ extension XCTestCase {
         makeRecorder: @escaping @MainActor () -> any RecordingProvider = { makeMockRecorder() },
         captionFlushOverride: (@MainActor () -> Void)? = nil,
         micMuteHotkeyRegistrar: any HotkeyRegistering = GlobalHotkeyRegistrar(),
+        liveTranscription: LiveTranscriptionCoordinator? = nil,
     ) -> WatchingController {
         // Own defaults suite, like `makeRPCTestState`: `AppSettings()` on
         // `.standard` writes into the test host's real preferences, and
@@ -98,7 +101,7 @@ extension XCTestCase {
         )
         let permissions = PermissionsController(notifier: notifier)
         permissions.handle(permissionHealth)
-        let liveTranscription = LiveTranscriptionCoordinator(
+        let liveTranscription = liveTranscription ?? LiveTranscriptionCoordinator(
             captions: LiveCaptionsState(),
             liveEnabled: { false },
             engineSupportsLive: { false },

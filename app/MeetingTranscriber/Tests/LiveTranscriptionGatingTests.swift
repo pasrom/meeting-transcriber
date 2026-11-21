@@ -105,6 +105,48 @@ final class LiveTranscriptionGatingTests: XCTestCase {
         XCTAssertTrue(controller.echoCancellationEnabled(), "live captions must follow AppSettings.echoCancellationEnabled")
     }
 
+    /// The live transcript file follows `AppSettings.liveTranscriptFileEnabled`, read per call.
+    func testLiveControllerReadsTranscriptFileSetting() throws {
+        settings.transcriptionEngine = .parakeet
+        settings.parakeetLanguage = "en"
+        settings.liveTranscriptionEnabled = true
+        settings.liveTranscriptFileEnabled = false
+        let directory = makeTempFile(suffix: "-gating-transcripts")
+        var built: LiveTranscriptionController?
+        let inert = inertLiveControllerFactory()
+        let state = try AppState(
+            pipelineEnvironment: makeIsolatedPipelineEnvironment(),
+            settings: settings,
+            liveTranscriptDirectory: directory,
+        ) { engine, captions, language, verbose in
+            let controller = inert(engine, captions, language, verbose)
+            built = controller
+            return controller
+        }
+        _ = state
+        let factory = try XCTUnwrap(built?.transcriptFileFactory, "live captions on must prewarm a controller")
+        XCTAssertNil(factory(), "off opens no file")
+        settings.liveTranscriptFileEnabled = true
+        let file = try XCTUnwrap(factory(), "live captions must follow AppSettings.liveTranscriptFileEnabled")
+        XCTAssertEqual(
+            file.url.deletingLastPathComponent().standardizedFileURL, directory.standardizedFileURL,
+            "AppState hands its folder to the coordinator",
+        )
+    }
+
+    /// The last synchronous step before exit writes `end` to a live transcript the
+    /// quit's budget did not let finish.
+    func testTearDownBeforeExitEndsALiveTranscriptStillWaiting() throws {
+        let state = try AppState(pipelineEnvironment: makeIsolatedPipelineEnvironment(), settings: settings)
+        let file = try XCTUnwrap(LiveTranscriptFile.open(in: makeTempFile(suffix: "-teardown")))
+        file.eventsInFlight.enter() // a match that never returns
+        state.liveTranscription.transcriptEnds.end(file, waitingUpTo: .seconds(30))
+
+        state.tearDownBeforeExit()
+
+        XCTAssertTrue(try String(contentsOf: file.url, encoding: .utf8).contains(#""type":"end""#))
+    }
+
     // MARK: - shouldShowLiveCaptions (recording + overlay)
 
     /// Pins `AppState.shouldShowLiveCaptions` reading `settings.liveCaptionsOverlayEnabled`

@@ -12,6 +12,7 @@ extension WatchingController {
     /// Whether a quit has to wait for watching or recording to finish.
     var hasWorkBeforeQuit: Bool {
         manualStartTask != nil || watchLoop?.hasWorkBeforeQuit == true || !unfinishedRecordingWork.isEmpty
+            || !liveTranscription.transcriptEnds.isEmpty
     }
 
     /// Wait for loops Stop Watching let go of to finish their mix before a
@@ -44,5 +45,9 @@ extension WatchingController {
         await watchLoop?.finishForQuit()
         watchLoop = nil
         await unfinishedRecordingWork.waitForAll()
+        // Stopping the recording started its caption flush; the live transcript gets its
+        // last lines and `end` once that flush and the end it starts have run. Inside
+        // the quit's recording budget, like the stop itself.
+        await liveTranscription.transcriptEnds.waitForAll()
     }
 }

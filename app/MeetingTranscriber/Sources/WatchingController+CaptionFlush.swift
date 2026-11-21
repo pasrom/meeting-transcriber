@@ -18,12 +18,20 @@ extension WatchingController {
 
     /// ASR retention must cover the buffered caption tail after recording stops.
     /// A count also covers overlapping stop/quick-restart flush tasks.
+    /// With a live transcript open, held in `transcriptEnds` so a quit waits for it:
+    /// the flush writes the recording's last lines and starts its `end`. Without one
+    /// it writes nothing to disk, and a quit does not wait for it.
     func flushLiveTranscriptionAfterRecording() {
         captionFlushesInFlight += 1
-        Task { @MainActor [weak self] in
+        let flush: @MainActor () async -> Void = { [weak self] in
             guard let self else { return }
             defer { self.captionFlushesInFlight -= 1 }
             await self.liveTranscription.flush()
+        }
+        if liveTranscription.hasOpenTranscriptFile {
+            liveTranscription.transcriptEnds.track(flush)
+        } else {
+            Task { await flush() }
         }
     }
 }

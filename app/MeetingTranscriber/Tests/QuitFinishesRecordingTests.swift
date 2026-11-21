@@ -68,6 +68,68 @@ final class QuitFinishesRecordingTests: XCTestCase {
         XCTAssertFalse(loop.isActive)
     }
 
+    // MARK: - Live transcript
+
+    /// A live transcript whose `end` still waits for its events holds the quit, and
+    /// `finishForQuit` returns only once that `end` is written.
+    func testAQuitWaitsForALiveTranscriptEnd() async throws {
+        let watching = try makeWatchingController(logDir: makeTempDirectory(prefix: "quit_transcript"))
+        let file = try XCTUnwrap(LiveTranscriptFile.open(in: makeTempFile(suffix: "-quit-transcript")))
+        file.eventsInFlight.enter()
+        watching.liveTranscription.transcriptEnds.end(file, waitingUpTo: .seconds(30))
+        XCTAssertTrue(watching.hasWorkBeforeQuit, "a quit let through now would exit before the end")
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(100))
+            file.eventsInFlight.leave()
+        }
+        await watching.finishForQuit()
+
+        XCTAssertTrue(try String(contentsOf: file.url, encoding: .utf8).contains(#""type":"end""#))
+        XCTAssertFalse(watching.hasWorkBeforeQuit)
+    }
+
+    /// With a live transcript open, the stop-time caption flush is work a quit waits
+    /// for from the moment it is started, before its task ran: it writes the last
+    /// lines and starts the `end`.
+    func testACaptionFlushThatEndsATranscriptHoldsTheQuit() async throws {
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: LiveCaptionsState(),
+            liveEnabled: { true },
+            engineSupportsLive: { true },
+            verboseDiagnostics: { false },
+            transcriptFileEnabled: { true },
+            transcriptDirectory: makeTempFile(suffix: "-quit-flush"),
+            recorderStarted: { _ in true },
+            makeController: { engine, captions, language, verbose in
+                LiveTranscriptionController(
+                    engine: engine, vad: FluidVAD(threshold: 0.5), captions: captions,
+                    speakerMatcher: FakeLiveSpeakerMatcher(), engineLanguage: language,
+                    eouSessionFactory: { MockEouManager(loadError: nil) }, verboseDiagnostics: verbose,
+                )
+            },
+        )
+        coordinator.beginPrewarm { MockStreamingEngine() }
+        await coordinator.attachSinks(to: DualSourceRecorder())
+        let watching = try makeWatchingController(logDir: makeTempDirectory(prefix: "quit_flush"), liveTranscription: coordinator)
+        XCTAssertFalse(watching.hasWorkBeforeQuit, "precondition")
+
+        watching.flushLiveTranscriptionAfterRecording()
+
+        XCTAssertTrue(watching.hasWorkBeforeQuit)
+        await watching.finishForQuit()
+    }
+
+    /// Without a live transcript the flush writes nothing to disk, so a quit does not
+    /// wait for it, as before the file existed.
+    func testACaptionFlushWithoutATranscriptDoesNotHoldTheQuit() throws {
+        let watching = try makeWatchingController(logDir: makeTempDirectory(prefix: "quit_flush_off"))
+
+        watching.flushLiveTranscriptionAfterRecording()
+
+        XCTAssertFalse(watching.hasWorkBeforeQuit)
+    }
+
     func testAnIdleLoopHasNothingToWaitFor() {
         let (loop, _) = makeTestWatchLoop()
         XCTAssertFalse(loop.hasWorkBeforeQuit)

@@ -337,6 +337,13 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(liveTranscriptionEnabled, forKey: "liveTranscriptionEnabled") }
     }
 
+    /// Spike: when on, each recording with live captions also writes its finalized
+    /// lines to a JSON Lines file under `AppPaths.liveTranscriptsDir`, for a local
+    /// agent to follow. No Settings row yet. Default: off.
+    var liveTranscriptFileEnabled: Bool {
+        didSet { defaults.set(liveTranscriptFileEnabled, forKey: "liveTranscriptFileEnabled") }
+    }
+
     /// Overlay-window visibility only. Live transcription still runs when the
     /// master toggle is on; this setting only hides `LiveCaptionsOverlay`.
     /// Default on, so existing users keep seeing the bar. Missing UserDefaults
@@ -934,6 +941,7 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         micMuteHotkey = defaults.data(forKey: "micMuteHotkey").flatMap { try? JSONDecoder().decode(GlobalHotkey.self, from: $0) }
         silentTrackWatchdogEnabled = defaults.bool(forKey: "silentTrackWatchdogEnabled", default: false)
         liveTranscriptionEnabled = defaults.bool(forKey: "liveTranscriptionEnabled", default: false)
+        liveTranscriptFileEnabled = defaults.bool(forKey: "liveTranscriptFileEnabled", default: false)
         liveCaptionsOverlayEnabled = defaults.bool(forKey: "liveCaptionsOverlayEnabled", default: true)
         liveCaptionsSize = defaults.string(forKey: "liveCaptionsSize")
             .flatMap(LiveCaptionsSize.init(rawValue:)) ?? .medium

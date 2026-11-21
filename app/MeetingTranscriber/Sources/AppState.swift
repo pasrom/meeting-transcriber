@@ -228,10 +228,9 @@ final class AppState {
     init(
         pipelineEnvironment: PipelineController.QueueEnvironment,
         settings: AppSettings = AppState.makeDefaultSettings(),
-        notifier: any AppNotifying = SilentNotifier(),
-        updateChecker: UpdateChecker? = nil,
-        liveControllerFactory: @escaping LiveTranscriptionCoordinator.ControllerFactory =
-            LiveTranscriptionCoordinator.makeDefaultController,
+        notifier: any AppNotifying = SilentNotifier(), updateChecker: UpdateChecker? = nil,
+        liveTranscriptDirectory: URL = AppPaths.liveTranscriptsDir,
+        liveControllerFactory: @escaping LiveTranscriptionCoordinator.ControllerFactory = LiveTranscriptionCoordinator.makeDefaultController,
     ) {
         // Dependency defaults are resolved through explicitly-typed factory
         // helpers (above) rather than inline `?? SomeType()` expressions (and an
@@ -266,6 +265,7 @@ final class AppState {
             engineLanguage: { [settings] in settings.activeEngineLanguageOrNil },
             verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
             echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },
+            transcriptFileEnabled: { [settings] in settings.liveTranscriptFileEnabled }, transcriptDirectory: liveTranscriptDirectory,
             makeController: liveControllerFactory, warmupQueue: warmupQueue,
         )
         self.watching = WatchingController(

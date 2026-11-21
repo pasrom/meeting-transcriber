@@ -145,6 +145,27 @@ final class LiveTranscriptionController {
     /// Called before `prepare()` loads the shared engine, so the owner can hold its model.
     var willLoadEngine: (() -> Void)?
 
+    /// Opens the live transcript file for a recording, or returns nil when that is
+    /// off. Called once per recording by `prepareForNextRecording()`, so a settings
+    /// change applies from the next recording. Nil (the default) writes nothing.
+    var transcriptFileFactory: (() -> LiveTranscriptFile?)?
+    /// The current recording's live transcript, behind a lock so the event sink reads it
+    /// where the pipeline hands an event over: an event goes to the file that was current
+    /// then, even when its main-actor task runs after the next recording began. A kept
+    /// streaming session can still emit the last call's tail after a call split's swap.
+    let transcriptFileSlot = OSAllocatedUnfairLock<LiveTranscriptFile?>(initialState: nil)
+    /// The current recording's live transcript, if one is written.
+    var transcriptFile: LiveTranscriptFile? {
+        transcriptFileSlot.withLock { $0 }
+    }
+
+    /// How long ending a transcript waits for its events still in flight before it
+    /// writes `end` anyway: four times the slowest live speaker match measured (0.5 s).
+    var transcriptEndWait: Duration = .seconds(2)
+    /// Where ended files wait for their events; the coordinator shares one across its
+    /// controllers, so a quit can wait for all of them.
+    var transcriptEnds = LiveTranscriptEnds()
+
     /// Why `prepare()` ended with no caption model loaded; nil while it runs and
     /// when captions can run (a fallback to re-transcribe included).
     private(set) var prepareFailure: String?
@@ -408,6 +429,18 @@ final class LiveTranscriptionController {
         // this start. The generation bump below drops its result; `eouLoad` keeps the models.
         switchTask?.cancel()
         switchTask = nil
+        // A call split starts the next recording without a flush. What the last
+        // recording's feeds still hold is drained first, so its finals reach its file;
+        // `.stopping` keeps a language switch from installing pipelines meanwhile.
+        runtimeState = .stopping
+        await retireFeeds()
+        let file = transcriptFileFactory?()
+        // Exchanged in one step, so a final handed over meanwhile finds a file.
+        let previous = transcriptFileSlot.withLock { slot in
+            defer { slot = file }
+            return slot
+        }
+        if let previous { transcriptEnds.end(previous, waitingUpTo: transcriptEndWait) }
         languageDecision = CaptionLanguageProbeDecision()
         runtimeState = usesLanguageProbe ? .detecting : .keeping
         // A detected language holds for one recording; the next one probes afresh.
