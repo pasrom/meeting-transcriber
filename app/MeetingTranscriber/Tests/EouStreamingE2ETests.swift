@@ -1,13 +1,11 @@
 import AudioTapLib
-import FluidAudio
 import Foundation
 @testable import MeetingTranscriber
 import XCTest
 
 /// Real-model end-to-end proof for the English low-latency streaming-captions
-/// path. Drives a REAL `StreamingEouAsrManager(chunkSize: .ms320)` (the same
-/// Parakeet EOU 120M streaming model the production English-streaming backend
-/// builds, see `LiveTranscriptionController.makeDefaultEouManager`) through the
+/// path. Drives the REAL production manager
+/// (`LiveTranscriptionController.makeDefaultEouManager`) through the
 /// production `EouStreamingCaptionSession` actor, feeding the committed English
 /// fixture in realtime-SIZED chunks back-to-back.
 ///
@@ -65,9 +63,7 @@ final class EouStreamingE2ETests: XCTestCase {
         let samples = try await loadFixtureAs16kMono(fixture)
         XCTAssertFalse(samples.isEmpty, "fixture decoded to no samples")
 
-        // Build the production session over a REAL manager at the production
-        // chunk size + debounce.
-        let manager = StreamingEouAsrManager(chunkSize: .ms320, eouDebounceMs: 1280)
+        let manager = await LiveTranscriptionController.makeDefaultEouManager()
         let collector = EventCollector()
         let session = EouStreamingCaptionSession(asr: manager, channelLabel: "e2e") { event in
             collector.append(event)
