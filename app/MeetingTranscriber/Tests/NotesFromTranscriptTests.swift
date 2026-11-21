@@ -389,7 +389,7 @@ final class NotesFromTranscriptTests: XCTestCase {
                 notifier: notifier,
             )
 
-            let response = await state.buildDebugRPCServer(token: "t").route(HTTPRequest(
+            let response = await state.buildDebugRPCServer(token: "t", tokenFile: nil).route(HTTPRequest(
                 method: "POST", path: "/v1/jobs/notes/generate",
                 headers: ["authorization": "Bearer t"], body: Data(#"{"paths":["\#(url.path)"]}"#.utf8),
             ))

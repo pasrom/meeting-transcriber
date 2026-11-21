@@ -13,8 +13,9 @@
     /// Bind: `127.0.0.1:9876`. Two layers of defense:
     /// - Origin-header reject blocks browser CSRF / DNS-rebinding (`fetch()` from a
     ///   page on the user's machine sends Origin; curl and native CLIs don't).
-    /// - Bearer-token auth read from `~/Library/Application Support/MeetingTranscriber/.rpc-token`
-    ///   (chmod 0600) keeps other local users on a shared Mac out and adds
+    /// - Bearer-token auth, the token written to
+    ///   `~/Library/Application Support/MeetingTranscriber/.rpc-token` (chmod 0600)
+    ///   and replaced at every server start, keeps other local users on a shared Mac out and adds
     ///   defense-in-depth against compromised processes that lack read access
     ///   to the user's data dir.
     @MainActor
@@ -94,7 +95,13 @@
         let recordControl: (RecordAction) async -> RecordControlOutcome // POST /v1/record
         let meetingNotes: MeetingNotesActions // POST /v1/jobs/<id>/notes/retry, /v1/jobs/notes/retry
         var idempotency = IdempotencyStore() // Idempotency-Key -> job IDs; internal for the +V1 extension
+        private let token: String
         private let expectedAuth: String
+        /// Where to publish `token` once the listener is ready; nil publishes
+        /// nothing (tests). Written only after the bind succeeded: a server that
+        /// cannot bind, because another instance sharing the data folder holds
+        /// the port, must not replace the token that instance is serving.
+        private let tokenFile: URL?
         private var listener: NWListener?
         /// OS-assigned port once the listener is `.ready`. Useful for tests
         /// that bind to port 0 and need to know where to connect back.
@@ -105,8 +112,9 @@
         }
 
         init(
-            port: UInt16 = DebugRPCServer.defaultPort,
-            token: String = DebugRPCServer.loadOrCreateToken(),
+            port: UInt16,
+            token: String,
+            tokenFile: URL? = nil,
             snapshot: @escaping () -> RPCStateSnapshot,
             speakerActions: SpeakerDBActions = .noop,
             skipNaming: @escaping () -> Void = {},
@@ -126,7 +134,9 @@
             meetingNotes: MeetingNotesActions = MeetingNotesActions(),
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
+            self.token = token
             self.expectedAuth = "Bearer \(token)"
+            self.tokenFile = tokenFile
             self.snapshot = snapshot
             self.speakerActions = speakerActions
             self.skipNaming = skipNaming
@@ -146,44 +156,43 @@
             self.meetingNotes = meetingNotes
         }
 
-        /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
-        /// Reuses an existing non-empty file so `mt-cli` survives across launches.
-        nonisolated static func loadOrCreateToken(at url: URL = tokenFileURL) -> String {
-            if let data = try? Data(contentsOf: url),
-               let existing = String(data: data, encoding: .utf8)?
-                   .trimmingCharacters(in: .whitespacesAndNewlines),
-               !existing.isEmpty {
-                return existing
-            }
-            return rotateToken(at: url)
-        }
-
-        /// Unconditionally write a fresh 32-byte hex token to `url`. Used by the
-        /// settings toggle so that flipping the server off → on invalidates any
-        /// previously-leaked token. Mode 0600 is set at create time to avoid
-        /// the brief 0644 window a write-then-chmod sequence would have.
-        @discardableResult
-        nonisolated static func rotateToken(at url: URL = tokenFileURL) -> String {
+        /// A fresh 32-byte hex token. `RPCServerController` makes one for every
+        /// server start, so a token never outlives the server it was made for.
+        nonisolated static func makeToken() -> String {
             var bytes = [UInt8](repeating: 0, count: 32)
             // SecRandomCopyBytes returning non-zero means the buffer is
-            // unmodified (all zeros) — refuse to write that as a token.
+            // unmodified (all zeros), so it must not become the token.
             guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
                 logger.error("DebugRPCServer: SecRandomCopyBytes failed; using UUID fallback")
                 return UUID().uuidString
             }
-            let token = bytes.map { String(format: "%02x", $0) }.joined()
-            try? FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-            )
-            // Remove any prior file so createFile re-applies the 0600 attribute
-            // even if the existing inode had drifted to a looser mode.
-            try? FileManager.default.removeItem(at: url)
-            FileManager.default.createFile(
-                atPath: url.path,
-                contents: Data(token.utf8),
-                attributes: [.posixPermissions: 0o600],
-            )
-            return token
+            return bytes.map { String(format: "%02x", $0) }.joined()
+        }
+
+        /// Replace the token file at `url` with `token`, mode 0600. Written to a
+        /// temporary file and renamed over the old one, so a client reading at
+        /// that moment sees the old token or the new one, never a missing or
+        /// half-written file. The temporary file gets mode 0600 in the `open`
+        /// call itself, before any byte is written; `FileManager.createFile
+        /// (attributes:)` documents no such order (not measured either way).
+        /// Returns whether the file now holds `token`.
+        nonisolated static func writeToken(_ token: String, to url: URL) -> Bool {
+            let dir = url.deletingLastPathComponent()
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let temp = dir.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString)")
+            let data = Array(token.utf8)
+            let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL, mode_t(FileManager.ownerOnlyPermissions))
+            let written = fd >= 0 && write(fd, data, data.count) == data.count
+            var failure = errno // before close() can overwrite it
+            if fd >= 0 { close(fd) }
+            let renamed = written && rename(temp.path, url.path) == 0
+            if written, !renamed { failure = errno }
+            guard renamed else {
+                try? FileManager.default.removeItem(at: temp)
+                logger.error("DebugRPCServer: could not write the token file (errno \(failure, privacy: .public))")
+                return false
+            }
+            return true
         }
 
         /// Start listening. Failures (port in use, etc.) are logged and the
@@ -230,7 +239,7 @@
                 listener.stateUpdateHandler = { [weak self] state in
                     switch state {
                     case .ready:
-                        Task { @MainActor in self?.boundPort = self?.listener?.port?.rawValue }
+                        Task { @MainActor in self?.listenerBecameReady() }
 
                     case let .failed(error):
                         // Without this, a post-start bind failure (e.g. the
@@ -255,6 +264,20 @@
             } catch {
                 logger.error("DebugRPCServer failed to start: \(error.localizedDescription, privacy: .public)")
             }
+        }
+
+        /// The bind succeeded: publish the token, then record the port. Only now
+        /// does the file stop describing whichever server held the port before.
+        /// A server whose token cannot be written stops: no client could reach
+        /// it, and a running server would claim otherwise.
+        private func listenerBecameReady() {
+            guard let listener else { return }
+            if let tokenFile, !Self.writeToken(token, to: tokenFile) {
+                logger.error("DebugRPCServer: stopping, clients could not authenticate without the token file")
+                stop()
+                return
+            }
+            boundPort = listener.port?.rawValue
         }
 
         /// Cancel the listener and free the port. Idempotent.
