@@ -112,18 +112,36 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
 
     private let collector = CallbackCollector()
 
+    /// Nearest enrolled voice of a short window, for cutting lines where the voice changes.
+    typealias VoiceProbe = @Sendable ([Float]) async -> LiveSpeakerMatch
+    private let voiceProbe: VoiceProbe?
+    private var voiceDetector = VoiceChangeDetector()
+    /// End of the next window to probe, in samples.
+    private var nextProbeEnd = Int(VoiceChangeDetector.window * 16000)
+    /// Running transcript by audio time since the last EOU, to find the words spoken before a change.
+    private var transcriptHistory: [(time: TimeInterval, transcript: String)] = []
+
     /// 16 kHz: 1 ms == 16 samples (fixed; the whole live path is 16 kHz mono).
     private static let samplesPerMs = 16
+    /// A word shows in the transcript about one 320 ms chunk after it is spoken.
+    static let transcriptLag: TimeInterval = 0.32
+    /// Quieter windows are silence: probing them names no one.
+    static let minProbeRMS: Float = 0.005
+    /// Audio queued behind this window is a replayed hold or a backlog: probing it would delay
+    /// the captions catching up, so those windows are skipped and break the detector's run.
+    static let maxProbeBacklog: TimeInterval = VoiceChangeDetector.window
 
     init(
         asr: any EouStreamingAsrManaging,
         channelLabel: String,
         splitter: StreamingCaptionSplitter = StreamingCaptionSplitter(),
+        voiceProbe: VoiceProbe? = nil,
         onEvent: @escaping StreamingTranscriber.EventSink,
     ) {
         self.asr = asr
         self.channelLabel = channelLabel
         self.splitter = splitter
+        self.voiceProbe = voiceProbe
         self.onEvent = onEvent
     }
 
@@ -149,7 +167,7 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
     /// order — see the `LiveCaptionPipeline` contract), which is what keeps
     /// ring order == manager feed order and the EOU-ms → ring-slice mapping
     /// valid without any re-entrancy machinery here.
-    func ingest(_ buffer: LiveAudioBuffer, backlog _: @Sendable () -> TimeInterval) async {
+    func ingest(_ buffer: LiveAudioBuffer, backlog: @Sendable () -> TimeInterval) async {
         guard buffer.channelCount == 1, buffer.sampleRate == 16000 else { return }
         await installCallbacksIfNeeded()
         guard let pcm = Self.makeBuffer(buffer.samples) else { return }
@@ -175,6 +193,35 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         // Callbacks fire only for new tokens, so silence must also advance the audio clock.
         let update = splitter.update(runningTranscript, audioTime: audioTime)
         emit(update, throughMs: ingestedSamples / Self.samplesPerMs, speechEndMs: Int(splitter.changedAt * 1000))
+        await probeVoice(behind: backlog() > Self.maxProbeBacklog)
+    }
+
+    /// Probes each due window and, once the detector confirms another voice, ends the line where it began.
+    private func probeVoice(behind: Bool) async {
+        guard let voiceProbe else { return }
+        let window = Int(VoiceChangeDetector.window * 16000)
+        while ingestedSamples >= nextProbeEnd {
+            let end = nextProbeEnd
+            nextProbeEnd += Int(VoiceChangeDetector.hop * 16000)
+            let samples = ring.extract(fromMs: (end - window) / Self.samplesPerMs, toMs: end / Self.samplesPerMs)
+            let rms = samples.isEmpty ? 0 : (samples.reduce(0) { $0 + $1 * $1 } / Float(samples.count)).squareRoot()
+            let match = behind || rms < Self.minProbeRMS ? LiveSpeakerMatch.unknown : await voiceProbe(samples)
+            if let change = voiceDetector.add(windowEnd: Double(end) / 16000, match: match) {
+                cutLine(at: change)
+            }
+        }
+    }
+
+    private func cutLine(at change: VoiceChangeDetector.Change) {
+        let spoken = transcriptHistory.last { $0.time <= change.at + Self.transcriptLag }?.transcript ?? ""
+        if let line = splitter.cut(spoken) {
+            let cutMs = max(audioCursorMs, Int(change.at * 1000))
+            onEvent(.finalized(text: line, audio: ring.extract(fromMs: audioCursorMs, toMs: cutMs)))
+            audioCursorMs = cutMs
+            lastEmittedPartial = ""
+        }
+        onEvent(.voiceChanged(change.voice))
+        emit(splitter.update(runningTranscript, audioTime: audioTime), throughMs: ingestedSamples / Self.samplesPerMs)
     }
 
     /// Recording stopped — commit the trailing utterance via `finish()`
@@ -212,6 +259,9 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         lastEmittedPartial = ""
         splitter.reset()
         ingestedSamples = 0
+        voiceDetector = VoiceChangeDetector()
+        nextProbeEnd = Int(VoiceChangeDetector.window * 16000)
+        transcriptHistory = []
     }
 
     // MARK: - Callbacks
@@ -247,6 +297,9 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
 
     private func handlePartial(_ text: String) {
         runningTranscript = strippingPrefix(from: text)
+        transcriptHistory.append((audioTime, runningTranscript))
+        // A change is confirmed ~2.5 s after it starts; older states are never looked up.
+        transcriptHistory.removeAll { $0.time < audioTime - 10 }
         emit(splitter.update(runningTranscript, audioTime: audioTime), throughMs: ingestedSamples / Self.samplesPerMs)
     }
 
@@ -262,6 +315,7 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         runningTranscript = ""
         lastEmittedPartial = ""
         splitter.reset()
+        transcriptHistory = []
     }
 
     /// `speechEndMs` ends the slice before the pause that closed the line, so the

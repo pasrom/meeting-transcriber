@@ -46,6 +46,7 @@ struct LiveCaptionsOverlay: View {
         let rows = Self.rows(
             finals: state.recentFinals,
             awaiting: state.awaitsSpeaker(lineAt:),
+            voiceHint: state.voiceHint(for:),
             hypotheses: [(.app, state.hypothesisApp), (.mic, state.hypothesisMic)],
             label: state.label(for:),
         )
@@ -84,10 +85,12 @@ struct LiveCaptionsOverlay: View {
     }
 
     /// Consecutive finals of one channel and speaker share a row, and a hypothesis or a final still
-    /// awaiting its speaker continues the row before it when that row is on its channel.
+    /// awaiting its speaker continues the row before it when that row is on its channel, unless the
+    /// voice change detector heard another voice take over that channel.
     static func rows(
         finals: [LiveCaptionLine],
         awaiting: (Int) -> Bool = { _ in false },
+        voiceHint: (LiveCaptionChannel) -> String? = { _ in nil },
         hypotheses: [(LiveCaptionChannel, String)],
         label: (LiveCaptionChannel) -> String,
     ) -> [Row] {
@@ -101,16 +104,18 @@ struct LiveCaptionsOverlay: View {
         }
         for (index, line) in finals.enumerated() {
             // Under the channel label until its match lands, it flashed a row of its own.
-            if awaiting(index), let last = rows.last, last.channel == line.channel {
+            if awaiting(index), line.speaker == label(line.channel), let last = rows.last, last.channel == line.channel {
                 rows[rows.count - 1].text += " " + line.text
             } else {
                 add(line.channel, line.speaker, line.text)
             }
         }
         for (channel, text) in hypotheses where !text.isEmpty {
-            // Unmatched yet, so it continues the bottom row when that row is on its channel; under the
-            // channel label it stood in a row of its own below every named row.
-            if let last = rows.last, last.channel == channel {
+            if let voice = voiceHint(channel) {
+                add(channel, voice, text)
+            } else if let last = rows.last, last.channel == channel {
+                // Unmatched yet, so it continues the bottom row when that row is on its channel; under the
+                // channel label it stood in a row of its own below every named row.
                 rows[rows.count - 1].text += " " + text
             } else {
                 add(channel, label(channel), text)

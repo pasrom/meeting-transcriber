@@ -83,6 +83,34 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
         )
     }
 
+    /// The wiring: the EOU sessions probe the speaker matcher for voice changes.
+    func testEouSessionsProbeTheSpeakerMatcherForVoiceChanges() async {
+        let probe = EouFactoryProbe()
+        let matcher = FakeLiveSpeakerMatcher()
+        let eouFactory: LiveTranscriptionController.EouSessionFactory = { probe.make() }
+        let controller = LiveTranscriptionController(
+            engine: nil,
+            vad: FluidVAD(threshold: 0.5),
+            captions: LiveCaptionsState(),
+            speakerMatcher: matcher,
+            engineLanguage: "en",
+            eouSessionFactory: eouFactory,
+        )
+        await controller.prepare()
+        controller.appSink(LiveAudioBuffer(
+            samples: [Float](repeating: 0.1, count: 32000), channelCount: 1, sampleRate: 16000, hostTime: 0,
+        ))
+        let deadline = ContinuousClock.now + .seconds(2)
+        while await matcher.probeCount == 0, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let probes = await matcher.probeCount
+        let matches = await matcher.matchCount
+        XCTAssertGreaterThan(probes, 0)
+        XCTAssertEqual(matches, 0, "a probe is not a line match: it must not load the model or read the DB")
+        await controller.flush()
+    }
+
     // MARK: - 2. prepare()-failure fallback to the re-transcribe path
 
     func testEouLoadFailureFallsBackToReTranscribeWhenEngineSupportsLive() async {
