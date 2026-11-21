@@ -25,9 +25,12 @@
         ///
         /// `keyCode` is left at 0 for every character: text insertion reads the
         /// event's `characters`, so a per-character virtual keycode would mean
-        /// carrying a keyboard-layout table for no behavioural gain. Callers that
-        /// need real key semantics (arrows, Tab, anything the responder switches on
-        /// by code) must build those events with their proper keycodes instead.
+        /// carrying a keyboard-layout table for no behavioural gain. A keycode of
+        /// 0 does not make a command character harmless: a Tab or an arrow
+        /// character still acts as one, so this is for plain text only, and
+        /// `/ui/type` refuses the rest (`DebugRPCServer.containsKeyCommand`).
+        /// Callers that need real key semantics must build those events with
+        /// their proper keycodes instead.
         private static func post(
             characters: String, modifiers: NSEvent.ModifierFlags, in window: NSWindow,
         ) {
@@ -49,7 +52,7 @@
         }
 
         /// Type `text` into `window`'s first responder, one key pair per character.
-        /// The caller focuses the target field first.
+        /// The caller focuses the target field first and passes plain text only.
         static func type(_ text: String, into window: NSWindow) {
             for character in text {
                 post(characters: String(character), modifiers: [], in: window)
