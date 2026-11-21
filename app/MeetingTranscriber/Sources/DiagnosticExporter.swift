@@ -233,8 +233,9 @@ enum DiagnosticExporter {
     }
 
     /// An error as its domain and code only. The description is left out on
-    /// purpose: it can carry a file path, and with it the user name.
-    private static func errorCode(_ error: any Error) -> String {
+    /// purpose: it can carry a file path, and with it the user name. Also
+    /// used by the debug `GET /log` route.
+    static func errorCode(_ error: any Error) -> String {
         let nsError = error as NSError
         return "error domain \(nsError.domain), code \(nsError.code)"
     }

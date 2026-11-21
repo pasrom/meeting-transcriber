@@ -26,4 +26,4 @@ What the audio-capture path logs, verbose and unconditional, and how to read it.
 
 The process-state reads run on their own queue (`com.meetingtranscriber.audiotap.diagnostics`), never on the write queue: that is the IOProc's delivery queue and `AppTapSession.destroy()` drains it with a `sync`, so a HAL read wedged there would wedge every teardown behind it (issue #588). One read at a time, so a wedged one costs a single parked thread rather than a pile.
 
-View via Console.app, subsystem `com.meetingtranscriber.audiotap`. Off by default; turn on when investigating silent recordings or unusual routing.
+Verbose diagnostic logging is off by default; turn it on when investigating silent recordings or unusual routing. View the lines via Console.app, subsystem `com.meetingtranscriber.audiotap`, or, with the Local Automation API on, from the shell through the debug route `GET /log` (see `debug-rpc.md`).
