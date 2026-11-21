@@ -62,6 +62,14 @@ final class LiveTranscriptionCoordinator {
     private let engineLanguage: () -> String?
     private let verboseDiagnostics: () -> Bool
     private let echoCancellationEnabled: () -> Bool
+    /// Read at each recording start: whether to write that recording's live transcript file.
+    private let transcriptFileEnabled: () -> Bool
+    private let transcriptDirectory: URL
+    /// Whether a recorder `attachSinks` prepared for is running, read once its start ran.
+    private let recorderStarted: @MainActor (DualSourceRecorder) -> Bool
+    /// Transcript ends and stop-time flushes still running, shared by every controller
+    /// built here; a quit waits for them (`WatchingController.finishForQuit`).
+    let transcriptEnds = LiveTranscriptEnds()
     private let makeController: ControllerFactory
 
     /// Shared serial warm-up queue. The controller's `prepare()` (the heavy
@@ -93,6 +101,9 @@ final class LiveTranscriptionCoordinator {
         engineLanguage: @escaping () -> String? = { nil },
         verboseDiagnostics: @escaping () -> Bool,
         echoCancellationEnabled: @escaping () -> Bool = { false },
+        transcriptFileEnabled: @escaping () -> Bool = { false },
+        transcriptDirectory: URL = AppPaths.liveTranscriptsDir,
+        recorderStarted: @escaping @MainActor (DualSourceRecorder) -> Bool = LiveTranscriptionCoordinator.isRunning,
         makeController: @escaping ControllerFactory = LiveTranscriptionCoordinator.makeDefaultController,
         warmupQueue: ModelWarmupQueue = ModelWarmupQueue(),
     ) {
@@ -102,6 +113,9 @@ final class LiveTranscriptionCoordinator {
         self.engineLanguage = engineLanguage
         self.verboseDiagnostics = verboseDiagnostics
         self.echoCancellationEnabled = echoCancellationEnabled
+        self.transcriptFileEnabled = transcriptFileEnabled
+        self.transcriptDirectory = transcriptDirectory
+        self.recorderStarted = recorderStarted
         self.makeController = makeController
         self.warmupQueue = warmupQueue
     }
@@ -175,12 +189,43 @@ final class LiveTranscriptionCoordinator {
         // async `prepare()`), so sinks attach and captions light up when the load
         // finishes. If it was never warmed, this recording gets no captions and
         // they come online at the next idle prewarm.
-        guard captionsEligible, let controller else { return }
+        guard captionsEligible, let controller else {
+            // A call split into a recording without captions runs no flush and no
+            // `prepareForNextRecording()`, so the previous call's file ends here, unless
+            // a stop-time flush started, which ends it after the tail finals it emits.
+            if controller?.pendingFlush == nil { controller?.endTranscriptFile() }
+            return
+        }
         attachInFlight = true
         defer { attachInFlight = false }
         await controller.prepareForNextRecording()
         recorder.micLiveSink = controller.micSink
         recorder.appLiveSink = controller.appSink
+        // A recorder whose start throws never reaches `.recording`, so no stop-time
+        // flush would end the file just opened, which holds only `start`. Removed, so a
+        // start that keeps failing leaves no file per retry. The start runs right after
+        // this returns, in the same main-actor turn, so this task sees its outcome.
+        Task { @MainActor [weak self, weak controller] in
+            guard let self, let controller, self.controller === controller, !self.recorderStarted(recorder) else { return }
+            controller.discardTranscriptFile()
+        }
+    }
+
+    /// `recorderStarted` in production: whether the recorder's start went through.
+    static func isRunning(_ recorder: DualSourceRecorder) -> Bool {
+        recorder.isRecording
+    }
+
+    /// Whether a recording's live transcript is open, so its stop-time flush will end it.
+    var hasOpenTranscriptFile: Bool {
+        controller?.transcriptFile != nil
+    }
+
+    /// Writes `end` at once to every live transcript still open or still waiting for
+    /// its events. Called right before the process exits, after a quit had its budget.
+    func endTranscriptsNow() {
+        transcriptEnds.endAllNow()
+        controller?.endTranscriptFileNow()
     }
 
     /// Flush the live controller's pending tail utterance when recording stops.
@@ -249,6 +294,10 @@ final class LiveTranscriptionCoordinator {
     /// Drop the controller and stop the rest of its warm-up, so a stale one does
     /// not hold the warm-up queue ahead of its successor's.
     private func dropController() {
+        // A file of a dropped controller would otherwise stay open without `end`. A
+        // stop-time flush already started ends it itself, after the tail finals it
+        // still emits; ending it here would drop them.
+        if controller?.pendingFlush == nil { controller?.endTranscriptFile() }
         controller?.cancelPrepare()
         controller = nil
         captionsUseEngine = false
@@ -298,7 +347,11 @@ final class LiveTranscriptionCoordinator {
         let controller = makeController(streamingEngine, captions, language, verboseDiagnostics)
         controller.modelDownloads = modelDownloads
         controller.echoCancellationEnabled = echoCancellationEnabled
+        controller.transcriptEnds = transcriptEnds
         self.controller = controller
+        controller.transcriptFileFactory = { [transcriptFileEnabled, transcriptDirectory] in
+            transcriptFileEnabled() ? LiveTranscriptFile.open(in: transcriptDirectory) : nil
+        }
         let started = Date()
         warmup = .preparing(since: started)
         logger.notice("Live caption warm-up started (language: \(language ?? "auto", privacy: .public))")

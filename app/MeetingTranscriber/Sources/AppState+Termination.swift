@@ -15,6 +15,8 @@ extension AppState: AppTerminating {
     }
 
     func tearDownBeforeExit() {
+        // What the quit's budget did not let finish: an `end` now, so a reader stops.
+        liveTranscription.endTranscriptsNow()
         #if !APPSTORE
             stopPersistentLogStreamer()
         #endif

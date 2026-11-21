@@ -33,6 +33,9 @@ enum AppPaths {
     /// IPC directory: under `dataDir` for sandbox compatibility.
     static let ipcDir = dataDir.appendingPathComponent("ipc", isDirectory: true)
 
+    /// Live transcript files (`LiveTranscriptFile`), one JSON Lines file per recording.
+    static let liveTranscriptsDir = dataDir.appendingPathComponent("live-transcripts", isDirectory: true)
+
     /// Recordings directory.
     static let recordingsDir = dataDir.appendingPathComponent("recordings", isDirectory: true)
 

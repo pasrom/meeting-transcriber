@@ -280,6 +280,8 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `LiveTranscriptionController+EventSink.swift` | The event sink every caption pipeline delivers its partials and finals through, to the captions and the speaker matcher |
 | `LiveTranscriptionController+Sinks.swift` | Recording audio sinks forwarding each channel to its caption and language-probe feeds |
 | `CaptionLanguageProbe.swift` | Per-channel VAD probe that collects 4 s of speech for language detection, and the pure decision rule (probability ≥ 0.8, two English windows for EOU, up to 4 attempts) |
+| `LiveTranscriptFile.swift` | Opt-in, append-only JSON Lines file of one recording's finalized live captions, for a local tool to follow (see `architecture/transcription.md`) |
+| `LiveTranscriptEnds.swift` | Live transcript ends still waiting for their events, and the caption flushes that start them, for a quit to wait for and the exit to finish |
 | `LiveTranscriptionCoordinator.swift` | `@Observable` coordinator: builds + arms `LiveTranscriptionController`, feeds `LiveCaptionsState` |
 | `LiveCaptionPipeline.swift` | Per-channel live captioning strategy protocol (English EOU streaming \| Nemotron streaming \| WhisperKit/Parakeet re-transcribe) |
 | `LiveCaptionsGate.swift` | Pure decision logic for live captions routing: master toggle + explicit engine language (`en` → English EOU streaming, a language in `LiveCaptionLanguages` → Nemotron streaming, auto-detect or any other language → re-transcribe or none) — shared by `AppState`, coordinator, and controller. Overlay visibility is a separate UI AND (`overlayVisible`); it is not a strategy input |
@@ -484,6 +486,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `FileManager+OwnerOnly.swift` | `FileManager` extension: owner-only file permission constant (`rw-------`) as single source of truth |
 | `UserDefaults+Bool.swift` | Reads a stored flag tolerantly (`defaults write`'s untyped "1"/"yes"/"true" strings count), unlike a plain `object(forKey:) as? Bool` cast (issue #814) |
 | `SecurityScopeAccess.swift` | Opens and closes security-scoped access to a user-picked folder, always on the bookmark-resolved root URL, never on a URL derived or rebuilt from it |
+| `InFlightCounter.swift` | Counts work handed to tasks of its own and waits, with a deadline, until none is left |
 | `KeyedSerialGate.swift` | Runs async bodies that share a key one at a time; a waiter runs its own body afterwards (unlike `SingleFlight`, it does not take the running one's outcome) |
 | `SingleFlight.swift` | Single-flight async deduplication coordinator (concurrent callers await one shared run and receive its outcome) |
 | `RPCServerController.swift` | `@Observable` controller owning `DebugRPCServer` lifecycle (`#if !APPSTORE`, wired by `AppState`) |

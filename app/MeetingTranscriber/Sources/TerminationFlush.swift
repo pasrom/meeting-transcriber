@@ -239,7 +239,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Each phase has its own budget, so a slow recording stop cannot
             // use up the time the flush after it needs.
             if await !TerminationFlush.run(within: recordingBudget, { await termination.finishRecordingBeforeQuit() }) {
-                log("Quit: the recording budget (\(recordingBudget)) ran out; a mix it cut off is left to crash recovery")
+                log(
+                    "Quit: the recording budget (\(recordingBudget)) ran out; a mix it cut off is left to crash recovery, "
+                        + "and a live transcript still waiting for its last lines gets its end at exit",
+                )
             }
             let flushedInTime = await TerminationFlush.run(within: flushBudget) {
                 await termination.flushSnapshotsBeforeQuit()

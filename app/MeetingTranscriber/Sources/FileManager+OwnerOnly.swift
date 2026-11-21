@@ -6,6 +6,9 @@ extension FileManager {
     /// agrees and the value can't drift between call sites.
     static let ownerOnlyPermissions = 0o600
 
+    /// POSIX mode for an owner-only folder (`rwx------`).
+    static let ownerOnlyDirectoryPermissions = 0o700
+
     /// Restrict an already-written file to owner-only read/write (mode 0600),
     /// clearing the world/group-readable bits that a plain `.write(to:)`
     /// inherits from the process umask (typically 0644).

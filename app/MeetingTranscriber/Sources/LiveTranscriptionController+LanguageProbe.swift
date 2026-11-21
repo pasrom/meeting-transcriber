@@ -52,6 +52,7 @@ extension LiveTranscriptionController {
             _ = await (mic, app)
             self.micCaptionChain = nil
             self.echoReference.clear(collecting: false)
+            self.endTranscriptFile()
         }
         pendingFlush = task
         return task
