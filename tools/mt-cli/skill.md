@@ -18,6 +18,7 @@ machen" / "ist das im Menü sichtbar".
 - You want to drive a control (press a toggle/button) and check the effect → `mt-cli ui-press <identifier> --window settings`, then `mt-cli state`. A Settings sidebar tab row (e.g. `settings-tab-about`) needs `--via click` — a plain press reports success without actually selecting the row
 - You want to start or stop meeting watching without touching the menu bar → `mt-cli watch start` / `mt-cli watch stop` (prefer these over `toggle`, which flips blind)
 - You want to record the microphone for an in-person meeting → `mt-cli record start` / `mt-cli record stop`. A `412` means nothing would be recorded ("No Microphone" is set, or the mic permission is denied), and it will not clear by retrying; a `409` means something else is being recorded and the request refused rather than clobber it
+- You want the app's own recent log lines → `mt-cli log --since 120`, then filter with `jq` on `.entries[].subsystem` / `.category` / `.message`. A `429` means another log read is still running in the app; wait and retry. A `503` means the app cannot read its own log store; observed once on the self-hosted CI runner (non-admin account, under AddressSanitizer, Quality & Safety run 44952578295); the cause is not isolated
 - You're debugging a UI bug and would otherwise have to ask the user to describe state
 - You're verifying a fix end-to-end after editing code
 
@@ -46,6 +47,7 @@ The app writes a 64-hex bearer token to
 | ------------------- | ------------------- | ---------------------------------- |
 | `GET /healthz`      | `mt-cli healthz`    | "ok"                               |
 | `GET /state`        | `mt-cli state`      | Pipeline + speaker DB JSON         |
+| `GET /log`          | `mt-cli log`        | The app's own recent log entries JSON (`?since=<seconds>&limit=<n>`) |
 | `GET /screenshot`   | `mt-cli screenshot` | PNG of the largest visible app window (Settings only) |
 | `GET /ui/tree`      | `mt-cli ui-tree`    | Accessibility tree JSON (allowlisted windows) |
 | `POST /ui/press`    | `mt-cli ui-press`   | Press a control by identifier (allowlisted windows); assert via `state` |

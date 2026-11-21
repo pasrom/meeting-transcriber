@@ -61,6 +61,11 @@ struct RPCClient {
     /// after the caller disconnects.
     static let controlTimeoutSeconds: TimeInterval = 30
 
+    /// `GET /log` walks the app's unified-log entries since the cutoff, which
+    /// took about 2 s in a short-lived test process and grows with how long
+    /// the app has run.
+    static let logTimeoutSeconds: TimeInterval = 30
+
     static func loadDefault() throws -> Self {
         let url = defaultTokenURL
         guard let data = try? Data(contentsOf: url),
