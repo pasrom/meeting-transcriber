@@ -353,6 +353,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `DebugRPCServer+UIPress.swift` | `POST /ui/press` handler — presses an allowlisted control via in-process `AXUIElementPerformAction`, or via `MouseInjection` when `"via":"click"` is requested |
 | `DebugRPCServer+UIType.swift` | `POST /ui/type` handler — types into an allowlisted plain-text field via `KeyboardInjection` |
 | `DebugRPCServer+AXElement.swift` | Shared self-pid `AXUIElement` tree walk backing `/ui/tree` and `/ui/press` |
+| `DebugRPCServer+Log.swift` | `GET /log` handler: the app's own recent unified-log entries via `OSLogStore(scope: .currentProcessIdentifier)`, read off the main actor, one read at a time |
 | `DebugRPCServer+MeetingNotes.swift` | `POST /v1/jobs/<id>/notes/retry`, `POST /v1/jobs/notes/retry` and `POST /v1/jobs/notes/generate`, wired through `MeetingNotesActions` |
 | `SpeakerDBActions.swift` | Outcome and closure types of the speaker-DB `/action/*` routes (line-cap split from `DebugRPCServer.swift`) |
 | `KeyboardInjection.swift` | Types text into the app's own UI via posted key events (not an AX set-value, which wouldn't fire a SwiftUI `TextField` binding) — backs `POST /ui/type` |

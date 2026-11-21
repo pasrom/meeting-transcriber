@@ -95,6 +95,8 @@
         let recordControl: (RecordAction) async -> RecordControlOutcome // POST /v1/record
         let meetingNotes: MeetingNotesActions // POST /v1/jobs/<id>/notes/retry, /v1/jobs/notes/retry
         var idempotency = IdempotencyStore() // Idempotency-Key -> job IDs; internal for the +V1 extension
+        let logReader: LogReader // GET /log; internal for the +Log extension
+        var logReadInFlight = false // GET /log serves one read at a time; internal for the +Log extension
         private let token: String
         private let expectedAuth: String
         /// Where to publish `token` once the listener is ready; nil publishes
@@ -132,6 +134,7 @@
             recordStatus: @escaping () -> RecordStatusDTO = { .notRecording },
             recordControl: @escaping (RecordAction) async -> RecordControlOutcome = { _ in .failed },
             meetingNotes: MeetingNotesActions = MeetingNotesActions(),
+            logReader: @escaping LogReader = DebugRPCServer.osLogStoreReader,
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.token = token
@@ -154,6 +157,7 @@
             self.recordStatus = recordStatus
             self.recordControl = recordControl
             self.meetingNotes = meetingNotes
+            self.logReader = logReader
         }
 
         /// A fresh 32-byte hex token. `RPCServerController` makes one for every
@@ -379,6 +383,10 @@
                 || Self.controlResourcePaths.contains(pathWithoutQuery) {
                 return await routeV1(request, path: pathWithoutQuery)
             }
+
+            // Debug log readback, off `/v1` on purpose (see `logResponse`). The
+            // raw target carries `?since=&limit=`.
+            if request.method == "GET", pathWithoutQuery == "/log" { return await logResponse(target: request.path) }
 
             // Debug `/ui/*` surface (tree, press, type) — no stability contract.
             if let uiResponse = routeUI(request, path: pathWithoutQuery) { return uiResponse }
