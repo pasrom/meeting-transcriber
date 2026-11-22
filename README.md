@@ -102,6 +102,8 @@ flowchart TD
 - **Record-only mode** — Skip the entire post-recording pipeline and drop dual-source recordings + a metadata sidecar into the output folder, for external/fleet processing (e.g. a separate GPU host)
 - **Local automation API** (Homebrew build): drive the pipeline headlessly over localhost HTTP. POST an audio file, get a diarized transcript back. See [`docs/automation-api.md`](docs/automation-api.md)
 - **Stream Deck and hotkey control** (Homebrew build): start/stop watching from a Stream Deck key, Shortcut, Raycast or any launcher. See [`docs/stream-deck.md`](docs/stream-deck.md)
+- **Mic mute in the recording**: mute and unmute your microphone track from the menu bar or an optional global shortcut, or have recordings start muted. Only the recording is silenced; people on the call still hear you
+- **Notion export**: optionally exports generated meeting notes to a Notion database in the background; re-export after speaker renaming replaces the page's content in place, and a failed export can be retried without re-running transcription or meeting notes generation
 - **Distribution** — Install via Homebrew Cask or build from source
 
 ---
@@ -251,10 +253,10 @@ Open Settings via the menu bar item or ⌘,.
 | Tab | What's in it |
 |---|---|
 | **General** | Startup (launch at login, start watching on open), record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack), detection timing |
-| **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
+| **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default), start recordings muted, mute mic shortcut |
 | **Transcription** | ASR engine (WhisperKit / Parakeet) and per-engine options (model incl. a custom WhisperKit model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
 | **Speakers** | Diarization, whether the naming window opens by itself, how long unnamed meetings wait before they get the automatic names, mic speaker name, known voices, recognition stats |
-| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), saved OpenAI-compatible connections (each with its own endpoint, model and API key), transcript-retention options, notes language, a notification when meeting notes fail (on by default; the menu then offers Retry Meeting Notes), output folder, custom prompt |
+| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), saved OpenAI-compatible connections (each with its own endpoint, model and API key), transcript-retention options, notes language, a notification when meeting notes fail (on by default; the menu then offers Retry Meeting Notes), output folder, custom prompt, Notion export |
 | **Advanced** | Permissions status, diagnostics, Local Automation API |
 | **About** | Version and build info, ffmpeg status, update checks |
 
@@ -332,7 +334,7 @@ The toggle persists in `UserDefaults` and takes effect on the next recording wit
 [![App Store Smoke](https://github.com/pasrom/meeting-transcriber/actions/workflows/appstore.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/appstore.yml)
 [![codecov](https://codecov.io/gh/pasrom/meeting-transcriber/branch/main/graph/badge.svg)](https://codecov.io/gh/pasrom/meeting-transcriber)
 
-Pull requests run unit tests, lint, and analyzer in [`ci.yml`](.github/workflows/ci.yml). Two complementary E2E layers run on a self-hosted Apple Silicon Mac mini against the real production models (no mocks): [`e2e.yml`](.github/workflows/e2e.yml) feeds fixture audio through each ASR engine + the WatchLoop pipeline, and [`e2e-app.yml`](.github/workflows/e2e-app.yml) builds and signs the actual `.app`, drives a simulated meeting via [`tools/meeting-simulator`](tools/meeting-simulator), and asserts on the resulting transcript over the embedded debug RPC server.
+Pull requests run unit tests, lint, and analyzer in [`ci.yml`](.github/workflows/ci.yml). E2E lanes run on a self-hosted Apple Silicon Mac mini, apart from a UI-harness smoke test on a GitHub-hosted runner. [`e2e.yml`](.github/workflows/e2e.yml) and [`e2e-app.yml`](.github/workflows/e2e-app.yml) run the real production models (no mocks): the first feeds fixture audio through each ASR engine + the WatchLoop pipeline, the second builds and signs the actual `.app`, drives a simulated meeting via [`tools/meeting-simulator`](tools/meeting-simulator), and asserts on the resulting transcript over the embedded debug RPC server. [`e2e-browser.yml`](.github/workflows/e2e-browser.yml) loads no model: it drives a Chromium browser with a local WebRTC tone page through meeting detection and the consent prompt (answered over the debug RPC) in record-only mode and asserts that the recorded app track is not silent; a best-effort nightly step repeats this in a real public Jitsi room. Further `e2e-*.yml` workflows cover narrower cases such as crash recovery, capture faults and a long-session soak.
 
 ---
 
