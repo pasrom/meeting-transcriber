@@ -39,9 +39,9 @@ final class LiveTranscriptionController {
     /// Builds the `EouStreamingAsrManaging` backend for one channel's English
     /// streaming session. Injectable so tests can substitute a mock manager (or
     /// a failing one) without loading the real Parakeet EOU CoreML models. The
-    /// production default constructs `StreamingEouAsrManager(chunkSize: .ms320)`
-    /// — built ONLY when the English-streaming path is actually taken, so the
-    /// default re-transcribe path never pays the model-instance memory.
+    /// production default is `makeDefaultEouManager()`, built ONLY when the
+    /// English-streaming path is actually taken, so the default re-transcribe
+    /// path never pays the model-instance memory.
     typealias EouSessionFactory = @MainActor () -> any EouStreamingAsrManaging
 
     /// Active engine for the VAD + re-transcribe path. Optional because the
@@ -204,9 +204,14 @@ final class LiveTranscriptionController {
     /// Production EOU backend: FluidAudio's cache-aware streaming Parakeet EOU
     /// manager at the 320 ms chunk size (WER/latency trade-off) with the
     /// default 1280 ms end-of-utterance debounce. Built lazily, one per channel,
-    /// only when the English-streaming path is taken.
+    /// only when the English-streaming path is taken. Loads on CPU + Neural
+    /// Engine (docs/architecture/transcription.md, live captions).
     static func makeDefaultEouManager() -> any EouStreamingAsrManaging {
-        StreamingEouAsrManager(chunkSize: .ms320, eouDebounceMs: 1280)
+        StreamingEouAsrManager(
+            configuration: MLModelConfigurationUtils.defaultConfiguration(computeUnits: .cpuAndNeuralEngine),
+            chunkSize: .ms320,
+            eouDebounceMs: 1280,
+        )
     }
 
     /// Warm the engine + VAD + speaker-matcher models and build both channel
