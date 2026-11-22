@@ -82,6 +82,127 @@ final class LiveCaptionEchoCancellerTests: XCTestCase {
         XCTAssertEqual(calls.microphones.count, 3)
     }
 
+    func testBacklogPassesMicrophoneThroughThenResumesWithFreshContext() async {
+        let calls = HopCalls()
+        let clock = FakeClock()
+        let pipeline = EchoOutputPipeline()
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: LiveCaptionEchoReference(), factory: {
+            calls.recordCreation()
+            return FakeCaptionHop(calls: calls) { mic, _ in
+                clock.advance(0.3)
+                return mic.map { $0 + 10 }
+            }
+        }, clock: clock.now)
+        await canceller.ingest(buffer(Array(repeating: 0, count: 8), endingAt: 10 + 8.0 / 16000)) { 0 }
+        await canceller.ingest(buffer(Array(repeating: 1, count: 8), endingAt: 10 + 16.0 / 16000)) { 0.9 }
+        await canceller.ingest(buffer(Array(repeating: 2, count: 8), endingAt: 10 + 24.0 / 16000)) { 1.1 }
+        await canceller.ingest(buffer(Array(repeating: 3, count: 8), endingAt: 10 + 32.0 / 16000)) { 0.5 }
+        await canceller.ingest(buffer(Array(repeating: 4, count: 8), endingAt: 10 + 40.0 / 16000)) { 0.25 }
+        await canceller.flush()
+
+        let buffers = await pipeline.buffers
+        let expected = ([10, 11, 2, 3, 14] as [Float]).flatMap { Array(repeating: $0, count: 8) }
+        XCTAssertEqual(
+            buffers.flatMap(\.samples),
+            expected,
+            "a backed-up queue must bypass past bypassBacklog, stay bypassed above resumeBacklog, and resume at resumeBacklog",
+        )
+        XCTAssertEqual(
+            buffers.map(\.hostTime),
+            [8, 16, 24, 32, 40].map { SampleRateDriftDetector.secondsToMachTicks(10 + Double($0) / 16000) },
+        )
+        XCTAssertEqual(calls.creations, 1, "resuming resets the context instead of reloading the model")
+        XCTAssertEqual(calls.resets, 1, "resuming starts from a fresh streaming state")
+    }
+
+    func testBacklogFromSlowASRKeepsCancelling() async {
+        let calls = HopCalls()
+        let clock = FakeClock()
+        // A 0.3 s ASR stall clears BusyWindow.minimumEvidence so asrLoad.share >= 1.0 and only the ASR clause keeps cancelling.
+        let pipeline = EchoOutputPipeline { clock.advance(0.3) }
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: LiveCaptionEchoReference(), factory: {
+            FakeCaptionHop(calls: calls) { mic, _ in mic.map { $0 + 10 } }
+        }, clock: clock.now)
+        await canceller.ingest(buffer(Array(repeating: 1, count: 8), endingAt: 10 + 8.0 / 16000)) { 0 }
+        await canceller.ingest(buffer(Array(repeating: 2, count: 8), endingAt: 10 + 16.0 / 16000)) { 3 }
+        await canceller.flush()
+
+        let received = await pipeline.buffers.flatMap(\.samples)
+        XCTAssertEqual(
+            received,
+            Array(repeating: 11, count: 8) + Array(repeating: 12, count: 8),
+            "passing through cannot drain a queue that ASR itself fills",
+        )
+    }
+
+    func testBacklogWithFastCancellerAndFastASRKeepsCancelling() async {
+        let calls = HopCalls()
+        let clock = FakeClock()
+        let pipeline = EchoOutputPipeline { clock.advance(0.00005) }
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: LiveCaptionEchoReference(), factory: {
+            FakeCaptionHop(calls: calls) { mic, _ in
+                clock.advance(0.0001)
+                return mic.map { $0 + 10 }
+            }
+        }, clock: clock.now)
+        // Mirrors a held language-probe replay (initial backlog > 1 s) followed by a draining backlog.
+        await canceller.ingest(buffer(Array(repeating: 1, count: 8), endingAt: 10 + 8.0 / 16000)) { 8 }
+        await canceller.ingest(buffer(Array(repeating: 2, count: 8), endingAt: 10 + 16.0 / 16000)) { 3 }
+        await canceller.flush()
+
+        let received = await pipeline.buffers.flatMap(\.samples)
+        XCTAssertEqual(
+            received,
+            Array(repeating: 11, count: 8) + Array(repeating: 12, count: 8),
+            "a backlog that canceller + ASR already drain faster than real time must stay cancelled",
+        )
+    }
+
+    func testMidBufferSlowHopBypassesRemainingHops() async {
+        let calls = HopCalls()
+        let clock = FakeClock()
+        let backlog = OSAllocatedUnfairLock(initialState: 0.0)
+        let pipeline = EchoOutputPipeline()
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: LiveCaptionEchoReference(), factory: {
+            FakeCaptionHop(calls: calls) { mic, _ in
+                clock.advance(0.3)
+                backlog.withLock { $0 = 2.0 }
+                return mic.map { $0 + 10 }
+            }
+        }, clock: clock.now)
+        let threeHops = Array(repeating: Float(1), count: 8) + Array(repeating: Float(2), count: 8) + Array(repeating: Float(3), count: 8)
+        await canceller.ingest(buffer(threeHops, endingAt: 10 + 24.0 / 16000)) { backlog.withLock { $0 } }
+        await canceller.flush()
+
+        let buffers = await pipeline.buffers
+        XCTAssertEqual(
+            buffers.map(\.samples),
+            [Array(repeating: 11, count: 8), Array(repeating: 2, count: 8) + Array(repeating: 3, count: 8)],
+            "a stalled hop must bypass the rest of the same buffer without slicing it into hops",
+        )
+        XCTAssertEqual(calls.microphones.count, 1, "a stalled hop must bypass the rest of the same buffer")
+    }
+
+    func testOneSlowHopOfFreshContextOnReplayBacklogKeepsCancelling() async {
+        let calls = HopCalls()
+        let clock = FakeClock()
+        let pipeline = EchoOutputPipeline()
+        let canceller = LiveCaptionEchoCanceller(pipeline: pipeline, reference: LiveCaptionEchoReference(), factory: {
+            FakeCaptionHop(calls: calls) { mic, _ in
+                // The first hop of a cold context runs slower than real time; later hops do not.
+                clock.advance(calls.microphones.count == 1 ? 0.002 : 0)
+                return mic.map { $0 + 10 }
+            }
+        }, clock: clock.now)
+        let twoHops = Array(repeating: Float(1), count: 8) + Array(repeating: Float(2), count: 8)
+        // An auto-detect replay starts with more than a second queued.
+        await canceller.ingest(buffer(twoHops, endingAt: 10 + 16.0 / 16000)) { 2 }
+        await canceller.flush()
+
+        let received = await pipeline.buffers.flatMap(\.samples)
+        XCTAssertEqual(received, Array(repeating: 11, count: 8) + Array(repeating: 12, count: 8), "one slow hop is not a trend")
+    }
+
     func testFlushPadsPartialHopButDeliversOnlyValidSamples() async {
         let calls = HopCalls()
         let pipeline = EchoOutputPipeline()
@@ -299,11 +420,30 @@ final class FakeCaptionHop: LiveCaptionHopCancelling {
     }
 }
 
+final class FakeClock: Sendable {
+    private let time = OSAllocatedUnfairLock(initialState: 0.0)
+    func advance(_ seconds: TimeInterval) {
+        time.withLock { $0 += seconds }
+    }
+
+    @Sendable
+    func now() -> TimeInterval {
+        time.withLock { $0 }
+    }
+}
+
 actor EchoOutputPipeline: LiveCaptionPipeline {
     private(set) var buffers: [LiveAudioBuffer] = []
     private(set) var flushCount = 0
     private(set) var resetCount = 0
+    private let onIngest: @Sendable () -> Void
+
+    init(onIngest: @escaping @Sendable () -> Void = {}) {
+        self.onIngest = onIngest
+    }
+
     func ingest(_ buffer: LiveAudioBuffer, backlog _: @Sendable () -> TimeInterval) {
+        onIngest()
         buffers.append(buffer)
     }
 
