@@ -16,8 +16,9 @@ app/MeetingTranscriber/    # Swift macOS menu-bar app (SPM)
                            #   Post-processing: PipelineQueue (transcribe -> diarize -> protocol).
                            #   Live captions overlay + StreamingTranscriber. Settings UI
                            #   (SettingsView + Settings/). Protocol generation:
-                           #   ClaudeCLIProtocolGenerator (#if !APPSTORE) / OpenAIProtocolGenerator.
-                           #   DebugRPCServer + /v1 automation API (#if !APPSTORE).
+                           #   ClaudeCLIProtocolGenerator (#if !APPSTORE) / OpenAIProtocolGenerator,
+                           #   with optional background export to Notion. DebugRPCServer + /v1
+                           #   automation API (#if !APPSTORE).
                            #   Info.plist: bundle metadata and permission usage strings.
   Tests/                   # XCTest + ViewInspector; Fixtures/ test audio (two_speakers_de.wav, ...)
   Entitlements/            # Homebrew.entitlements (mic only) + AppStore.entitlements (sandbox + app-scoped bookmarks)
