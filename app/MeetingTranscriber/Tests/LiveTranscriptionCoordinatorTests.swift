@@ -52,6 +52,31 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         return (factory, { counter.value })
     }
 
+    func testBuiltControllerReadsEchoCancellationSettingLive() async {
+        var enabled = false
+        var built: LiveTranscriptionController?
+        let base = mockControllerFactory()
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: LiveCaptionsState(),
+            liveEnabled: { true },
+            engineSupportsLive: { true },
+            verboseDiagnostics: { false },
+            echoCancellationEnabled: { enabled },
+            makeController: { engine, captions, language, verbose in
+                let controller = base(engine, captions, language, verbose)
+                built = controller
+                return controller
+            },
+        )
+        coordinator.beginPrewarm { MockStreamingEngine() }
+        await coordinator.attachSinks(to: DualSourceRecorder())
+
+        let controller = try? XCTUnwrap(built)
+        XCTAssertEqual(controller?.echoCancellationEnabled(), false)
+        enabled = true
+        XCTAssertEqual(controller?.echoCancellationEnabled(), true, "the controller must read the setting, not a copy")
+    }
+
     func testAttachSinksInstallsWhenGateOpenAndControllerReady() async {
         let coordinator = LiveTranscriptionCoordinator(
             captions: LiveCaptionsState(),

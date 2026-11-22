@@ -81,6 +81,30 @@ final class LiveTranscriptionGatingTests: XCTestCase {
         XCTAssertFalse(state.shouldShowLiveCaptions)
     }
 
+    // MARK: - echo cancellation setting
+
+    func testLiveControllerReadsEchoCancellationSetting() throws {
+        settings.transcriptionEngine = .parakeet
+        settings.parakeetLanguage = "en"
+        settings.liveTranscriptionEnabled = true
+        settings.echoCancellationEnabled = false
+        var built: LiveTranscriptionController?
+        let inert = inertLiveControllerFactory()
+        let state = try AppState(
+            pipelineEnvironment: makeIsolatedPipelineEnvironment(),
+            settings: settings,
+        ) { engine, captions, language, verbose in
+            let controller = inert(engine, captions, language, verbose)
+            built = controller
+            return controller
+        }
+        _ = state
+        let controller = try XCTUnwrap(built, "live captions on must prewarm a controller")
+        XCTAssertFalse(controller.echoCancellationEnabled())
+        settings.echoCancellationEnabled = true
+        XCTAssertTrue(controller.echoCancellationEnabled(), "live captions must follow AppSettings.echoCancellationEnabled")
+    }
+
     // MARK: - shouldShowLiveCaptions (recording + overlay)
 
     /// Pins `AppState.shouldShowLiveCaptions` reading `settings.liveCaptionsOverlayEnabled`

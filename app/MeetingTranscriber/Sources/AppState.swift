@@ -265,8 +265,8 @@ final class AppState {
             engineSupportsLive: { [settings] in settings.transcriptionEngine.supportsLiveTranscription },
             engineLanguage: { [settings] in settings.activeEngineLanguageOrNil },
             verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
-            makeController: liveControllerFactory,
-            warmupQueue: warmupQueue,
+            echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },
+            makeController: liveControllerFactory, warmupQueue: warmupQueue,
         )
         self.watching = WatchingController(
             settings: settings,

@@ -19,7 +19,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveTra
 /// `beginPrewarm(engineProvider:isRecording:)` (called from `AppState.init` after
 /// stored-property init, where the `[weak self]` closures are valid) rather than captured at construction — so the coordinator
 /// never holds an AppState back-reference. `liveEnabled` / `engineSupportsLive` /
-/// `engineLanguage` / `verboseDiagnostics` are settings-backed closures.
+/// `engineLanguage` / `verboseDiagnostics` / `echoCancellationEnabled` are settings-backed closures.
 ///
 /// `@Observable` for `captionsUseEngine`, which the engine lifetime observer
 /// reads, and `warmup`, which Settings and the menu show. It also uses `withObservationTracking` internally to watch the
@@ -61,6 +61,7 @@ final class LiveTranscriptionCoordinator {
     private let engineSupportsLive: () -> Bool
     private let engineLanguage: () -> String?
     private let verboseDiagnostics: () -> Bool
+    private let echoCancellationEnabled: () -> Bool
     private let makeController: ControllerFactory
 
     /// Shared serial warm-up queue. The controller's `prepare()` (the heavy
@@ -91,6 +92,7 @@ final class LiveTranscriptionCoordinator {
         engineSupportsLive: @escaping () -> Bool,
         engineLanguage: @escaping () -> String? = { nil },
         verboseDiagnostics: @escaping () -> Bool,
+        echoCancellationEnabled: @escaping () -> Bool = { false },
         makeController: @escaping ControllerFactory = LiveTranscriptionCoordinator.makeDefaultController,
         warmupQueue: ModelWarmupQueue = ModelWarmupQueue(),
     ) {
@@ -99,6 +101,7 @@ final class LiveTranscriptionCoordinator {
         self.engineSupportsLive = engineSupportsLive
         self.engineLanguage = engineLanguage
         self.verboseDiagnostics = verboseDiagnostics
+        self.echoCancellationEnabled = echoCancellationEnabled
         self.makeController = makeController
         self.warmupQueue = warmupQueue
     }
@@ -294,6 +297,7 @@ final class LiveTranscriptionCoordinator {
         guard strategy != .reTranscribe || streamingEngine != nil else { return nil }
         let controller = makeController(streamingEngine, captions, language, verboseDiagnostics)
         controller.modelDownloads = modelDownloads
+        controller.echoCancellationEnabled = echoCancellationEnabled
         self.controller = controller
         let started = Date()
         warmup = .preparing(since: started)
