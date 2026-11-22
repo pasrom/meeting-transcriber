@@ -10,14 +10,17 @@ enum SettingsHelp {
     static let echoCancellation =
         """
         Removes the remote voices from the microphone audio with an on-device \
-        model before it is transcribed. Because it works on the audio rather \
-        than on the text, the cleaned track is also what speaker detection \
-        sees.
+        model. Because it works on the audio rather than on the text, the \
+        cleaned track is also what speaker detection sees.
+
+        After a meeting, it only runs on recordings already reported as \
+        affected, and replaces the transcript option below wherever both are \
+        on. With live captions on, it also cleans the microphone captions for \
+        the whole meeting, which takes extra processor time even when you use \
+        headphones and there is no echo to remove.
 
         The saved recording is not changed: what is kept on disk stays the \
-        audio your devices captured. Only runs on recordings already reported \
-        as affected, and replaces the transcript option below wherever both \
-        are on.
+        audio your devices captured.
         """
 
     static let echoDedup =

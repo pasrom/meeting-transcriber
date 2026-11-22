@@ -82,7 +82,7 @@ private struct EchoSection: View {
     var body: some View {
         Section("Echo") {
             HelpfulToggle(
-                title: "Remove echoed remote speech before transcribing",
+                title: "Remove echoed remote speech from the microphone audio",
                 help: SettingsHelp.echoCancellation,
                 isOn: $settings.echoCancellationEnabled,
             )
