@@ -285,6 +285,12 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         ))
     }
 
+    /// Pins the caption text: the mic name only labels the mic lines, so it says nothing else.
+    func testMicNameCaptionIsOnlyTheNamePrompt() throws {
+        let body = try makeSpeakers(settings: makeSettings()).inspect()
+        XCTAssertNoThrow(try body.find(text: "Your name for dual-source mode."))
+    }
+
     func testSpeakerCapHintHiddenForOfflineMode() throws {
         let settings = makeSettings()
         settings.diarize = true
