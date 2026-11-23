@@ -68,7 +68,7 @@ struct SpeakersSettingsView: View {
                             .multilineTextAlignment(.trailing)
                             .accessibilityIdentifier(A11yID.micNameField)
                     }
-                    Text("Your name for dual-source mode. Leave empty to diarize mic track (multi-person room).")
+                    Text("Your name for dual-source mode.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
