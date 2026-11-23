@@ -285,13 +285,14 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         ))
     }
 
-    func testSortformerWarningHiddenForOfflineMode() throws {
+    func testSpeakerCapHintHiddenForOfflineMode() throws {
         let settings = makeSettings()
         settings.diarize = true
         settings.diarizerMode = .offline
         let body = try makeSpeakers(settings: settings).inspect()
+        // Offline's own hint: the Sortformer text never renders here, guard or not.
         XCTAssertThrowsError(try body.find(
-            text: SpeakersSettingsView.speakerCapHint(for: .sortformer),
+            text: SpeakersSettingsView.speakerCapHint(for: .offline),
         ))
     }
 
