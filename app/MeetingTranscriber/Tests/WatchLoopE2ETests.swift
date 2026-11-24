@@ -117,9 +117,11 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
         XCTAssertTrue(recorder.startCalled)
         XCTAssertTrue(recorder.stopCalled)
 
-        // Verify job was enqueued
+        // Verify job was enqueued. Its state is not checked: handleMeeting
+        // awaits the enqueue in a task of its own, so the processing that
+        // enqueue starts may already have set the job to transcribing when
+        // it returns.
         XCTAssertEqual(queue.jobs.count, 1)
-        XCTAssertEqual(queue.jobs[0].state, .waiting)
 
         // Process the job through the pipeline
         await queue.awaitProcessing()
@@ -219,8 +221,8 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
         let meeting = makeMeeting()
         try await loop.handleMeeting(meeting)
 
+        // Its state is not checked here, see testFullPipelineDetectRecordTranscribeProtocol.
         XCTAssertEqual(queue.jobs.count, 1)
-        XCTAssertEqual(queue.jobs[0].state, .waiting)
 
         // Process the job — should fail with empty transcript
         await queue.awaitProcessing()
@@ -426,6 +428,9 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
         XCTAssertEqual(queue.jobs.count, 1, "Should enqueue exactly one job")
         XCTAssertEqual(queue.jobs[0].meetingTitle, "Test Meeting")
         XCTAssertEqual(queue.jobs[0].appName, "Microsoft Teams")
+        // Holds however the processing task is scheduled: this queue has no
+        // engine, so runPipeline gives up at its engine guard, before any
+        // state change, and leaves the job `.waiting`.
         XCTAssertEqual(queue.jobs[0].state, .waiting)
 
         // Verify recorder was called
