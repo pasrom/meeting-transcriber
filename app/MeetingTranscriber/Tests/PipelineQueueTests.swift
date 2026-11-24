@@ -3159,6 +3159,49 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// The Settings caption advised leaving the Mic Speaker Name empty,
+    /// so some users have `micName == ""` stored. The mic-fail fallback keeps
+    /// the raw mic label on mic segments, which is where a blank label would
+    /// surface as a nameless speaker in the transcript and protocol.
+    func testDiarizeDualTrackEmptyMicLabelFallsBackToMe() async throws {
+        try await assertMicFailFallbackLabelsMicSegmentsMe(micLabel: "")
+    }
+
+    func testDiarizeDualTrackWhitespaceMicLabelFallsBackToMe() async throws {
+        try await assertMicFailFallbackLabelsMicSegmentsMe(micLabel: "  \t")
+    }
+
+    private func assertMicFailFallbackLabelsMicSegmentsMe(
+        micLabel: String,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+    ) async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let diar = MockDiarization()
+        diar.throwOnPathSuffix = "mic_16k.wav" // mic diarization fails → mic keeps its raw label
+        diar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: ["SPEAKER_0": "Speaker A"],
+            embeddings: nil,
+        )
+        let protocolGen = MockProtocolGen()
+        let q = makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen, micLabel: micLabel)
+
+        try q.enqueue(makeDualSourceJob(title: "Blank MicLabel"))
+        await q.processNext()
+
+        let transcript = try XCTUnwrap(protocolGen.capturedTranscript, file: file, line: line)
+        // Without the fallback the mic line reads "[00:00] Hello" for an empty
+        // label and "[00:00]   \t: Hello" for a whitespace one.
+        XCTAssertTrue(
+            transcript.contains("] Me: Hello"),
+            "a blank mic name must fall back to 'Me' on mic segments, got: \(transcript)",
+            file: file, line: line,
+        )
+    }
+
     func testSpeakerNamingHandlerCalled() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [
