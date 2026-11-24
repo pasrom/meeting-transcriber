@@ -154,8 +154,16 @@ extension AppMeetingPattern {
         meetingPatterns: [],
     )
 
+    static let discordBundleID = "com.hnc.Discord"
+
+    static let discord = AppMeetingPattern(
+        appName: "Discord",
+        ownerNames: ["Discord"],
+        meetingPatterns: [],
+    )
+
     static let all: [AppMeetingPattern] = [
-        teams, zoom, webex, simulator, browserMeetings, wechat, tencentMeeting, faceTime, whatsApp, slack,
+        teams, zoom, webex, simulator, browserMeetings, wechat, tencentMeeting, faceTime, whatsApp, slack, discord,
     ]
 
     static let byName: [String: AppMeetingPattern] = {
