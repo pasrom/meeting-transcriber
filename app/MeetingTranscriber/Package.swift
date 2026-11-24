@@ -78,9 +78,11 @@ let package = Package(
                 "CLocalVQE",
             ],
             path: "Sources",
-            // Assets.xcassets is compiled by `actool` in scripts/build_release.sh,
-            // not by SPM. Excluding silences "unhandled file" warnings without
-            // changing the runtime bundle.
+            // Assets.xcassets is never compiled as a catalog, by SPM or anything
+            // else: scripts/build_release.sh copies the PNGs out of its
+            // AppIcon.appiconset and turns them into AppIcon.icns with
+            // `iconutil -c icns`. Excluding it silences "unhandled file" warnings
+            // without changing the runtime bundle.
             exclude: ["Info.plist", "Assets.xcassets"],
             // Treat any new compiler warning as a build failure so deprecations
             // and concurrency hints are caught at PR time, not on a future
