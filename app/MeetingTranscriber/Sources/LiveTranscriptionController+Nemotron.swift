@@ -27,7 +27,7 @@ extension LiveTranscriptionController {
         makeSink: (LiveCaptionChannel) -> StreamingTranscriber.EventSink,
     ) async throws -> (mic: any LiveCaptionPipeline, app: any LiveCaptionPipeline) {
         let dir = try await StreamingNemotronMultilingualAsrManager.downloadVariant(
-            languageCode: languageCode, chunkMs: 2240,
+            languageCode: languageCode, chunkMs: nemotronChunkMs,
         )
         let shared = try await StreamingNemotronMultilingualAsrManager.preloadShared(from: dir)
         func make(_ channel: LiveCaptionChannel) -> NemotronStreamingCaptionSession {

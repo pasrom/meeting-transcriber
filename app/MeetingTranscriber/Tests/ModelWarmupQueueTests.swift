@@ -135,6 +135,67 @@ final class ModelWarmupQueueTests: XCTestCase {
         await secondRun.value
         deadline.pass()
     }
+
+    // MARK: - A stalled op gives up its place
+
+    /// An op that never returns must not hold the ops after it forever, and
+    /// giving up its place must not end it.
+    func testAnOpPastTheDeadlineNoLongerHoldsTheQueue() async {
+        let deadline = ManualDeadline()
+        let queue = ModelWarmupQueue(sleep: deadline.sleep)
+        let stuck = MainActorGate()
+        let stuckRun = Task { await queue.run("stuck") { await stuck.wait() } }
+        await waitFor(stuck.hasWaiter && deadline.waiting == 1)
+        let log = EventLog()
+        let nextRun = Task { await queue.run("next") { log.add("next") } }
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(log.events, [], "test premise: before the deadline the next op waits")
+
+        deadline.pass()
+        await waitFor(log.events == ["next"])
+
+        XCTAssertEqual(log.events, ["next"])
+        XCTAssertTrue(stuck.hasWaiter, "the stalled op must keep running")
+        stuck.open()
+        await stuckRun.value
+        await nextRun.value
+        deadline.pass()
+    }
+
+    /// Only the stalled op is left behind: the ops after it are still serial,
+    /// and the stalled op finishing later does not let a third op past the second.
+    func testOpsAfterAStalledOneStaySerial() async {
+        let deadline = ManualDeadline()
+        let queue = ModelWarmupQueue(sleep: deadline.sleep)
+        let stuck = MainActorGate()
+        let stuckRun = Task { await queue.run("stuck") { await stuck.wait() } }
+        await waitFor(stuck.hasWaiter && deadline.waiting == 1)
+        let second = MainActorGate()
+        let secondRun = Task { await queue.run("second") { await second.wait() } }
+        let log = EventLog()
+        let thirdRun = Task { await queue.run("third") { log.add("third") } }
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+
+        deadline.pass()
+        await waitFor(second.hasWaiter)
+        XCTAssertTrue(second.hasWaiter, "test premise: the second op runs once the first stalled")
+        stuck.open()
+        await stuckRun.value
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+        XCTAssertEqual(log.events, [], "the third op must still wait for the second")
+
+        second.open()
+        await secondRun.value
+        await thirdRun.value
+        XCTAssertEqual(log.events, ["third"])
+        deadline.pass()
+    }
 }
 
 /// A stall deadline the test passes by hand. It ignores cancellation, as a
