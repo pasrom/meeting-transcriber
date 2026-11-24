@@ -23,19 +23,19 @@ final class DualSourceRecorderResolveTapPIDsTests: XCTestCase {
 
     func testResolveTapPIDsFallsBackToRootWhenNoBundleURL() {
         // nil bundle URL (command-line tool / exited process) → just the root.
-        let pids = DualSourceRecorder.resolveTapPIDs(rootPID: 42, bundleURL: nil) { _ in [7, 8, 9] }
+        let pids = DualSourceRecorder.resolveTapPIDs(rootPID: 42, bundleURL: nil, bundleIdentifier: nil) { _ in [7, 8, 9] }
         XCTAssertEqual(pids, [42], "no bundle URL must fall back to the root PID alone")
     }
 
     func testResolveTapPIDsFallsBackToRootWhenEnumerationEmpty() {
         // Bundle resolved but no PIDs found under it → the root alone, not [].
-        let pids = DualSourceRecorder.resolveTapPIDs(rootPID: 42, bundleURL: bundle) { _ in [] }
+        let pids = DualSourceRecorder.resolveTapPIDs(rootPID: 42, bundleURL: bundle, bundleIdentifier: nil) { _ in [] }
         XCTAssertEqual(pids, [42], "empty enumeration must fall back to the root PID, never an empty tap set")
     }
 
     func testResolveTapPIDsPassesEnumerationThroughWhenItAlreadyIncludesRoot() {
         // Enumeration already contains the root → use it verbatim (no reordering).
-        let pids = DualSourceRecorder.resolveTapPIDs(rootPID: 42, bundleURL: bundle) { _ in [100, 42, 200] }
+        let pids = DualSourceRecorder.resolveTapPIDs(rootPID: 42, bundleURL: bundle, bundleIdentifier: nil) { _ in [100, 42, 200] }
         XCTAssertEqual(pids, [100, 42, 200], "when enumeration already includes the root, order is preserved as-is")
     }
 
@@ -43,7 +43,7 @@ final class DualSourceRecorderResolveTapPIDsTests: XCTestCase {
         // Enumeration missed the root → prepend it. Order is load-bearing: the
         // root must come FIRST because the aggregate device's cosmetic name tag
         // is taken from the first PID (#84, Electron helper children).
-        let pids = DualSourceRecorder.resolveTapPIDs(rootPID: 42, bundleURL: bundle) { _ in [100, 200] }
+        let pids = DualSourceRecorder.resolveTapPIDs(rootPID: 42, bundleURL: bundle, bundleIdentifier: nil) { _ in [100, 200] }
         XCTAssertEqual(pids, [42, 100, 200], "the root must be prepended (first), not appended")
     }
 
@@ -55,10 +55,27 @@ final class DualSourceRecorderResolveTapPIDsTests: XCTestCase {
         let pids = DualSourceRecorder.resolveTapPIDs(
             rootPID: 42,
             bundleURL: bundle,
+            bundleIdentifier: nil,
             enumerate: { _ in [42, 200] },
             widen: { Array(Set($0 + [300])).sorted() },
-            select: { $0.filter { $0 != 300 } },
+            select: { pids, _ in pids.filter { $0 != 300 } },
         )
         XCTAssertEqual(pids, [42, 200], "the helper selection must run on the widened set, not before it")
+    }
+
+    func testEnablesChromiumRendererCaptureForDiscordOnly() {
+        let bundle = URL(fileURLWithPath: "/Applications/Discord.app")
+        func selectedPIDs(_ bundleID: String) -> [pid_t] {
+            DualSourceRecorder.resolveTapPIDs(
+                rootPID: 42,
+                bundleURL: bundle,
+                bundleIdentifier: bundleID,
+                enumerate: { _ in [42, 200, 300] },
+                select: { pids, includeRenderers in includeRenderers ? pids : pids.filter { $0 != 300 } },
+            )
+        }
+
+        XCTAssertEqual(selectedPIDs("com.hnc.Discord"), [42, 200, 300])
+        XCTAssertEqual(selectedPIDs("com.google.Chrome"), [42, 200])
     }
 }
