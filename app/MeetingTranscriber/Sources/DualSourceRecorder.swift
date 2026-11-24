@@ -416,7 +416,13 @@ class DualSourceRecorder: RecordingProvider {
     /// Whether the next recording silences its microphone from the first buffer.
     /// Set before `start(...)`, like the property above. A microphone-only
     /// recording ignores it: the microphone is the only thing it records.
+    /// The watch loop sets it through `muteMicFromStart()` when it continues a
+    /// muted call.
     var micStartsMuted = false
+
+    func muteMicFromStart() {
+        micStartsMuted = true
+    }
 
     private(set) var canMuteMic = false
     private(set) var isMicMuted = false

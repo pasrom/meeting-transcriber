@@ -5,8 +5,10 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "WatchLo
 
 /// How `WatchLoop.waitForMeetingEnd` finished.
 enum MeetingEndReason: Equatable {
-    /// The meeting ended, hit the max duration, or watching was stopped.
+    /// The meeting ended, or watching was stopped.
     case ended
+    /// The recording hit the max duration while the meeting may go on.
+    case maxDurationReached
     /// The app moved on to a different call, which is already live.
     case replacedByNewCall
 }
@@ -54,7 +56,7 @@ extension WatchLoop {
             switch decision {
             case .stopMaxDurationExceeded:
                 logger.info("Max recording duration reached (\(Int(self.maxDuration))s)")
-                return .ended
+                return .maxDurationReached
 
             case .stopGraceExpired:
                 logger.info("Meeting inactive for the \(self.endGracePeriod)s grace period — ending recording")

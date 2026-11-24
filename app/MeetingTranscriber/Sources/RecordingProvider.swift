@@ -68,6 +68,11 @@ protocol RecordingProvider {
     var canMuteMic: Bool { get }
     var isMicMuted: Bool { get }
     func setMicMuted(_ muted: Bool)
+    /// Have the next `start` silence the microphone from its first buffer, so
+    /// the mute times begin at second 0. Call before `start`; a mute set after
+    /// it would let the first buffers through. Default: nothing, like
+    /// `setMicMuted`.
+    func muteMicFromStart()
 }
 
 extension ChannelSignalAges {
@@ -135,4 +140,6 @@ extension RecordingProvider {
     }
 
     func setMicMuted(_: Bool) {}
+
+    func muteMicFromStart() {}
 }

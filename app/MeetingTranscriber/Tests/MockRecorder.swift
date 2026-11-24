@@ -73,6 +73,15 @@ class MockRecorder: RecordingProvider {
         isMicMuted = muted
     }
 
+    /// Whether `start` was asked to begin muted. Read at the start, so a
+    /// request that comes after it does not count.
+    private var muteFromStart = false
+    private(set) var startedMicMuted = false
+
+    func muteMicFromStart() {
+        muteFromStart = true
+    }
+
     /// Overrides the `recordingStartDate` `stop()` reports. `nil` (default)
     /// yields `Date()` at stop time, matching a real recorder; set it to pin a
     /// specific meeting-start time (e.g. filename-anchoring tests).
@@ -86,10 +95,15 @@ class MockRecorder: RecordingProvider {
         startCalled = true
         capturedSource = source
         capturedMicDeviceUID = micDeviceUID
+        startedMicMuted = muteFromStart
+        if muteFromStart { isMicMuted = true }
     }
 
     func stop() throws -> RecordingResult {
         stopCalled = true
+        // Like `DualSourceRecorder`, whose every stop clears the mute: a caller
+        // that reads the mute after the stop reads false here too.
+        isMicMuted = false
         guard let mix = mixPath else {
             throw RecorderError.noAudioData
         }
