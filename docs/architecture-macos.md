@@ -632,7 +632,7 @@ Full design rationale (why the two remedies can't compose, the model provisionin
 1. **Single source:** `transcribeSegments(audioPath:)` → `[TimestampedSegment]` with start/end/text
 2. **Dual source:** `transcribeSegments(appAudio:)` + `transcribeSegments(micAudio:)` → `mergeDualSourceSegments(appSegments:micSegments:)` → `[TimestampedSegment]` merged by timestamp
    - App segments labeled "Remote"
-   - Mic segments labeled with user's mic name (default "Me")
+   - Mic segments labeled with user's mic name (default "Me"; `PipelineQueue` resolves an empty or whitespace-only name, and the reserved "Remote", to "Me")
    - `mergeDualSourceSegments` is a protocol extension on `TranscribingEngine` — shared by all engines
 
 ### Post-processing (WhisperKit only)

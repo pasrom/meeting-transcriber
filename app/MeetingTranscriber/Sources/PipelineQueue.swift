@@ -622,10 +622,15 @@ class PipelineQueue {
         // speaker that too, mergeDualSourceSegments tags both tracks identically
         // and labelSegments' per-track filters each match every segment → app
         // audio is double-counted under both speakers. Fall back to the default
-        // so the two routing tags can never collide. (This is the single source
-        // of micLabel for both the tagging and the re-split, so sanitizing here
+        // so the two routing tags can never collide. An empty or whitespace-only
+        // name falls back too: an earlier Settings caption advised leaving the
+        // field empty to diarize the mic track, which the pipeline never did, so
+        // such values are stored, and a blank label leaves mic segments without
+        // a speaker in transcript and protocol. (This is the single source of
+        // micLabel for both the tagging and the re-split, so sanitizing here
         // keeps them consistent.)
-        self.micLabel = micLabel == DiarizationProcess.remoteSpeakerLabel ? "Me" : micLabel
+        let isBlank = micLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        self.micLabel = isBlank || micLabel == DiarizationProcess.remoteSpeakerLabel ? "Me" : micLabel
         let outputOptions = TranscriptOutputOptions(
             includeFullTranscriptInProtocol: includeFullTranscriptInProtocol,
             saveRawTranscriptSeparately: saveRawTranscriptSeparately,

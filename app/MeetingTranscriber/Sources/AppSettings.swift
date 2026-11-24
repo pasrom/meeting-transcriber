@@ -369,7 +369,8 @@ final class AppSettings { // swiftlint:disable:this type_body_length
 
     /// Label for the local mic speaker in dual-source mode.
     /// Default "Me". Only a label; it does not decide whether the mic track
-    /// is diarized.
+    /// is diarized. Stored as typed; `PipelineQueue` resolves an empty or
+    /// whitespace-only name, and the reserved "Remote", to "Me".
     var micName: String {
         didSet { defaults.set(micName, forKey: "micName") }
     }

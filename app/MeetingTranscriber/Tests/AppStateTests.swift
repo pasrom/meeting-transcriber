@@ -1094,6 +1094,16 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertEqual(queue.micLabel, "Speaker A")
     }
 
+    /// An empty name is what the Settings caption advised; the stored
+    /// value stays as it is, the queue resolves it to the default label.
+    func testMakeQueueFallsBackToMeForEmptyMicName() throws {
+        let (state, _) = makeState()
+        state.settings.micName = ""
+        let queue = try XCTUnwrap(state.pipeline.makeQueue())
+        XCTAssertEqual(queue.micLabel, "Me")
+        XCTAssertEqual(state.settings.micName, "", "the stored setting is not rewritten")
+    }
+
     func testMakeQueueUsesNumSpeakersFromSettings() throws {
         let (state, _) = makeState()
         state.settings.numSpeakers = 4
