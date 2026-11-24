@@ -35,8 +35,8 @@ final class ModelWarmupQueueTests: XCTestCase {
         }
 
         // Submit both without awaiting the first: only the queue can serialize them.
-        async let first: Void = queue.run(op(1))
-        async let second: Void = queue.run(op(2))
+        async let first: Void = queue.run("test", op(1))
+        async let second: Void = queue.run("test", op(2))
         _ = await (first, second)
 
         // Order between the two ops is not guaranteed, but they must not overlap.
@@ -52,7 +52,7 @@ final class ModelWarmupQueueTests: XCTestCase {
         let queue = ModelWarmupQueue()
         let log = EventLog()
         for id in 1 ... 4 {
-            await queue.run { log.add("op\(id)") }
+            await queue.run("test") { log.add("op\(id)") }
         }
         XCTAssertEqual(log.events, ["op1", "op2", "op3", "op4"])
     }
@@ -62,10 +62,104 @@ final class ModelWarmupQueueTests: XCTestCase {
     func testRunAwaitsOperationCompletion() async {
         let queue = ModelWarmupQueue()
         var done = false
-        await queue.run {
+        await queue.run("test") {
             await Task.yield()
             done = true
         }
         XCTAssertTrue(done, "run must not return until its op has finished")
+    }
+
+    // MARK: - Stall deadline
+
+    /// The deadline is armed when the op starts and passes once while it still
+    /// runs: the stall is reported, and the op is left running.
+    func testAnOpStillRunningAtTheDeadlineReportsItsStall() async {
+        let deadline = ManualDeadline()
+        let queue = ModelWarmupQueue(stallDeadline: .seconds(42), sleep: deadline.sleep)
+        let load = MainActorGate()
+        let stalls = EventLog()
+        let onStall: @MainActor () -> Void = { stalls.add("stall") }
+        let run = Task { await queue.run("held", onStall: onStall) { await load.wait() } }
+        await waitFor(load.hasWaiter && deadline.waiting == 1)
+        XCTAssertEqual(deadline.requested, [.seconds(42)], "the configured deadline must be the one waited for")
+        XCTAssertEqual(stalls.events, [], "test premise: the deadline has not passed")
+
+        deadline.pass()
+        await waitFor(!stalls.events.isEmpty)
+
+        XCTAssertEqual(stalls.events, ["stall"])
+        XCTAssertTrue(load.hasWaiter, "reporting the stall must not end the op")
+        load.open()
+        await run.value
+    }
+
+    /// A deadline that passes after its op finished reports nothing, also when
+    /// the sleep returns instead of throwing on cancellation.
+    func testAnOpFinishedBeforeTheDeadlineReportsNoStall() async {
+        let deadline = ManualDeadline()
+        let queue = ModelWarmupQueue(sleep: deadline.sleep)
+        let stalls = EventLog()
+        let onStall: @MainActor () -> Void = { stalls.add("stall") }
+        await queue.run("quick", onStall: onStall) {}
+        XCTAssertEqual(deadline.waiting, 1, "test premise: the deadline still waits")
+
+        deadline.pass()
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(stalls.events, [])
+    }
+
+    /// Time spent waiting behind another op does not count: an op that has not
+    /// started has not armed its deadline.
+    func testTheDeadlineIsArmedWhenTheOpStartsNotWhenItIsQueued() async {
+        let deadline = ManualDeadline()
+        let queue = ModelWarmupQueue(sleep: deadline.sleep)
+        let first = MainActorGate()
+        let firstRun = Task { await queue.run("first") { await first.wait() } }
+        await waitFor(first.hasWaiter && deadline.waiting == 1)
+        let second = MainActorGate()
+        let secondRun = Task { await queue.run("second") { await second.wait() } }
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+        XCTAssertFalse(second.hasWaiter, "test premise: the second op waits behind the first")
+
+        XCTAssertEqual(deadline.requested.count, 1, "only the running op may have armed its deadline")
+        first.open()
+        await waitFor(second.hasWaiter && deadline.requested.count == 2)
+        XCTAssertEqual(deadline.requested.count, 2, "the second op arms its own deadline once it starts")
+        second.open()
+        await firstRun.value
+        await secondRun.value
+        deadline.pass()
+    }
+}
+
+/// A stall deadline the test passes by hand. It ignores cancellation, as a
+/// sleep that returns just as its op finishes would, so the queue's own check
+/// is what keeps a finished op from reporting a stall.
+@MainActor
+final class ManualDeadline {
+    private(set) var requested: [Duration] = []
+    private var pending: [CheckedContinuation<Void, Never>] = []
+
+    var waiting: Int {
+        pending.count
+    }
+
+    func sleep(_ duration: Duration) async {
+        requested.append(duration)
+        await withCheckedContinuation { pending.append($0) }
+    }
+
+    /// The deadline passes for every op waiting on it.
+    func pass() {
+        let due = pending
+        pending = []
+        for continuation in due {
+            continuation.resume()
+        }
     }
 }

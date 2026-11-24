@@ -148,6 +148,25 @@ final class LiveTranscriptionController {
     /// Set by `cancelPrepare()`; `prepare()` checks it between model loads.
     private var prepareCancelled = false
 
+    /// The `prepare()` step running now, nil between steps. The warm-up stall
+    /// warning names it, so a load that never returns says where it hangs.
+    private(set) var prepareStep: String?
+
+    /// Run one `prepare()` step, logged with its duration. Not gated on verbose
+    /// diagnostics: once per warm-up, and the names carry no speech.
+    private func step<T>(_ name: String, _ body: () async throws -> T) async rethrows -> T {
+        prepareStep = name
+        let started = Date()
+        logger.notice("Live caption warm-up step started: \(name, privacy: .public)")
+        defer {
+            prepareStep = nil
+            logger.notice(
+                "Live caption warm-up step ended: \(name, privacy: .public) after \(Date().timeIntervalSince(started), format: .fixed(precision: 1), privacy: .public) s",
+            )
+        }
+        return try await body()
+    }
+
     /// Stop `prepare()` at its next step. The owner calls this when it drops the
     /// controller; a model load already running is not interrupted.
     func cancelPrepare() {
@@ -225,15 +244,17 @@ final class LiveTranscriptionController {
     /// failing first-use model download isn't re-hammered on every recording.
     func prepare() async {
         guard !prepareCancelled else { return }
-        await prewarmSpeakerMatcher()
+        await step("speaker matcher") { await prewarmSpeakerMatcher() }
         guard !prepareCancelled else { return }
         if usesLanguageProbe, let engine {
-            await loadEngineForLanguageDetection(engine)
+            await step("engine load for language detection") { await loadEngineForLanguageDetection(engine) }
             guard !prepareCancelled else { return }
             await reTranscribeIfDetectionUnsupported(engine)
         }
         if usesLanguageProbe, let engine {
-            if !detectionArmed, runtimeState != .stopping { await armLanguageProbe(recording: false) }
+            if !detectionArmed, runtimeState != .stopping {
+                await step("language probe") { await armLanguageProbe(recording: false) }
+            }
             strategyResolved = true
             prepareFailure = engine.modelState == .loaded ? nil : Self.engineLoadFailure
             if verboseDiagnostics() {
@@ -249,12 +270,12 @@ final class LiveTranscriptionController {
             // so the late-resolution ordering — recording already running,
             // EOU models finishing their first-use load — connects the sinks
             // mid-recording instead of staying dark until the next one.
-            await bindFeeds()
+            await step("feeds") { await bindFeeds() }
         } else if usesTranscriptionEngine, let engine, engine.modelState != .loaded {
             // `prepareForNextRecording()` built the re-transcribe pipelines first; load here
             // so the state below judges a load attempt. `loadModel()` rebuilds a loaded model.
             willLoadEngine?()
-            await engine.loadModel()
+            await step("engine load") { await engine.loadModel() }
             guard !prepareCancelled else { return }
         }
         strategyResolved = true
@@ -288,7 +309,8 @@ final class LiveTranscriptionController {
     private func buildPipelines() async {
         switch captionStrategy {
         case .nemotronStreaming:
-            if await buildNemotronStreamingPipelines() { return }
+            let built = await step("Nemotron models") { await buildNemotronStreamingPipelines() }
+            if built { return }
 
         case .englishStreaming:
             if await buildEnglishStreamingPipelines() { return }
@@ -300,7 +322,7 @@ final class LiveTranscriptionController {
         // engine (failed streaming backend on a non-streaming engine) captions stay off.
         guard let engine, !prepareCancelled else { return }
         willLoadEngine?()
-        await engine.loadModel()
+        await step("engine load") { await engine.loadModel() }
         micPipeline = makeReTranscribePipeline(channel: .mic, engine: engine)
         appPipeline = makeReTranscribePipeline(channel: .app, engine: engine)
     }
@@ -337,10 +359,10 @@ final class LiveTranscriptionController {
     private func buildEnglishStreamingPipelines() async -> Bool {
         do {
             let mic = makeEouPipeline(channel: .mic)
-            try await mic.prepare()
+            try await step("EOU models, mic channel") { try await mic.prepare() }
             guard !prepareCancelled else { return true }
             let app = makeEouPipeline(channel: .app)
-            try await app.prepare()
+            try await step("EOU models, app channel") { try await app.prepare() }
             micPipeline = mic
             appPipeline = app
             usingStreamingSession = true

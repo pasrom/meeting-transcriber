@@ -101,7 +101,7 @@ final class LiveCaptionsWarmupTests: XCTestCase {
         XCTAssertLessThan(abs(since.timeIntervalSince(before)), 5, "counts from when the warm-up began")
 
         engine.gate.open()
-        await queue.run {}
+        await queue.run("test") {}
         XCTAssertEqual(coordinator.warmup, .ready)
     }
 
@@ -257,7 +257,7 @@ final class LiveCaptionsWarmupTests: XCTestCase {
     func testASettingsChangeCancelsTheStaleWarmup() async throws {
         let queue = ModelWarmupQueue()
         let blocker = MainActorGate()
-        let blocked = Task { @MainActor in await queue.run { await blocker.wait() } }
+        let blocked = Task { @MainActor in await queue.run("test") { await blocker.wait() } }
         await waitFor(blocker.hasWaiter)
         let engine = WarmupTestEngine()
         let (coordinator, settings) = try makeSettingsCoordinator(warmupQueue: queue)
@@ -268,7 +268,7 @@ final class LiveCaptionsWarmupTests: XCTestCase {
         await waitFor(coordinator.warmup == .idle)
         blocker.open()
         await blocked.value
-        await queue.run {} // after the stale prepare()
+        await queue.run("test") {} // after the stale prepare()
 
         XCTAssertEqual(engine.loadCount, 0)
         XCTAssertEqual(coordinator.warmup, .idle, "the stale warm-up must not write its outcome")
@@ -278,7 +278,7 @@ final class LiveCaptionsWarmupTests: XCTestCase {
     func testAStaleWarmupFinishingLeavesItsSuccessorPreparing() async throws {
         let queue = ModelWarmupQueue()
         let blocker = MainActorGate()
-        let blocked = Task { @MainActor in await queue.run { await blocker.wait() } }
+        let blocked = Task { @MainActor in await queue.run("test") { await blocker.wait() } }
         await waitFor(blocker.hasWaiter)
         let engine = WarmupTestEngine(gated: true)
         let (coordinator, settings) = try makeSettingsCoordinator(warmupQueue: queue)
@@ -298,7 +298,7 @@ final class LiveCaptionsWarmupTests: XCTestCase {
         XCTAssertEqual(engine.loadCount, 1, "test premise: only the successor loads")
         XCTAssertEqual(coordinator.warmup, successor)
         engine.gate.open()
-        await queue.run {}
+        await queue.run("test") {}
         XCTAssertEqual(coordinator.warmup, .ready)
     }
 
@@ -454,7 +454,7 @@ final class LiveCaptionsWarmupTests: XCTestCase {
 
 /// A streaming engine that counts its model loads and can hold one for the test.
 @MainActor
-private final class WarmupTestEngine: StreamingTranscribingEngine {
+final class WarmupTestEngine: StreamingTranscribingEngine {
     let gate = MainActorGate()
     var modelState: EngineModelState = .unloaded
     var downloadProgress: Double = 0
@@ -500,7 +500,7 @@ private final class WarmupTestNonStreamingEngine: TranscribingEngine {
 }
 
 /// An EOU manager whose model load waits for the test.
-private actor GatedEouManager: EouStreamingAsrManaging {
+actor GatedEouManager: EouStreamingAsrManaging {
     private let gate: AsyncGate
     private let loadError: (any Error)?
     private let finishGate: AsyncGate?
@@ -533,7 +533,7 @@ private actor GatedEouManager: EouStreamingAsrManaging {
 }
 
 /// A speaker matcher that counts its model loads and holds each for the test.
-private actor GatedSpeakerMatcher: LiveSpeakerMatching {
+actor GatedSpeakerMatcher: LiveSpeakerMatching {
     let gate: AsyncGate
     private(set) var prepareCount = 0
 

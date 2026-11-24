@@ -148,7 +148,7 @@ final class EngineController {
         guard !settings.unloadModelsWhenIdle else {
             guard !whenIdle else { return }
             syncEngineSettings()
-            await warmupQueue.run { [self] in
+            await warmupQueue.run("ASR launch download") { [self] in
                 switch settings.transcriptionEngine {
                 case .whisperKit: await fetchTokenizer(afterDownload: whisperKit.downloadModelIfMissing())
                 case .parakeet: await parakeetEngine.downloadModelIfMissing()
@@ -164,7 +164,7 @@ final class EngineController {
         // Serialize against the live-caption model warm-up so the two big CoreML
         // loads don't compile at once. `run` awaits the load, so the caller still
         // returns only after the model is loaded.
-        await warmupQueue.run { [self] in
+        await warmupQueue.run(whenIdle ? "ASR preload" : "ASR launch preload") { [self] in
             guard !settings.unloadModelsWhenIdle else { return }
             guard !whenIdle || !lifetimeState.busy else {
                 pendingIdlePreferenceChange = true
