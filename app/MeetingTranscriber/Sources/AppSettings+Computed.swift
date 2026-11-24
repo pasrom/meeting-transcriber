@@ -31,6 +31,7 @@ extension AppSettings {
         switch transcriptionEngine {
         case .whisperKit: whisperLanguageOrNil
         case .parakeet: parakeetLanguageOrNil
+        case .gigaAM: "ru"
         }
     }
 

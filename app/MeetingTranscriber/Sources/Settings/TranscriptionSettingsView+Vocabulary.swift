@@ -7,8 +7,14 @@ import UniformTypeIdentifiers
 extension TranscriptionSettingsView {
     var vocabularySection: some View {
         Section("Vocabulary") {
-            customVocabularyToggle
-            customVocabularyFileRows
+            if settings.transcriptionEngine == .gigaAM {
+                Text(Self.vocabularyHelpText(for: .gigaAM))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                customVocabularyToggle
+                customVocabularyFileRows
+            }
             terminologyRulesEditor
         }
         .accessibilityIdentifier(A11yID.vocabularySection)

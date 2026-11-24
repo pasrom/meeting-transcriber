@@ -6,6 +6,7 @@ struct TranscriptionSettingsView: View {
     @Bindable var settings: AppSettings
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
+    var gigaAMEngine: GigaAMEngine
     var captionWarmup: LiveCaptionsWarmup = .idle
 
     /// Set when the user flips live captions on while a first-use Nemotron model
@@ -26,12 +27,14 @@ struct TranscriptionSettingsView: View {
         settings: AppSettings,
         whisperKitEngine: WhisperKitEngine,
         parakeetEngine: ParakeetEngine,
+        gigaAMEngine: GigaAMEngine = .init(),
         captionWarmup: LiveCaptionsWarmup = .idle,
         legacyModels: LegacyWhisperModelsState? = nil,
     ) {
         self.settings = settings
         self.whisperKitEngine = whisperKitEngine
         self.parakeetEngine = parakeetEngine
+        self.gigaAMEngine = gigaAMEngine
         self.captionWarmup = captionWarmup
         // Created here, not as a default value: for an `@Observable` type the
         // default-value form creates the object only once the view is installed,
@@ -85,7 +88,7 @@ struct TranscriptionSettingsView: View {
         Section("Transcription") {
             enginePicker
             whisperKitPickers
-            parakeetLanguagePicker
+            secondaryLanguageSetting
             engineStatusView
             Toggle("Unload models when idle", isOn: $settings.unloadModelsWhenIdle)
                 .accessibilityIdentifier(A11yID.unloadModelsWhenIdleToggle)
@@ -140,13 +143,15 @@ struct TranscriptionSettingsView: View {
     }
 
     @ViewBuilder
-    private var parakeetLanguagePicker: some View { // swiftlint:disable:this attributes
+    private var secondaryLanguageSetting: some View { // swiftlint:disable:this attributes
         if settings.transcriptionEngine == .parakeet {
             Picker("Language", selection: $settings.parakeetLanguage) {
                 ForEach(PickerLanguages.parakeet, id: \.code) { lang in
                     Text(lang.label).tag(lang.code)
                 }
             }
+        } else if settings.transcriptionEngine == .gigaAM {
+            LabeledContent("Language", value: "Russian (fixed)")
         }
     }
 
@@ -327,6 +332,9 @@ struct TranscriptionSettingsView: View {
     /// different levels of influence over recognition.
     static func vocabularyHelpText(for engine: TranscriptionEngineSetting) -> String {
         switch engine {
+        case .gigaAM:
+            "GigaAM uses the canonical terminology rules after transcription."
+
         case .parakeet:
             "Text file with one term per line. Parakeet uses CTC rescoring for saved transcription. "
                 + "Live captions do not use CTC vocabulary rescoring."
@@ -411,6 +419,7 @@ struct TranscriptionSettingsView: View {
         switch settings.transcriptionEngine {
         case .parakeet: parakeetEngine
         case .whisperKit: whisperKitEngine
+        case .gigaAM: gigaAMEngine
         }
     }
 
@@ -419,11 +428,20 @@ struct TranscriptionSettingsView: View {
         let engine = activeEngine
         switch engine.modelState {
         case .downloading:
-            ProgressView(value: engine.downloadProgress)
-                .progressViewStyle(.linear)
-            Text("Downloading model... \(Int(engine.downloadProgress * 100))%")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if settings.transcriptionEngine == .gigaAM {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Downloading GigaAM model (about 421 MiB)…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                ProgressView(value: engine.downloadProgress)
+                    .progressViewStyle(.linear)
+                Text("Downloading model... \(Int(engine.downloadProgress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
         case .loading:
             HStack {
@@ -458,10 +476,18 @@ struct TranscriptionSettingsView: View {
         // no reason while a model is loaded (a failed reload that keeps its pipe
         // keeps the requested model, since any model change drops the pipe), so
         // this shows only beside "Load Model".
-        if settings.transcriptionEngine == .whisperKit, let reason = whisperKitEngine.loadFailureReason {
+        if let reason = activeModelFailureReason {
             Text(reason)
                 .font(.caption)
                 .foregroundStyle(.red)
+        }
+    }
+
+    private var activeModelFailureReason: String? {
+        switch settings.transcriptionEngine {
+        case .whisperKit: whisperKitEngine.loadFailureReason
+        case .parakeet: nil
+        case .gigaAM: gigaAMEngine.loadFailureReason
         }
     }
 }

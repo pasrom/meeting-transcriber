@@ -273,6 +273,40 @@ final class IdleModelLifecycleTests: XCTestCase {
         }
     }
 
+    func testSwitchAwayFromGigaAMReleasesItOnlyWithIdleUnloading() async throws {
+        for enabled in [false, true] {
+            let settings = try makeIsolatedSettings()
+            settings.unloadModelsWhenIdle = enabled
+            settings.transcriptionEngine = .gigaAM
+            let engines = EngineController(settings: settings)
+            engines.gigaAMEngine.installModelLoadForTesting { { _ in [] } }
+            await engines.gigaAMEngine.loadModel()
+            XCTAssertEqual(engines.gigaAMEngine.modelState, .loaded)
+
+            settings.transcriptionEngine = .whisperKit
+            engines.syncEngineSettings()
+            XCTAssertEqual(engines.gigaAMEngine.modelState, enabled ? .unloaded : .loaded)
+        }
+    }
+
+    func testDrainReleasesTheActiveGigaAMModel() async throws {
+        let settings = try makeIsolatedSettings()
+        settings.unloadModelsWhenIdle = true
+        settings.transcriptionEngine = .gigaAM
+        let engines = EngineController(settings: settings)
+        let queue = try makeIsolatedQueue()
+        engines.activateModelLifetime(queue: { queue }, isRecording: { false })
+        engines.gigaAMEngine.installModelLoadForTesting { { _ in [] } }
+        await engines.gigaAMEngine.loadModel()
+        XCTAssertEqual(engines.gigaAMEngine.modelState, .loaded)
+
+        queue.isProcessing = true
+        engines.syncEngineSettings()
+        await queue.processNext()
+        await waitFor(engines.gigaAMEngine.modelState == .unloaded)
+        XCTAssertEqual(engines.gigaAMEngine.modelState, .unloaded)
+    }
+
     func testExplicitLoadStaysUntilTheNextDrain() async throws {
         let settings = try makeIsolatedSettings()
         let engines = EngineController(settings: settings)
