@@ -288,8 +288,15 @@ final class LiveTranscriptionCoordinator {
         // Route `prepare()` through the shared warm-up queue (see `warmupQueue`).
         // Bind it locally; the fire-and-forget Task holds `self` only weakly.
         let queue = warmupQueue
+        // Names the step a load that has not returned is in; the queue logs the stall itself.
+        let reportStall: @MainActor () -> Void = { [weak controller] in
+            guard let controller else { return }
+            logger.warning(
+                "Live caption warm-up stalled in step: \(controller.prepareStep ?? "none, between steps", privacy: .public)",
+            )
+        }
         Task { @MainActor [weak self] in
-            await queue.run {
+            await queue.run("caption warm-up", onStall: reportStall) {
                 await controller.prepare()
                 // Counted from the build, so time spent waiting in the queue is included.
                 let seconds = Date().timeIntervalSince(started)

@@ -212,7 +212,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         let queue = ModelWarmupQueue()
         let captions = LiveCaptionsState()
         let gate = TestGate()
-        let blocker = Task { @MainActor in await queue.run { await gate.wait() } }
+        let blocker = Task { @MainActor in await queue.run("test") { await gate.wait() } }
         // Let the blocker take the queue head before anything is enqueued behind it.
         for _ in 0 ..< 5 {
             await Task.yield()
@@ -350,7 +350,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         )
         coordinator.beginPrewarm { MockStreamingEngine() }
         await waitFor(captions.activeBackend != nil, timeout: .seconds(2))
-        await queue.run {} // after prepare() and its flag update
+        await queue.run("test") {} // after prepare() and its flag update
 
         XCTAssertEqual(captions.activeBackend, "Parakeet EOU · EN", "test premise: the EOU session was built")
         XCTAssertFalse(coordinator.captionsUseEngine)
@@ -375,7 +375,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(coordinator.captionsUseEngine)
         engine.gate.open()
-        await queue.run {}
+        await queue.run("test") {}
         XCTAssertTrue(coordinator.captionsUseEngine)
     }
 
@@ -432,7 +432,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         await waitFor(!coordinator.captionsUseEngine)
 
         engine.gate.open()
-        await queue.run {} // after the old prepare() and its flag update
+        await queue.run("test") {} // after the old prepare() and its flag update
 
         XCTAssertFalse(coordinator.captionsUseEngine)
     }
