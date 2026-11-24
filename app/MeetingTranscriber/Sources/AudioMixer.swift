@@ -70,8 +70,12 @@ enum AudioMixer {
             }
         }
 
-        // Average the two tracks
+        // Average the two tracks, then let go of both before the write, which
+        // copies the mix into a buffer of its own: kept, they would be alive
+        // next to both copies of the mix.
         let mixed = mixTracks(appSamples, micSamples)
+        appSamples = []
+        micSamples = []
 
         try saveWAV(samples: mixed, sampleRate: sampleRate, url: outputPath)
         logger.info("Mixed audio saved: \(outputPath.lastPathComponent)")

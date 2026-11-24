@@ -71,6 +71,26 @@ enum EchoTestAudio {
         }
         return out
     }
+
+    /// Noise bursts that alternate with near silence every 0.2 s, so an echo
+    /// gate both opens and closes; interleaved when `channels` > 1, at any
+    /// rate. Kept next to `speechLike` rather than replaced by it: the
+    /// `buildRecording` output pins hash files built from exactly these
+    /// samples, and a stereo app temp needs the interleaving.
+    static func gatedBursts(seconds: Int, rate: Int, channels: Int, seed: UInt64) -> [Float] {
+        var state = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        let frames = seconds * rate
+        var samples = [Float](repeating: 0, count: frames * channels)
+        for frame in 0 ..< frames {
+            let loud = (frame / (rate / 5)).isMultiple(of: 2)
+            for channel in 0 ..< channels {
+                state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                let unit = Float(state >> 40) / Float(1 << 24) * 2 - 1
+                samples[frame * channels + channel] = unit * (loud ? 0.5 : 0.001)
+            }
+        }
+        return samples
+    }
 }
 
 /// Hand-built detector results for tests that need a verdict, not a

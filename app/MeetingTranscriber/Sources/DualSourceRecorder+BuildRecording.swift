@@ -91,6 +91,26 @@ extension DualSourceRecorder {
         return deviceRate
     }
 
+    /// The raw app temp (interleaved Float32) as samples. A function of its
+    /// own so the file's bytes are released when it returns rather than
+    /// staying alive next to the samples for the rest of `buildRecording`.
+    nonisolated private static func readRawFloat32(at url: URL) throws -> [Float] {
+        let raw = try Data(contentsOf: url)
+        let floatCount = raw.count / MemoryLayout<Float>.size
+        var floats = [Float](repeating: 0, count: floatCount)
+        raw.withUnsafeBytes { ptr in
+            if let base = ptr.baseAddress {
+                floats.withUnsafeMutableBufferPointer { dest in
+                    dest.baseAddress!.initialize( // swiftlint:disable:this force_unwrapping
+                        from: base.assumingMemoryBound(to: Float.self),
+                        count: floatCount,
+                    )
+                }
+            }
+        }
+        return floats
+    }
+
     /// Convert a finished `AudioCaptureResult` (raw app `.tmp` + optional mic
     /// WAV) into a mixed 16 kHz `RecordingResult`: cross-check the rate, downmix
     /// + resample the app track, load the mic track, then mix or fall back to a
@@ -147,6 +167,9 @@ extension DualSourceRecorder {
         }
 
         // ── Load mic audio ──
+        // The app temp when it holds any bytes. The app WAV is then written
+        // from it below, or the function throws.
+        let appTempURL = appRawBytes > 0 ? tempURL : nil
         var micPath: URL?
         var micSamples: [Float] = []
         let expectedMicPath = captureResult.micAudioFileURL
@@ -165,7 +188,11 @@ extension DualSourceRecorder {
             // treats a missing or too-small file.
             if let micAudioFile = try? AVAudioFile(forReading: expectedMicPath),
                let loaded = try? AudioMixer.loadAudioFileAsFloat32(url: expectedMicPath) {
-                micSamples = loaded
+                // Kept only for a microphone-only mix. With an app track the
+                // mixer reads both tracks back from their files (see the mix
+                // below), and holding these here as well would keep a full
+                // track alive through the app conversion and the mix.
+                if appTempURL == nil { micSamples = loaded }
                 micPath = expectedMicPath
                 let micFileRate = Int(micAudioFile.processingFormat.sampleRate)
                 logger.info("Mic audio loaded: \(expectedMicPath.lastPathComponent) (\(micFileRate) Hz)")
@@ -197,36 +224,19 @@ extension DualSourceRecorder {
         // and the app WAV is on disk by the end of that block.
         // ── Convert app audio from temp file to Float32 mono ──
         var appPath: URL?
-        var appSamples: [Float] = []
         var appSamples16k: [Float] = []
 
-        if let tempURL, appRawBytes > 0 {
-            let raw = try Data(contentsOf: tempURL)
-
-            let floatCount = raw.count / MemoryLayout<Float>.size
-            var floats = [Float](repeating: 0, count: floatCount)
-            raw.withUnsafeBytes { ptr in
-                if let base = ptr.baseAddress {
-                    floats.withUnsafeMutableBufferPointer { dest in
-                        dest.baseAddress!.initialize( // swiftlint:disable:this force_unwrapping
-                            from: base.assumingMemoryBound(to: Float.self),
-                            count: floatCount,
-                        )
-                    }
-                }
-            }
-
-            appSamples = downmixToMono(floats, channels: actualChannels)
-
-            // Resample to 16kHz and save app track
-            appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: format.targetRate)
+        if let appTempURL {
+            // Downmix and resample to 16 kHz in one expression, so no copy of
+            // the track outlives it: on the production path the temp is
+            // already 16 kHz mono and all three steps hand on one buffer, and
+            // a second name for it would keep a full copy alive through the
+            // pad below. About 230 MB per recorded hour at 16 kHz Float32.
+            appSamples16k = try AudioMixer.resample(
+                downmixToMono(readRawFloat32(at: appTempURL), channels: actualChannels),
+                from: actualRate, to: format.targetRate,
+            )
             if normalisation.padFrames > 0 {
-                // Released first: on the production path the temp is already
-                // 16 kHz mono, so `floats`, `appSamples` and `appSamples16k`
-                // share one buffer, and the concatenation below would otherwise
-                // hold a second full copy of the track alive to the end of the
-                // function. About 220 MB per recorded hour at 16 kHz Float32.
-                appSamples = []
                 appSamples16k = [Float](repeating: 0, count: normalisation.padFrames) + appSamples16k
             }
             let appFile = recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.app)")
@@ -253,6 +263,14 @@ extension DualSourceRecorder {
 
         guard (appPath != nil && micPath != nil) || !appSamples16k.isEmpty || !micSamples.isEmpty else {
             throw RecorderError.noAudioData
+        }
+        // The mixer reads both tracks back from their files, and has to: the
+        // app file holds the 16-bit rounding of `appSamples16k`, and the mix
+        // has always been built from what was written, not from the floats.
+        // From here on the app track held in this function is dead weight, a
+        // full track (about 230 MB per recorded hour) next to the mixer's own.
+        if appPath != nil, micPath != nil {
+            appSamples16k = []
         }
         try writeMixAtomically(to: mixPath) { staging in
             if let app = appPath, let mic = micPath {
