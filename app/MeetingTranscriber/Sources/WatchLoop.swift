@@ -39,6 +39,8 @@ class WatchLoop {
     var isMicMuted = false
     private(set) var canMuteMic = false
     var onMicMuteAvailabilityChange: (() -> Void)?
+    /// The call whose recording the loop itself ended while muted; see `WatchLoop+MicMute.swift`.
+    var mutedCallToContinue: MutedCall?
 
     private var manualRecordingTask: Task<Void, Never>?
 
@@ -196,6 +198,7 @@ class WatchLoop {
     func start() {
         guard watchTask == nil else { return }
 
+        mutedCallToContinue = nil
         returnToWatching()
         logger.info("Watch mode started (poll: \(self.pollInterval)s, grace: \(self.endGracePeriod)s)")
 
@@ -383,6 +386,7 @@ class WatchLoop {
 
     private func watchLoop() async {
         while !Task.isCancelled {
+            dropMutedCallIfItEnded()
             // A prompt answered since the last poll comes first: the answer
             // arrives out of band, but recordings only ever start here.
             // Re-checked because the answer may have landed while another
@@ -478,11 +482,14 @@ class WatchLoop {
         // A quit or a stop that came while the recorder was being built: a
         // recording started now would end at once, empty, as an error.
         try Task.checkCancellation()
+        if continuesMutedCall(meeting) { recorder.muteMicFromStart() }
         try recorder.start(
             source: source,
             micDeviceUID: micDeviceUID,
             debugLogging: verboseDiagnostics(),
         )
+        // Only now: a start that failed leaves the carry for the retry.
+        mutedCallToContinue = nil
         activeRecorder = recorder
         defer { activeRecorder = nil }
 
@@ -511,6 +518,10 @@ class WatchLoop {
         } catch is CancellationError {
             logger.info("Watch cancelled mid-recording — finalizing in-flight recording")
         }
+
+        // Read before the stop, which clears the mute, and handed on before
+        // it too: a stop that finds no audio throws, but the call goes on.
+        mutedCallToContinue = recorder.isMicMuted ? mutedCallIfItGoesOn(meeting, endReason: endReason) : nil
 
         // The level poll skips a tick without a recorder, and a stopped one has
         // no channels left to report on while its tracks are mixed.

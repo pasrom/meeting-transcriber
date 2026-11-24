@@ -352,6 +352,19 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         XCTAssertEqual(try logStems(in: dir).count, 1)
     }
 
+    /// The watch loop's way in when it continues a muted call: the same
+    /// pre-start mute as the setting, so not one buffer goes through unmuted.
+    func testMuteFromStartAppliesBeforeTheSessionOpens() throws {
+        let dir = try makeTempDirectory(prefix: "lifecycle_mute_from_start")
+        let (recorder, session) = makeRecorder(dir: dir)
+        recorder.muteMicFromStart()
+        try recorder.start(source: .forApp(pid: getpid(), noMic: false))
+
+        XCTAssertEqual(session.lastConfiguration?.micStartsMuted, true)
+        XCTAssertTrue(recorder.isMicMuted)
+        XCTAssertEqual(try logStems(in: dir).count, 1)
+    }
+
     func testStartMutedDoesNotApplyToAMicrophoneOnlyRecording() throws {
         let dir = try makeTempDirectory(prefix: "lifecycle_mute_mic")
         let (recorder, session) = makeRecorder(dir: dir)
