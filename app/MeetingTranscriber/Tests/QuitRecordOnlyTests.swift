@@ -71,15 +71,16 @@ final class QuitRecordOnlyTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appendingPathComponent("20260311_140000_meta.json").path))
     }
 
-    /// Only the quit changes: a recording stopped by hand still moves where it
-    /// is stopped, as before.
-    func testAStopOutsideAQuitStillMovesWhereItIsCalled() async throws {
+    /// Not only a quit: a recording stopped by hand moves off the main thread
+    /// too, since a move that takes as long as the mix froze the app for that
+    /// long.
+    func testAStopOutsideAQuitAlsoMovesOffTheMainThread() async throws {
         let moves = MoveLog()
         let (loop, output) = try await makeRecordingLoop(moves: moves)
 
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
-        XCTAssertEqual(moves.threads, [true])
+        XCTAssertEqual(moves.threads, [false], "the stop moved the recording on the main thread")
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appendingPathComponent("20260311_140000_mix.wav").path))
     }
 }

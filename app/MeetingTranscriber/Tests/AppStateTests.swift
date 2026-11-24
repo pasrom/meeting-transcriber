@@ -341,14 +341,14 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         state.watching.watchLoop = loop
         try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
 
-        state.watching.stopManualRecording()
+        await state.watching.stopManualRecording()
 
         XCTAssertNil(state.watching.watchLoop)
     }
 
-    func testStopManualRecordingWhenNoLoopIsNoOp() {
+    func testStopManualRecordingWhenNoLoopIsNoOp() async {
         let (state, _) = makeState()
-        state.watching.stopManualRecording() // must not crash
+        await state.watching.stopManualRecording() // must not crash
         XCTAssertNil(state.watching.watchLoop)
     }
 

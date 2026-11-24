@@ -175,7 +175,9 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `ConsentPromptCoordinator.swift` | Coordinates an async yes/no recording-consent prompt: register pending decision by id, resolve once via answer or timeout |
 | `WatchLoop+Consent.swift` | Browser-meeting consent gate, split out of `WatchLoop`; only patterns with `requiresRecordingConsent` reach it |
 | `WatchLoop+MicMute.swift` | Toggles the active recording's mic mute, split out of `WatchLoop` |
-| `WatchLoop+Quit.swift` | The parts of a quit `WatchLoop` answers for without its private state: where a recording the quit stopped goes, and what an empty stop means while quitting |
+| `WatchLoop+Quit.swift` | What an empty stop means while quitting, the part of a quit `WatchLoop` answers for without its private state |
+| `UnfinishedWork.swift` | Tasks a quit waits for (a watch task finishing its recording, a manual stop), shared by the loops of one `WatchingController` |
+| `WatchLoop+Enqueue.swift` | Where a stopped recording goes (pipeline queue or record-only folder), with the mix and the record-only move off the main actor |
 | `TerminationFlush.swift` | What AppKit waits for between a quit request and process exit, so a quit can't land before the pending pipeline-snapshot write reaches disk |
 | `DualSourceRecorder.swift` | Orchestrates AudioTapLib capture + mic, mixes tracks |
 | `DualSourceRecorder+TapPIDs.swift` | Which processes a recording taps, split out of `DualSourceRecorder` to stay under the line cap |
@@ -531,7 +533,7 @@ A red circle with a white "!" is composited in the bottom-right corner by `MenuB
 <img src="menu-bar-record-only.gif" width="80" alt="Record-only mode">
 </p>
 
-A persistent small red dot in the bottom-right corner indicates that **Record-only mode** is enabled (`AppSettings.recordOnly == true`). In this mode `WatchLoop.enqueueRecording()` moves dual-source WAVs into `<outputDir>/recordings/` together with a `<basename>_meta.json` `RecordingSidecar` and skips the entire post-processing pipeline (VAD, transcription, diarization, protocol). Intended for fleet topologies where macOS clients capture and a separate machine (e.g. a Linux GPU host via Syncthing) processes the audio. The sidecar's `trigger` field (`auto` | `manual`, schema version 2) tells that consumer which call site produced the recording, so it can treat a short auto-detected capture (likely a false trigger) differently from a short deliberate manual one.
+A persistent small red dot in the bottom-right corner indicates that **Record-only mode** is enabled (`AppSettings.recordOnly == true`). In this mode a stop (`WatchLoop.stopAndEnqueue`) moves dual-source WAVs into `<outputDir>/recordings/` together with a `<basename>_meta.json` `RecordingSidecar` and skips the entire post-processing pipeline (VAD, transcription, diarization, protocol). Intended for fleet topologies where macOS clients capture and a separate machine (e.g. a Linux GPU host via Syncthing) processes the audio. The sidecar's `trigger` field (`auto` | `manual`, schema version 2) tells that consumer which call site produced the recording, so it can treat a short auto-detected capture (likely a false trigger) differently from a short deliberate manual one.
 
 Like the permission badge, the dot is rendered as a persistent overlay on top of whatever primary animation is currently active — so the mode is always clearly indicated whether the app is idle, recording, or running anything else. **Precedence:** when both apply, the red exclamation (permission badge) wins, because a permission problem actually breaks recording while record-only is a deliberate user choice.
 

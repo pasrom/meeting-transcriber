@@ -34,68 +34,6 @@ final class QuitFinishesRecordingTests: XCTestCase {
         func tearDownBeforeExit() {}
     }
 
-    /// The mix of a long meeting, held open until the test lets it finish.
-    /// A thread blocked in `wait()` stands for one busy mixing. The wait
-    /// also ends on its own after `deadline`, so that a mix wrongly run on
-    /// the main thread, where the test can no longer reach `release()`,
-    /// cannot hang the suite: the test then fails instead.
-    private final class MixGate: Sendable {
-        static let deadline: Duration = .seconds(5)
-        private let semaphore = DispatchSemaphore(value: 0)
-
-        func wait() {
-            _ = semaphore.wait(timeout: .now() + .seconds(Int(Self.deadline.components.seconds)))
-        }
-
-        func release() {
-            semaphore.signal()
-        }
-    }
-
-    /// A recorder whose stop does what the real one does at the end of a long
-    /// meeting: a mix that takes as long as it takes, here until the test
-    /// releases `gate`. `stop()` does it on the caller's thread, which on the
-    /// quit path is the main thread; `stopOffMain()` does it on a thread of
-    /// its own, as `DualSourceRecorder` does.
-    private final class SlowMixRecorder: RecordingProvider {
-        let gate = MixGate()
-        private(set) var mixesFinished = 0
-
-        func start(source _: RecordingSource, micDeviceUID _: String?, debugLogging _: Bool) {}
-
-        func stop() -> RecordingResult {
-            gate.wait()
-            mixesFinished += 1
-            return result()
-        }
-
-        func stopOffMain() async -> RecordingResult {
-            let gate = gate
-            await Task.detached { gate.wait() }.value
-            mixesFinished += 1
-            return result()
-        }
-
-        private func result() -> RecordingResult {
-            RecordingResult(
-                mixPath: URL(fileURLWithPath: "/tmp/slow_mix.wav"), appPath: nil, micPath: nil,
-                micDelay: 0, recordingStartDate: Date(),
-            )
-        }
-    }
-
-    private func makeLoop(recorder: SlowMixRecorder, detector: any MeetingDetecting, queue: PipelineQueue) -> WatchLoop {
-        let loop = WatchLoop(
-            detector: detector,
-            recorderFactory: { recorder },
-            pipelineQueue: queue,
-            pollInterval: 0.05,
-            endGracePeriod: 0.1,
-        )
-        loop.permissionChecker = { .allHealthy }
-        return loop
-    }
-
     // MARK: - WatchLoop
 
     /// An auto-detected recording is finalized by the watch task after
@@ -222,7 +160,7 @@ final class QuitFinishesRecordingTests: XCTestCase {
     func testAManualRecordingsMixDoesNotHoldTheQuitPastItsBudget() async throws {
         let queue = try PipelineQueue(logDir: makeTempDirectory(prefix: "quit_slow_mix_manual"))
         let recorder = SlowMixRecorder()
-        let loop = makeLoop(recorder: recorder, detector: makeSilentDetector(), queue: queue)
+        let loop = makeSlowMixLoop(recorder: recorder, queue: queue)
         try await loop.startMicrophoneRecording()
 
         try await assertTheBudgetHoldsWhileTheMixRuns(loop: loop, recorder: recorder, queue: queue)
@@ -231,7 +169,7 @@ final class QuitFinishesRecordingTests: XCTestCase {
     func testAnAutoRecordingsMixDoesNotHoldTheQuitPastItsBudget() async throws {
         let queue = try PipelineQueue(logDir: makeTempDirectory(prefix: "quit_slow_mix_auto"))
         let recorder = SlowMixRecorder()
-        let loop = makeLoop(recorder: recorder, detector: FixedMeetingDetector(), queue: queue)
+        let loop = makeSlowMixLoop(recorder: recorder, queue: queue, detector: FixedMeetingDetector())
         loop.start()
         await waitFor(loop.state == .recording, timeout: .seconds(3))
         XCTAssertEqual(loop.state, .recording, "precondition: the loop never started recording")

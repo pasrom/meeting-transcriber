@@ -9,23 +9,11 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "WatchLo
 /// type inherits that isolation, so the moved methods need no annotation.
 /// Failures are reported by `reportRecordOnlyFailure`.
 extension WatchLoop {
-    func writeRecordOnlySidecar(
-        title: String,
-        appName: String,
-        recording: RecordingResult,
-        trigger: RecordingSidecar.Trigger,
-        participants: [String],
-    ) throws {
-        let kept = try makeRecordOnlyWrite(
-            title: title, appName: appName, recording: recording, trigger: trigger, participants: participants,
-        ).perform()
-        reportStagingFilesKept(kept)
-    }
-
-    /// `writeRecordOnlySidecar` with the file work on a detached task, for a
-    /// quit: its budget is a timer on the main actor, and moving the tracks
-    /// into an output folder on another volume is a copy that takes as long
-    /// as the mix did. Failures are reported as on the synchronous path.
+    /// Move the recording into the record-only folder and write its sidecar,
+    /// with the file work on a detached task (called by `stopAndEnqueue`):
+    /// moving the tracks into an output folder on another volume is a copy
+    /// that takes as long as the mix did, and a quit's budget is a timer on
+    /// the main actor. A failure is reported, not thrown.
     func writeRecordOnlyOffMain(
         title: String,
         appName: String,

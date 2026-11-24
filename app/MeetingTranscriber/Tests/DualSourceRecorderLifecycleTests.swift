@@ -409,7 +409,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
 
         // This process, so the target is alive for the length of the test.
         controller.startManualRecording(pid: getpid(), appName: "Chrome", title: "Standup")
-        addTeardownBlock { controller.stopManualRecording() }
+        addTeardownBlock { await controller.stopManualRecording() }
         await waitFor(controller.watchLoop?.state == .recording, timeout: .seconds(2))
 
         XCTAssertEqual(session.lastConfiguration?.silentTrackWatchdog, true)
@@ -426,7 +426,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         controller.settings.startRecordingsMicMuted = true
 
         controller.startManualRecording(pid: getpid(), appName: "Chrome", title: "Standup")
-        addTeardownBlock { controller.stopManualRecording() }
+        addTeardownBlock { await controller.stopManualRecording() }
         await waitFor(controller.watchLoop?.state == .recording, timeout: .seconds(2))
 
         XCTAssertEqual(session.lastConfiguration?.micStartsMuted, true)

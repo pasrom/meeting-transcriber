@@ -53,24 +53,3 @@ final class WatchLoopMeetingLifecycleTests: XCTestCase {
         XCTAssertEqual(queue.jobs.first?.appName, "Zoom")
     }
 }
-
-/// Detects one meeting, then reports it inactive so the grace period can finish.
-private final class FinishedMeetingDetector: MeetingDetecting {
-    private var meeting: DetectedMeeting?
-
-    init(meeting: DetectedMeeting) {
-        self.meeting = meeting
-    }
-
-    func checkOnce() -> DetectedMeeting? {
-        meeting
-    }
-
-    func isMeetingActive(_: DetectedMeeting) -> Bool {
-        false
-    }
-
-    func reset(appName _: String?) {
-        meeting = nil
-    }
-}

@@ -230,7 +230,7 @@ final class MicMuteWatchLoopTests: XCTestCase {
         let loop = try await recordingLoop(recorder)
         loop.toggleMicMute()
 
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
         XCTAssertFalse(loop.isMicMuted)
         XCTAssertFalse(loop.canMuteMic)
     }

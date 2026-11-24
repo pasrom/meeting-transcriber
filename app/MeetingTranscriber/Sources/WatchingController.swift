@@ -29,6 +29,7 @@ import Observation
 final class WatchingController {
     var watchLoop: WatchLoop? {
         didSet {
+            if let watchLoop { builtLoops.add(watchLoop) }
             watchLoop?.onMicMuteAvailabilityChange = { [weak self] in self?.syncMicMuteHotkey() }
             syncMicMuteHotkey()
         }
@@ -59,6 +60,12 @@ final class WatchingController {
 
     /// Set by `finishForQuit`: a start parked on a permission prompt gives up.
     var isQuitting = false
+
+    /// Shared by every loop built here; see `WatchingController+Quit`.
+    let unfinishedRecordingWork = UnfinishedWork()
+    /// Every loop `watchLoop` has held that is still alive (weakly); see
+    /// `WatchingController+Quit`.
+    let builtLoops = NSHashTable<WatchLoop>.weakObjects()
 
     let settings: AppSettings
     let notifier: any AppNotifying
@@ -183,7 +190,7 @@ final class WatchingController {
         }
         // See `PipelineController.onQueueReplaced`.
         pipeline.onQueueReplaced = { [weak self] queue in
-            self?.watchLoop?.pipelineQueue = queue
+            self?.builtLoops.allObjects.forEach { $0.pipelineQueue = queue }
         }
     }
 
@@ -238,6 +245,8 @@ final class WatchingController {
                 // self-retaining watch task yet.
                 guard !isManualRecording, !isQuitting else { return }
 
+                guard await waitForStoppedLoopsBeforeRebuild() else { return }
+
                 syncEngines?()
                 pipeline.rebuild()
 
@@ -261,6 +270,7 @@ final class WatchingController {
                     },
                     notifier: notifier,
                     denyListStore: ConsentDenyListStore(settings: settings),
+                    unfinishedWork: unfinishedRecordingWork,
                 )
 
                 attachStateChangeHandler(to: loop, notifyOnRecording: true)
@@ -482,6 +492,7 @@ final class WatchingController {
                 .production(parent: pipeline.outputDirectory.resolve())
             },
             notifier: notifier,
+            unfinishedWork: unfinishedRecordingWork,
         )
         watchLoop = loop
 
@@ -530,9 +541,12 @@ final class WatchingController {
         }
     }
 
-    func stopManualRecording() {
-        watchLoop?.stopManualRecording()
-        watchLoop = nil
+    /// Returns once the recording is enqueued. The loop is held until then, so
+    /// the menu and `/v1` go on showing the recording while it mixes.
+    func stopManualRecording() async {
+        let loop = watchLoop
+        await loop?.stopManualRecording()
+        if watchLoop === loop { watchLoop = nil }
     }
 
     // MARK: - State-change handler
@@ -556,9 +570,15 @@ final class WatchingController {
             if oldState == .recording, cause != .callSplit {
                 self?.startCaptionFlush()
             }
+            if newState == .error, let err = loop?.lastError {
+                notifier.notify(title: "Error", body: err)
+            }
+            // A loop Stop Watching let go of still changes state when its mix
+            // ends, maybe during a newer recording: the monitor is not its own.
+            guard let self, let loop, self.watchLoop === loop else { return }
             switch newState {
             case .recording:
-                if notifyOnRecording, let meeting = loop?.currentMeeting {
+                if notifyOnRecording, let meeting = loop.currentMeeting {
                     notifier.notify(
                         title: "Meeting Detected",
                         body: "Recording: \(meeting.windowTitle)",
@@ -566,20 +586,14 @@ final class WatchingController {
                 }
                 // No source means no live recording, so there are no channels to
                 // watch and starting the monitor would only assume a topology.
-                if let source = self?.watchLoop?.activeRecordingSource {
-                    self?.channelHealth.start(source: source) { [weak self] in
+                if let source = loop.activeRecordingSource {
+                    channelHealth.start(source: source) { [weak self] in
                         self?.watchLoop?.activeRecorder
                     }
                 }
 
-            case .error:
-                if let err = loop?.lastError {
-                    notifier.notify(title: "Error", body: err)
-                }
-                self?.channelHealth.stop()
-
             default:
-                self?.channelHealth.stop()
+                channelHealth.stop()
             }
         }
     }

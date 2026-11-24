@@ -51,7 +51,7 @@ final class ProcessedRecordingSidecarTests: XCTestCase {
         recorder.micMuteIntervals = [MicMuteInterval(start: 1, end: 2)]
 
         try await loop.startManualRecording(pid: 42, appName: "Microsoft Teams", title: "Standup")
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         XCTAssertEqual(queue.jobs.count, 1)
         let sidecar = try XCTUnwrap(
@@ -74,7 +74,7 @@ final class ProcessedRecordingSidecarTests: XCTestCase {
         (recorder.mixPath, recorder.micPath) = (urls[0], urls[1])
 
         try await loop.startManualRecording(pid: 42, appName: "Microsoft Teams", title: "Standup")
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         XCTAssertEqual(queue.jobs.count, 1)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: tmpDir.path).sorted(), [
@@ -149,8 +149,10 @@ final class ProcessedRecordingSidecarTests: XCTestCase {
         recorder.micDelay = 0.25
         recorder.micMuteIntervals = [MicMuteInterval(start: 2, end: 4)]
         try await loop.startManualRecording(pid: 42, appName: "Microsoft Teams", title: "Standup")
-        loop.stopManualRecording()
-        await controller.queue.processNext()
+        await loop.stopManualRecording()
+        // The enqueue started the queue's own run, so wait for that one: a
+        // `processNext()` here can find the job already running and return.
+        await controller.queue.awaitProcessing()
         let first = try XCTUnwrap(controller.queue.jobs.first)
         let relocated = try [XCTUnwrap(first.mixPath), XCTUnwrap(first.appPath), XCTUnwrap(first.micPath)]
         XCTAssertTrue(

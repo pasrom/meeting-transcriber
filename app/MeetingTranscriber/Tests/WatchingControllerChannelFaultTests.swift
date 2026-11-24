@@ -148,11 +148,52 @@ final class WatchingControllerChannelFaultTests: XCTestCase {
         controller.startManualRecording(pid: getpid(), appName: "Chrome", title: "Standup")
         // Never ends by itself with a live target, so it has to be stopped
         // even when an assertion below fails.
-        addTeardownBlock { controller.stopManualRecording() }
+        addTeardownBlock { await controller.stopManualRecording() }
         await waitFor(controller.watchLoop?.state == .recording, timeout: .seconds(2))
         XCTAssertEqual(controller.watchLoop?.state, .recording, "precondition: the recording must have started")
 
         try await assertReportedAfterTheWindow(notifier, since: recorder.startedAt)
+    }
+
+    /// Stop Watching lets go of a loop that is still mixing, and a manual
+    /// recording can start before that mix ends. When the mix then fails, the
+    /// old loop's error is still reported, but it must not stop the monitoring
+    /// of the recording that runs now. The window is long enough that the old
+    /// loop fails well before the report is due.
+    func testAFailedMixOfAStoppedLoopKeepsMonitoringTheRecordingStartedSince() async {
+        let notifier = StampingNotifier()
+        let stopped = SlowMixRecorder()
+        stopped.stopError = .noAudioData
+        let manual = makeRecorderWithDeadMic()
+        var recorders: [any RecordingProvider] = [stopped, manual]
+        let controller = makeWatchingController(
+            logDir: tmpDir, notifier: notifier, permissionHealth: .allHealthy,
+            channelFaultWindow: 3,
+            makeDetector: { FixedMeetingDetector() },
+            makeRecorder: { recorders.removeFirst() },
+        )
+        addTeardownBlock { stopped.gate.release() }
+        _ = await controller.startWatching()
+        await waitFor({ controller.watchLoop?.state == .recording }, timeout: .seconds(10))
+        _ = await controller.stopWatching()
+        await waitFor(stopped.mixesStarted == 1, timeout: .seconds(3))
+        XCTAssertEqual(stopped.mixesStarted, 1, "precondition: the stop never began its mix")
+
+        controller.startManualRecording(pid: getpid(), appName: "Chrome", title: "Standup")
+        addTeardownBlock { await controller.stopManualRecording() }
+        await waitFor(controller.watchLoop?.state == .recording, timeout: .seconds(2))
+        XCTAssertEqual(controller.watchLoop?.state, .recording, "precondition: the manual recording must have started")
+
+        stopped.gate.release()
+        await waitFor({ notifier.calls.contains { $0.title == "Error" } }, timeout: .seconds(3))
+        XCTAssertTrue(notifier.calls.contains { $0.title == "Error" }, "the stopped loop's failed mix was not reported")
+        XCTAssertNil(micFaultDate(notifier), "precondition: the old loop must fail before the report is due")
+
+        await waitFor({ self.micFaultDate(notifier) != nil }, timeout: .seconds(6))
+        XCTAssertNotNil(
+            micFaultDate(notifier),
+            "the failed mix of the stopped loop stopped monitoring the manual recording: \(notifier.calls.map(\.title))",
+        )
     }
 
     /// The polling task can start before a recorder exists: on the auto path

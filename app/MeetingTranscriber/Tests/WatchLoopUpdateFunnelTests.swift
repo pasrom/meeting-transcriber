@@ -83,7 +83,7 @@ final class WatchLoopUpdateFunnelTests: XCTestCase {
         try await loop.startManualRecording(pid: 7, appName: "Webex", title: "Sync")
         XCTAssertEqual(loop.snapshot.phase, .recording)
 
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         let snap = loop.snapshot
         XCTAssertEqual(snap.phase, .idle, "Phase still transitions to idle on stop failure")

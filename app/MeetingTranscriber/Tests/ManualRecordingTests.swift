@@ -75,7 +75,7 @@ final class ManualRecordingTests: XCTestCase {
         let (loop, _) = makeLoop(pipelineQueue: queue)
         try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
 
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         XCTAssertEqual(queue.jobs.count, 1)
         XCTAssertEqual(queue.jobs.first?.meetingTitle, "Standup")
@@ -86,7 +86,7 @@ final class ManualRecordingTests: XCTestCase {
         let (loop, _) = makeLoop()
         try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
 
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         XCTAssertEqual(loop.state, .idle)
         XCTAssertFalse(loop.isManualRecording)
@@ -97,7 +97,7 @@ final class ManualRecordingTests: XCTestCase {
         let (loop, mock) = makeLoop()
         try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
 
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         XCTAssertTrue(mock.stopCalled)
     }
@@ -130,7 +130,7 @@ final class ManualRecordingTests: XCTestCase {
         XCTAssertEqual(transitions[0].0, .idle)
         XCTAssertEqual(transitions[0].1, .recording)
 
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
         XCTAssertEqual(transitions.count, 2)
         XCTAssertEqual(transitions[1].0, .recording)
         XCTAssertEqual(transitions[1].1, .idle)
@@ -198,7 +198,7 @@ final class ManualRecordingTests: XCTestCase {
         XCTAssertNil(loop.activeRecordingSource, "nothing is recording, so there are no channels to watch")
 
         try await loop.startMicrophoneRecording()
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         XCTAssertNil(loop.activeRecordingSource, "and none again once it stopped")
     }
@@ -208,7 +208,7 @@ final class ManualRecordingTests: XCTestCase {
         let (loop, _) = makeLoop(pipelineQueue: queue)
         try await loop.startMicrophoneRecording()
 
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         XCTAssertEqual(loop.state, .idle)
         XCTAssertEqual(queue.jobs.count, 1)

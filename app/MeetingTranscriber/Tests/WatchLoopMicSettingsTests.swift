@@ -48,7 +48,7 @@ final class WatchLoopMicSettingsTests: XCTestCase {
         try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
         XCTAssertEqual(recorder.capturedSource, .appAndMic(pid: 42))
         XCTAssertEqual(recorder.capturedMicDeviceUID, "first-mic")
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         settings.noMic = true
         settings.micDeviceUID = "second-mic"
@@ -148,7 +148,7 @@ final class WatchLoopMicSettingsTests: XCTestCase {
 
         try await loop.startMicrophoneRecording()
         XCTAssertEqual(loop.recordingSource, .micOnly)
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         XCTAssertNil(loop.recordingSource)
     }
