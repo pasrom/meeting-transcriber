@@ -31,7 +31,7 @@ final class WatchingControllerRecordOnlyTests: XCTestCase {
     ///
     /// The meeting is ended by stopping the watch: `WatchLoop.handleMeeting`
     /// treats a cancel mid-recording like a natural end and finalizes, which is
-    /// the same `enqueueRecording` a grace-period end reaches, without waiting
+    /// the same `stopAndEnqueue` a grace-period end reaches, without waiting
     /// out the one-second floor on `endGrace`. The sidecar's `trigger` pins that
     /// it was this path and not the manual one that wrote the output.
     func testADetectedMeetingWhoseFolderIsGoneIsKeptInTheDefaultFolderAndTheUserIsTold() async throws {

@@ -140,7 +140,7 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         let start = try XCTUnwrap(controller.beginManualRecording(.microphone))
         let started = await start.value
         XCTAssertEqual(started, .started, "precondition")
-        controller.stopManualRecording()
+        await controller.stopManualRecording()
 
         let titles = notifier.calls.map(\.title)
         XCTAssertTrue(titles.contains(OutputDirectoryResolver.unavailableTitle), "user was told: \(titles)")
@@ -275,7 +275,7 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         // exits, which clears `manualRecordingInfo` but leaves the controller's
         // reference in place, so this also pins that the refusal keys on
         // `isManualRecording` and not on `watchLoop != nil`.
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
         XCTAssertFalse(loop.isManualRecording, "precondition for the control case")
 
         controller.startManualRecording(pid: 1234, appName: "Safari", title: "Third")

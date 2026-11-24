@@ -236,7 +236,7 @@ final class WatchingControllerTests: XCTestCase {
         controller.watchLoop = loop
         try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
 
-        controller.stopManualRecording()
+        await controller.stopManualRecording()
 
         XCTAssertNil(controller.watchLoop)
     }

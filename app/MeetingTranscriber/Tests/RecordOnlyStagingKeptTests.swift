@@ -35,7 +35,7 @@ final class RecordOnlyStagingKeptTests: XCTestCase {
         let notifier = RecordingNotifier()
         let loop = try await makeLoop(notifier: notifier)
 
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         XCTAssertEqual(notifier.calls.map(\.title), ["Record-only: files left in staging"])
     }

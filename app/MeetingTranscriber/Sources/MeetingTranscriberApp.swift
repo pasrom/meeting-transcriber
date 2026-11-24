@@ -195,7 +195,7 @@ struct MeetingTranscriberApp: App {
             noMic: appState.settings.noMic,
             manualRecordingPendingOrActive: appState.watching.isManualRecording,
             onStopManualRecording: appState.isManualRecording ? {
-                appState.watching.stopManualRecording()
+                Task { await appState.watching.stopManualRecording() }
             } : nil,
             isMicMuted: appState.isMicMuted,
             onToggleMicMute: appState.micMuteToggle,

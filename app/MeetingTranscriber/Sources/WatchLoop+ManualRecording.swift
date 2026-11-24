@@ -28,12 +28,12 @@ extension WatchLoop {
 
             case .stopPidExited:
                 logger.info("Monitored app (PID \(pid ?? 0)) exited — stopping manual recording")
-                stopManualRecording()
+                await stopManualRecording()
                 return
 
             case .stopMaxDurationExceeded:
                 logger.info("Max recording duration reached — stopping manual recording")
-                stopManualRecording()
+                await stopManualRecording()
                 return
             }
             try? await sleepProvider(pollInterval)

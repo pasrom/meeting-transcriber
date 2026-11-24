@@ -37,6 +37,27 @@ final class FixedMeetingDetector: MeetingDetecting {
     func reset(appName _: String?) {}
 }
 
+/// Detects one meeting, then reports it inactive so the grace period can finish.
+final class FinishedMeetingDetector: MeetingDetecting {
+    private var meeting: DetectedMeeting?
+
+    init(meeting: DetectedMeeting = makeTestMeeting()) {
+        self.meeting = meeting
+    }
+
+    func checkOnce() -> DetectedMeeting? {
+        meeting
+    }
+
+    func isMeetingActive(_: DetectedMeeting) -> Bool {
+        false
+    }
+
+    func reset(appName _: String?) {
+        meeting = nil
+    }
+}
+
 extension HealthCheckResult {
     /// Every permission granted and working. The seed for tests that assert a
     /// recording starts, so nothing they measure depends on the runner's TCC

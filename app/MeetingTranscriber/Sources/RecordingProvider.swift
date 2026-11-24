@@ -9,10 +9,11 @@ protocol RecordingProvider {
 
     /// `stop()` with the file work (reading the tracks back, mixing, writing
     /// the mix) off the main actor. Ending the capture itself still happens on
-    /// the caller's actor. Used where the main thread has to be free while the
-    /// mix runs: a quit, whose time budget is a timer on the main actor, and
-    /// the mix of a long recording takes seconds. Default: the synchronous
-    /// `stop()`, for doubles that have no file work to move.
+    /// the caller's actor. What every stop of a recording uses
+    /// (`WatchLoop.stopAndEnqueue`): the mix of a long recording takes
+    /// seconds, which on the main actor froze the app and held a quit's
+    /// budget timer. Default: the synchronous `stop()`, for doubles that have
+    /// no file work to move.
     func stopOffMain() async throws -> RecordingResult
 
     /// Instantaneous app-audio level in dBFS. -120 when no capture session is

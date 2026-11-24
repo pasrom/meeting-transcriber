@@ -332,7 +332,7 @@ final class WatchLoopTests: XCTestCase {
 
     /// Drives a complete `start → stop` manual recording cycle so the test
     /// exercises the public surface (`stopManualRecording`) rather than the
-    /// private `enqueueRecording` it forwards to.
+    /// `stopAndEnqueue` it forwards to.
     private func runManualRecordOnlyRecording(
         recorderMix: URL,
         outputDir: URL,
@@ -355,7 +355,7 @@ final class WatchLoopTests: XCTestCase {
         recorder.micPath = recorderMic
         recorder.recordingStartDate = recordingStartDate
         try await loop.startManualRecording(pid: 42, appName: appName, title: title)
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
         return loop
     }
 
@@ -485,7 +485,7 @@ final class WatchLoopTests: XCTestCase {
         let (loop, recorder) = makeTestWatchLoop(pipelineQueue: queue)
         recorder.mixPath = mixURL
         try await loop.startManualRecording(pid: 42, appName: "Microsoft Teams", title: "Standup")
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
 
         XCTAssertEqual(queue.jobs.count, 1)
         XCTAssertEqual(queue.jobs.first?.meetingTitle, "Standup")

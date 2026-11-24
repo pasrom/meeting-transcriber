@@ -126,6 +126,14 @@ class WatchLoop {
 
     private var watchTask: Task<Void, Never>?
 
+    /// Where the watch task and a manual stop run, so a quit can wait for
+    /// them (see `UnfinishedWork`). Shared with the other loops of one
+    /// `WatchingController`.
+    let unfinishedWork: UnfinishedWork
+
+    /// The manual stop in flight, which a second stop joins.
+    private var manualStop: Task<Void, Never>?
+
     /// Hook called when state changes (for UI updates, notifications, etc.)
     var onStateChange: ((State, State, PhaseChangeCause) -> Void)?
 
@@ -152,7 +160,9 @@ class WatchLoop {
         pidAliveCheck: @escaping (pid_t) -> Bool = { kill($0, 0) == 0 },
         consentPolicy: BrowserConsentPolicy = BrowserConsentPolicy(),
         denyListStore: any ConsentDenyListStoring = InMemoryConsentDenyListStore(),
+        unfinishedWork: UnfinishedWork = UnfinishedWork(),
     ) {
+        self.unfinishedWork = unfinishedWork
         self.detector = detector
         self.recorderFactory = recorderFactory
         self.pipelineQueue = pipelineQueue
@@ -189,9 +199,8 @@ class WatchLoop {
         returnToWatching()
         logger.info("Watch mode started (poll: \(self.pollInterval)s, grace: \(self.endGracePeriod)s)")
 
-        watchTask = Task { [weak self] in
-            guard let self else { return }
-            await self.watchLoop()
+        watchTask = unfinishedWork.track { [weak self] in
+            await self?.watchLoop()
         }
     }
 
@@ -212,29 +221,31 @@ class WatchLoop {
     }
 
     /// Whether a quit has to wait for this loop: it is watching (and so may be
-    /// recording, or about to), or a manual recording is running.
+    /// recording, or about to), a manual recording is running, or a recording
+    /// that stopped is still being mixed and enqueued, also after `stop()`
+    /// (and also one of another loop that shares `unfinishedWork`).
     var hasWorkBeforeQuit: Bool {
-        watchTask != nil || activeRecorder != nil
+        activeRecorder != nil || !unfinishedWork.isEmpty
     }
 
-    /// Set by `finishForQuit`: the recording in flight is stopped with
-    /// `stopOffMain`, so the quit's budget (a main-actor timer) can fire while
-    /// the mix runs (see `TerminationFlush.recordingBudget` for what it does
-    /// not bound), and a manual start still waiting for its recorder gives up
-    /// instead of recording into the exit.
+    /// Set by `finishForQuit`: a manual start still waiting for its recorder
+    /// gives up instead of recording into the exit, and a stop that recorded
+    /// nothing is not reported as a failure.
     var finishingForQuit = false
 
     /// Stop for a quit, returning once whatever was recording has been
     /// enqueued (or written record-only). `stop()` is not enough: it drops a
     /// manual recording unstopped, and the watch task finalizes an auto one
-    /// after `stop()` has returned. A mix the exit cuts off is re-mixed by the
-    /// next launch's crash recovery, without the title, app and participants.
+    /// after `stop()` has returned. Every stop does its file work off the main
+    /// actor, so the quit's budget (a main-actor timer) can fire while the mix
+    /// runs (see `TerminationFlush.recordingBudget` for what it does not
+    /// bound). A mix the exit cuts off is re-mixed by the next launch's crash
+    /// recovery, without the title, app and participants.
     func finishForQuit() async {
         finishingForQuit = true
-        await stopManualRecordingForQuit()
-        let recording = watchTask
+        await stopManualRecording()
         stop()
-        await recording?.value
+        await unfinishedWork.waitForAll()
     }
 
     // MARK: - Manual Recording
@@ -314,24 +325,25 @@ class WatchLoop {
         logger.info("Manual recording started for \(appName) (\(target)): \(title, privacy: .private)")
     }
 
-    func stopManualRecording() {
-        guard let (recorder, info) = takeManualRecording() else { return }
-        do {
-            try enqueueRecording(title: info.title, appName: info.appName, recording: recorder.stop(), trigger: .manual)
-            finishManualRecording(failure: nil)
-        } catch {
-            finishManualRecording(failure: error)
+    /// Stop the manual recording and return once it is enqueued (or written
+    /// record-only), or once a stop already in flight has done that. The
+    /// recording stays `.recording` until then. The stop runs in a task of
+    /// its own, so a caller that is cancelled or stops waiting does not cut
+    /// it short, and a quit that comes meanwhile waits for it.
+    func stopManualRecording() async {
+        if let (recorder, info) = takeManualRecording() {
+            manualStop = unfinishedWork.track { [weak self] in
+                guard let self else { return }
+                do {
+                    try await stopAndEnqueue(recorder, title: info.title, appName: info.appName, trigger: .manual)
+                    finishManualRecording(failure: nil)
+                } catch {
+                    finishManualRecording(failure: error)
+                }
+                manualStop = nil
+            }
         }
-    }
-
-    private func stopManualRecordingForQuit() async {
-        guard let (recorder, info) = takeManualRecording() else { return }
-        do {
-            try await stopAndEnqueueForQuit(recorder, title: info.title, appName: info.appName, trigger: .manual)
-            finishManualRecording(failure: nil)
-        } catch {
-            finishManualRecording(failure: error)
-        }
+        await manualStop?.value
     }
 
     /// Clears the bookkeeping before the recorder stops, so the level poll
@@ -490,8 +502,9 @@ class WatchLoop {
         // than letting `CancellationError` discard it. The original bug lost
         // the entire recording here (no WAV finalization, no PipelineJob, no
         // naming dialog) because the cancellation propagated past `stop()` and
-        // `enqueueRecording()`. `recorder.stop()` + `enqueueRecording()` below
-        // are synchronous, so they still run to completion on the cancelled task.
+        // `enqueueRecording()`. The stop and enqueue below run in a task of
+        // their own, which the cancellation of this one does not reach, and
+        // this task waits for it, so they still run to completion.
         var endReason = MeetingEndReason.ended
         do {
             endReason = try await waitForMeetingEnd(meeting)
@@ -499,59 +512,21 @@ class WatchLoop {
             logger.info("Watch cancelled mid-recording — finalizing in-flight recording")
         }
 
-        // Stop recording and enqueue; on a quit with the file work off the
-        // main actor.
-        if finishingForQuit {
-            try await stopAndEnqueueForQuit(
-                recorder, title: title, appName: meeting.pattern.appName, trigger: .auto, participants: participants,
+        // The level poll skips a tick without a recorder, and a stopped one has
+        // no channels left to report on while its tracks are mixed.
+        activeRecorder = nil
+        // On a split the next call starts only once this one is enqueued, so
+        // the queue keeps the order the calls happened in.
+        let appName = meeting.pattern.appName
+        try await Task {
+            try await stopAndEnqueue(
+                recorder, title: title, appName: appName, trigger: .auto, participants: participants,
             )
-        } else {
-            try enqueueRecording(
-                title: title, appName: meeting.pattern.appName, recording: recorder.stop(), trigger: .auto,
-                participants: participants,
-            )
-        }
+        }.value
         return endReason
     }
 
     // MARK: - Helpers
-
-    func enqueueRecording(
-        title: String,
-        appName: String,
-        recording: RecordingResult,
-        trigger: RecordingSidecar.Trigger,
-        participants: [String] = [],
-    ) {
-        if recordOnly() {
-            do {
-                try writeRecordOnlySidecar(
-                    title: title, appName: appName, recording: recording, trigger: trigger, participants: participants,
-                )
-            } catch {
-                reportRecordOnlyFailure(error)
-            }
-            return
-        }
-
-        // Kept with the tracks for a later re-import; stage 3 moves it with them.
-        RecordingSidecar.writeRecordingSidecar(
-            for: recording, title: title, appName: appName, trigger: trigger, participants: participants,
-        )
-        let job = PipelineJob(
-            meetingTitle: title,
-            appName: appName,
-            mixPath: recording.mixPath,
-            appPath: recording.appPath,
-            micPath: recording.micPath,
-            micDelay: recording.micDelay,
-            micMuteIntervals: recording.micMuteIntervals,
-            participants: participants,
-            meetingStartTime: recording.recordingStartDate,
-        )
-        pipelineQueue?.enqueue(job)
-        logger.info("Enqueued pipeline job for: \(title, privacy: .private)")
-    }
 
     /// Single funnel through which every observable-field mutation flows.
     /// Build the next snapshot, hand it to `apply` to commit only the

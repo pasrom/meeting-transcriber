@@ -474,7 +474,7 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
 
         await waitFor(!spy.resolutions.isEmpty)
         XCTAssertEqual(spy.resolutions, [false])
-        loop.stopManualRecording()
+        await loop.stopManualRecording()
     }
 
     /// Stopping the watch loop answers a parked prompt as a decline. Otherwise

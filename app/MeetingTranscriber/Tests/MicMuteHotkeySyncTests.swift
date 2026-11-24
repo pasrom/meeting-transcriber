@@ -56,7 +56,8 @@ final class MicMuteHotkeySyncTests: XCTestCase {
         let registrar = SpyRegistrar()
         let (controller, loop, _) = try await recording(registrar: registrar)
 
-        withExtendedLifetime(controller) { loop.stopManualRecording() }
+        await loop.stopManualRecording()
+        withExtendedLifetime(controller) {}
         XCTAssertNil(registrar.registered)
     }
 

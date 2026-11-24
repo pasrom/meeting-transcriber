@@ -88,6 +88,14 @@ final class WatchLoopActiveRecorderTests: XCTestCase {
     func testHandleMeetingExposesActiveRecorderForChannelHealthPolling() async throws {
         let recorder = CapturingRecorder()
         let noMic: () -> Bool = { true }
+        // Read while the loop waits for the meeting to end, which is when the
+        // level poll runs.
+        nonisolated(unsafe) var captured: (any RecordingProvider)?
+        nonisolated(unsafe) weak var weakLoop: WatchLoop?
+        let sleepProvider: (TimeInterval) async -> Void = { _ in
+            captured = weakLoop?.activeRecorder
+            await Task.yield()
+        }
         let loop = WatchLoop(
             detector: ImmediatelyInactiveDetector(),
             recorderFactory: { recorder },
@@ -96,14 +104,18 @@ final class WatchLoopActiveRecorderTests: XCTestCase {
             endGracePeriod: 0.01,
             maxDuration: 10,
             noMic: noMic,
+            sleepProvider: sleepProvider,
         )
+        weakLoop = loop
         loop.permissionChecker = {
             HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
         }
 
-        nonisolated(unsafe) var captured: (any RecordingProvider)?
+        // A stopped recorder has no channels left to report on, so the poll
+        // must not read it through the mix that follows the stop.
+        nonisolated(unsafe) var capturedAtStop: (any RecordingProvider)?
         recorder.captureOnStop = { [weak loop] in
-            captured = loop?.activeRecorder
+            capturedAtStop = loop?.activeRecorder
         }
 
         let meeting = DetectedMeeting(
@@ -124,8 +136,9 @@ final class WatchLoopActiveRecorderTests: XCTestCase {
         XCTAssertIdentical(
             captured as AnyObject?,
             recorder,
-            "activeRecorder must reference the recorder the loop is driving while handleMeeting runs",
+            "activeRecorder must reference the recorder the loop is driving while the meeting records",
         )
+        XCTAssertNil(capturedAtStop, "activeRecorder must be cleared before the recorder stops")
         XCTAssertNil(
             loop.activeRecorder,
             "activeRecorder must be cleared after handleMeeting returns (defer)",

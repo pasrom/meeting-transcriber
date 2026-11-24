@@ -381,10 +381,15 @@ Responses:
   explain the refusal. Only `start` and a `toggle` that resolves to a start can
   return this.
 - `503 Service Unavailable` — the action was attempted but the state did not
-  settle within 20 seconds. In practice this means an unanswered microphone
-  permission dialog: the first watch start on a fresh install blocks on it, and
-  on a menu-bar-only app that dialog can sit unnoticed behind other windows.
-  Answer it and retry. Note that a *denied* microphone does not produce a `503`
+  settle within 20 seconds. In practice this means one of two things. An
+  unanswered microphone permission dialog: the first watch start on a fresh
+  install blocks on it, and on a menu-bar-only app that dialog can sit unnoticed
+  behind other windows. Answer it and retry. Or a start right after a stop that
+  ended a recording: the start waits until that recording is mixed and queued,
+  which for a long recording can take longer than 20 seconds, and every watch
+  action sent meanwhile, a stop too, waits for that start. Once the mix is done
+  watching starts by itself, unless a manual recording began in the meantime;
+  retry after that and you find it on. Note that a *denied* microphone does not produce a `503`
   — watching starts regardless, because app audio records without it, so you get
   `200` with `watching: true`. Check the badge or `permissionsHealthy` for that.
 - `400 Bad Request` — the body is not JSON, or `action` is not one of the three
