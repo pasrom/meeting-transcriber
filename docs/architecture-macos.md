@@ -273,6 +273,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `NamingWindowPolicy.swift` | Pins the "Name Speakers" window so it stays available while the user works in other apps (issue #504) |
 | `LiveTranscriptionController.swift` | Wires the per-channel live-caption pipeline (streaming or re-transcribe) to both `DualSourceRecorder` sinks (mic + app), feeds `LiveCaptionsState` |
 | `LiveTranscriptionController+Nemotron.swift` | Nemotron streaming-pipeline construction, split out for size; injectable factory for testing the build + model-load-failure fallback |
+| `LiveTranscriptionController+StreamingModels.swift` | The streaming caption model set a controller loads (Nemotron or Parakeet EOU), its download ahead of the warm-up queue (one per model folder at a time across controllers), and the English EOU pipeline build |
 | `LiveTranscriptionController+LanguageProbe.swift` | Auto-detect captions with WhisperKit: holds caption audio, detects the recording's language, then installs Parakeet EOU (English) or re-transcribe; also the stop-time `flush()` |
 | `LiveTranscriptionController+Sinks.swift` | Recording audio sinks forwarding each channel to its caption and language-probe feeds |
 | `CaptionLanguageProbe.swift` | Per-channel VAD probe that collects 4 s of speech for language detection, and the pure decision rule (probability ≥ 0.8, two English windows for EOU, up to 4 attempts) |
@@ -285,7 +286,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `NemotronAsrManager.swift` | Production seam wrapping FluidAudio's Nemotron model + Silero VAD for `NemotronStreamingCaptionSession` |
 | `UtteranceRingBuffer.swift` | Rolling 16 kHz sample buffer addressable by absolute ms timestamp (feeds streaming caption sessions) |
 | `AsyncSerialGate.swift` | First-come-first-served async mutual exclusion that suspends waiters instead of blocking a thread; serialises Nemotron 3 runs and model loads |
-| `ModelWarmupQueue.swift` | Serial FIFO gate for model warm-up loads — avoids compiling/loading the ASR engine and live-caption models concurrently at launch |
+| `ModelWarmupQueue.swift` | Serial FIFO gate for model warm-up loads: avoids compiling/loading the ASR engine and live-caption models concurrently at launch; an op still running 300 s after it started gives up its place (see `architecture/transcription.md`) |
 | `LiveCaptionsWarmup.swift` | The live-caption model warm-up state, as Settings, the menu and `/state` show it |
 | `EngineModelState.swift` | App-owned model lifecycle state for a `TranscribingEngine`, decoupled from any ASR vendor's own enum |
 | `EngineController.swift` | `@Observable @MainActor` engine selection + model lifecycle controller (language/vocabulary sync, preload) |
@@ -480,6 +481,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `FileManager+OwnerOnly.swift` | `FileManager` extension: owner-only file permission constant (`rw-------`) as single source of truth |
 | `UserDefaults+Bool.swift` | Reads a stored flag tolerantly (`defaults write`'s untyped "1"/"yes"/"true" strings count), unlike a plain `object(forKey:) as? Bool` cast (issue #814) |
 | `SecurityScopeAccess.swift` | Opens and closes security-scoped access to a user-picked folder, always on the bookmark-resolved root URL, never on a URL derived or rebuilt from it |
+| `KeyedSerialGate.swift` | Runs async bodies that share a key one at a time; a waiter runs its own body afterwards (unlike `SingleFlight`, it does not take the running one's outcome) |
 | `SingleFlight.swift` | Single-flight async deduplication coordinator (concurrent callers await one shared run and receive its outcome) |
 | `RPCServerController.swift` | `@Observable` controller owning `DebugRPCServer` lifecycle (`#if !APPSTORE`, wired by `AppState`) |
 | `PermissionsController.swift` | `@Observable` controller for permission health checks (wired by `AppState`, re-runs on activation) |
@@ -678,7 +680,10 @@ so they're available even when the active `TranscribingEngine` has no live re-tr
 `LiveTranscriptionController` wires the resolved per-channel pipeline to both `DualSourceRecorder`
 sinks (mic + app) and feeds `LiveCaptionsState`, which backs the `LiveCaptionsOverlay` window.
 `ModelWarmupQueue` serializes model warm-up loads (ASR engine + streaming models) so they don't
-compile/load concurrently at launch.
+compile/load concurrently at launch, except that an op still running at its stall deadline stops
+holding the ops after it. The streaming models' first download runs before the queue, one per
+model folder at a time across rebuilt controllers (`KeyedSerialGate`); their loads are not gated (see
+`architecture/transcription.md`).
 
 ---
 

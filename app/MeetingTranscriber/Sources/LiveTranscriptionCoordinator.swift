@@ -69,6 +69,10 @@ final class LiveTranscriptionCoordinator {
     /// isolated queue.
     private let warmupQueue: ModelWarmupQueue
 
+    /// Shared by every controller this coordinator builds; see
+    /// `LiveTranscriptionController.downloadStreamingModels()`.
+    private let modelDownloads = KeyedSerialGate()
+
     /// Builds the streaming controller for the (optional) active engine. The
     /// engine is nil when a language-driven streaming backend (German/English)
     /// applies with a non-streaming active engine — those sessions don't need it.
@@ -112,13 +116,15 @@ final class LiveTranscriptionCoordinator {
         // closure-typed trailing-eligible params (`eouSessionFactory` +
         // `verboseDiagnostics`) a bare trailing closure is ambiguous, so name it.
         let verbose: () -> Bool = { verboseDiagnostics() }
-        return LiveTranscriptionController(
+        let controller = LiveTranscriptionController(
             engine: engine,
             vad: FluidVAD(threshold: 0.5),
             captions: captions,
             engineLanguage: engineLanguage,
             verboseDiagnostics: verbose,
         )
+        controller.streamingModelDownload = LiveTranscriptionController.downloadStreamingModel
+        return controller
     }
 
     /// Whether live captions are eligible to run at all, per the shared gate.
@@ -246,6 +252,18 @@ final class LiveTranscriptionCoordinator {
         warmup = .idle
     }
 
+    /// The `warmup` failure of a warm-up still loading at the queue's stall deadline,
+    /// which counts from the load's start, not from the build like the Settings timer.
+    static func stalledFailure(after deadline: Duration) -> String {
+        let seconds = deadline.components.seconds
+        let span = switch seconds {
+        case 60: "1 minute"
+        case let whole where whole > 60 && whole.isMultiple(of: 60): "\(whole / 60) minutes"
+        default: "\(seconds) seconds"
+        }
+        return "Loading the caption models has not finished \(span) after it started."
+    }
+
     private func prewarmIfEligible() {
         guard captionsEligible else { return }
         _ = ensureController()
@@ -275,6 +293,7 @@ final class LiveTranscriptionCoordinator {
         // Re-transcribe needs a streaming engine; the streaming backends don't.
         guard strategy != .reTranscribe || streamingEngine != nil else { return nil }
         let controller = makeController(streamingEngine, captions, language, verboseDiagnostics)
+        controller.modelDownloads = modelDownloads
         self.controller = controller
         let started = Date()
         warmup = .preparing(since: started)
@@ -289,16 +308,24 @@ final class LiveTranscriptionCoordinator {
         // Bind it locally; the fire-and-forget Task holds `self` only weakly.
         let queue = warmupQueue
         // Names the step a load that has not returned is in; the queue logs the stall itself.
-        let reportStall: @MainActor () -> Void = { [weak controller] in
+        // The load keeps running, and its outcome still replaces the failure when it returns.
+        let stalledFailure = Self.stalledFailure(after: queue.stallDeadline)
+        let reportStall: @MainActor () -> Void = { [weak self, weak controller] in
             guard let controller else { return }
             logger.warning(
                 "Live caption warm-up stalled in step: \(controller.prepareStep ?? "none, between steps", privacy: .public)",
             )
+            // The queue no longer waits for this load, so a rebuilt controller does not
+            // either: the retry hint under `.failed` is now true.
+            guard let self, self.controller === controller else { return }
+            self.warmup = .failed(stalledFailure)
         }
         Task { @MainActor [weak self] in
+            // Before the queue, so its stall deadline does not count a first download.
+            await controller.downloadStreamingModels()
             await queue.run("caption warm-up", onStall: reportStall) {
                 await controller.prepare()
-                // Counted from the build, so time spent waiting in the queue is included.
+                // Counted from the build, so the download and the wait in the queue are included.
                 let seconds = Date().timeIntervalSince(started)
                 guard let self, self.controller === controller else {
                     logger.notice("Live caption warm-up dropped after \(seconds, format: .fixed(precision: 1), privacy: .public) s")

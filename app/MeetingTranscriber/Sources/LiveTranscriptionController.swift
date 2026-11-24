@@ -56,11 +56,11 @@ final class LiveTranscriptionController {
     /// picks the streaming backend via `LiveCaptionsGate` (`en` → EOU, a Nemotron-trained
     /// language such as `de` → Nemotron, else → re-transcribe). On a streaming-model load failure
     /// `prepare()` degrades to re-transcribe (if supported) or to no captions.
-    private let engineLanguage: String?
+    let engineLanguage: String?
 
     /// Resolved per-channel strategy (`liveEnabled` is implicit — the controller
     /// only exists when captions are eligible).
-    private var captionStrategy: LiveCaptionsGate.Strategy {
+    var captionStrategy: LiveCaptionsGate.Strategy {
         LiveCaptionsGate.strategy(
             liveEnabled: true,
             engineLanguage: engineLanguage,
@@ -142,11 +142,18 @@ final class LiveTranscriptionController {
     /// Why `prepare()` ended with no caption model loaded; nil while it runs and
     /// when captions can run (a fallback to re-transcribe included).
     private(set) var prepareFailure: String?
-    private var streamingLoadFailure: String?
+    /// Why the streaming load, or the download before it, failed.
+    var streamingLoadFailure: String?
     static let engineLoadFailure = "The transcription model could not be loaded."
 
     /// Set by `cancelPrepare()`; `prepare()` checks it between model loads.
-    private var prepareCancelled = false
+    private(set) var prepareCancelled = false
+
+    /// Shared by the coordinator across its controllers; see `downloadStreamingModels()`.
+    var modelDownloads = KeyedSerialGate()
+    /// Fetches missing streaming model files ahead of `prepare()`; nil fetches
+    /// nothing. Set by `LiveTranscriptionCoordinator.makeDefaultController`.
+    var streamingModelDownload: StreamingModelDownload?
 
     /// The `prepare()` step running now, nil between steps. The warm-up stall
     /// warning names it, so a load that never returns says where it hangs.
@@ -154,7 +161,7 @@ final class LiveTranscriptionController {
 
     /// Run one `prepare()` step, logged with its duration. Not gated on verbose
     /// diagnostics: once per warm-up, and the names carry no speech.
-    private func step<T>(_ name: String, _ body: () async throws -> T) async rethrows -> T {
+    func step<T>(_ name: String, _ body: () async throws -> T) async rethrows -> T {
         prepareStep = name
         let started = Date()
         logger.notice("Live caption warm-up step started: \(name, privacy: .public)")
@@ -218,14 +225,6 @@ final class LiveTranscriptionController {
         self.eouSessionFactory = eouSessionFactory
         self.nemotronPipelineFactory = nemotronPipelineFactory
         self.verboseDiagnostics = verboseDiagnostics
-    }
-
-    /// Production EOU backend: FluidAudio's cache-aware streaming Parakeet EOU
-    /// manager at the 320 ms chunk size (WER/latency trade-off) with the
-    /// default 1280 ms end-of-utterance debounce. Built lazily, one per channel,
-    /// only when the English-streaming path is taken.
-    static func makeDefaultEouManager() -> any EouStreamingAsrManaging {
-        StreamingEouAsrManager(chunkSize: .ms320, eouDebounceMs: 1280)
     }
 
     /// Warm the engine + VAD + speaker-matcher models and build both channel
@@ -308,12 +307,16 @@ final class LiveTranscriptionController {
     /// backend that fails its model load falls through to re-transcribe.
     private func buildPipelines() async {
         switch captionStrategy {
-        case .nemotronStreaming:
+        case .nemotronStreaming where streamingLoadFailure == nil:
             let built = await step("Nemotron models") { await buildNemotronStreamingPipelines() }
             if built { return }
 
-        case .englishStreaming:
+        case .englishStreaming where streamingLoadFailure == nil:
             if await buildEnglishStreamingPipelines() { return }
+
+        case .nemotronStreaming, .englishStreaming:
+            // The download failed: a load would download again, outside `modelDownloads`.
+            break
 
         case .reTranscribe, .none:
             break
@@ -345,32 +348,6 @@ final class LiveTranscriptionController {
             logger.warning(
                 "Nemotron streaming model load failed, falling back: \(error.localizedDescription, privacy: .public)",
             )
-            streamingLoadFailure = error.localizedDescription
-            micPipeline = nil
-            appPipeline = nil
-            usingStreamingSession = false
-            return false
-        }
-    }
-
-    /// Build EOU sessions for both channels, loading their models. Returns true
-    /// when both are ready, false (and leaves both pipelines nil) when the load
-    /// throws so the caller can fall back.
-    private func buildEnglishStreamingPipelines() async -> Bool {
-        do {
-            let mic = makeEouPipeline(channel: .mic)
-            try await step("EOU models, mic channel") { try await mic.prepare() }
-            guard !prepareCancelled else { return true }
-            let app = makeEouPipeline(channel: .app)
-            try await step("EOU models, app channel") { try await app.prepare() }
-            micPipeline = mic
-            appPipeline = app
-            usingStreamingSession = true
-            return true
-        } catch {
-            // Non-fatal: log and let the caller fall back to the re-transcribe
-            // path (or no captions). Model-load errors carry no spoken content.
-            logger.warning("EOU streaming model load failed, falling back: \(error.localizedDescription, privacy: .public)")
             streamingLoadFailure = error.localizedDescription
             micPipeline = nil
             appPipeline = nil

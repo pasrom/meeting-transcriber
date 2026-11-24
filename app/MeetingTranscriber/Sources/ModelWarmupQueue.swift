@@ -23,22 +23,30 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "ModelWa
 /// Each op is logged when it starts and when it finishes, with its label and
 /// durations, and with a warning when it is still running `stallDeadline` after
 /// it started. A load that never returns otherwise leaves nothing in the log
-/// that says which one it is. The warning does not stop the op.
+/// that says which one it is.
+///
+/// An op still running at that deadline also gives up its place: the ops
+/// queued after it start, while it keeps running and is never interrupted.
+/// Otherwise one load that never returns holds every later warm-up forever.
+/// The trade-off (an op that was slow rather than stuck then runs beside the
+/// next) is in `docs/architecture/transcription.md`.
 @MainActor
 final class ModelWarmupQueue {
     /// Waits for the stall deadline; injectable so tests decide when it passes.
     typealias Sleep = @MainActor (Duration) async throws -> Void
 
     /// Five times the longest warm-up measured (59.9 s, a first Nemotron
-    /// warm-up); a slow first model download can still reach it.
+    /// warm-up); a slow first ASR model download, which runs inside the queue,
+    /// can still reach it. The caption models download before their op.
     static let defaultStallDeadline: Duration = .seconds(300)
 
-    /// How long an op may run before the queue reports it as stalled.
+    /// How long an op may hold the queue before it is reported as stalled and
+    /// the ops after it stop waiting for it.
     let stallDeadline: Duration
     private let sleep: Sleep
 
     /// The most recently enqueued op. Each new op waits until this one has
-    /// finished, then becomes the new tail.
+    /// finished or given up its place, then becomes the new tail.
     private var tail: Slot?
 
     init(
@@ -51,10 +59,11 @@ final class ModelWarmupQueue {
         self.sleep = sleep
     }
 
-    /// Enqueue `op` to run after every previously-enqueued op has finished, and
-    /// await its completion. At most one op runs at a time. `label` names the op
-    /// in the log; `onStall` runs once if the op is still running
-    /// `stallDeadline` after it started.
+    /// Enqueue `op` to run after every previously-enqueued op has finished or
+    /// stalled, and await its completion. At most one op runs at a time, apart
+    /// from ops that stalled. `label` names the op in the log; `onStall` runs
+    /// once if the op is still running `stallDeadline` after it started, as it
+    /// gives up its place.
     func run(
         _ label: String,
         onStall: (@MainActor () -> Void)? = nil,
@@ -63,7 +72,7 @@ final class ModelWarmupQueue {
         let predecessor = tail
         let slot = Slot(label: label)
         tail = slot
-        if let predecessor, !predecessor.isFinished {
+        if let predecessor, !predecessor.isReleased {
             logger.notice("Warm-up queue: \(label, privacy: .public) waits for \(predecessor.label, privacy: .public)")
         }
         let enqueued = Date()
@@ -71,22 +80,23 @@ final class ModelWarmupQueue {
         let sleep = sleep
         // An unstructured Task, so a cancelled caller does not cancel the load.
         let task = Task { @MainActor in
-            await predecessor?.waitUntilFinished()
+            await predecessor?.waitUntilReleased()
             let started = Date()
             logger.notice(
                 "Warm-up queue: \(label, privacy: .public) started after waiting \(started.timeIntervalSince(enqueued), format: .fixed(precision: 1), privacy: .public) s",
             )
             let watchdog = Task { @MainActor in
                 do { try await sleep(deadline) } catch { return }
-                guard !slot.isFinished else { return }
+                guard !slot.isReleased else { return }
                 logger.warning(
-                    "Warm-up queue: \(label, privacy: .public) still running after \(deadline.components.seconds, privacy: .public) s",
+                    "Warm-up queue: \(label, privacy: .public) still running after \(deadline.components.seconds, privacy: .public) s; it keeps running, the ops queued after it no longer wait for it",
                 )
                 onStall?()
+                slot.release()
             }
             await op()
             watchdog.cancel()
-            slot.finish()
+            slot.release()
             logger.notice(
                 "Warm-up queue: \(label, privacy: .public) finished after \(Date().timeIntervalSince(started), format: .fixed(precision: 1), privacy: .public) s",
             )
@@ -95,29 +105,27 @@ final class ModelWarmupQueue {
     }
 }
 
-/// One enqueued op's place in the chain.
+/// One enqueued op's place in the chain, released when the op finishes or stalls.
 @MainActor
 private final class Slot {
     let label: String
-    private(set) var isFinished = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var isReleased = false
+    /// Only the op enqueued next waits for this one.
+    private var waiter: CheckedContinuation<Void, Never>?
 
     init(label: String) {
         self.label = label
     }
 
-    func waitUntilFinished() async {
-        if isFinished { return }
-        await withCheckedContinuation { waiters.append($0) }
+    func waitUntilReleased() async {
+        if isReleased { return }
+        await withCheckedContinuation { waiter = $0 }
     }
 
-    func finish() {
-        guard !isFinished else { return }
-        isFinished = true
-        let pending = waiters
-        waiters = []
-        for waiter in pending {
-            waiter.resume()
-        }
+    func release() {
+        guard !isReleased else { return }
+        isReleased = true
+        waiter?.resume()
+        waiter = nil
     }
 }
