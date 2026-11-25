@@ -25,12 +25,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 2c39473c90970afc54d8e119ff5c2f0fb8cb667a
+          ref: d976f78a95e34a1ee037d31d6b6952c73f22a0a4
           persist-credentials: false
 
       - name: Verify source and toolchain
         run: |
-          test "$(git rev-parse HEAD)" = 2c39473c90970afc54d8e119ff5c2f0fb8cb667a
+          test "$(git rev-parse HEAD)" = d976f78a95e34a1ee037d31d6b6952c73f22a0a4
           xcodebuild -version
           swift --version
 
@@ -44,6 +44,7 @@ jobs:
         with:
           cache-key-suffix: mcp-verify-${{ matrix.variant }}
           cache-spm: "false"
+          cache-models: "false"
           swift-flags: ${{ matrix.swift-flags }}
 
       - uses: ./.github/actions/setup-ffmpeg
