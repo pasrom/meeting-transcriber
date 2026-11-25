@@ -106,7 +106,7 @@ final class PipelineMeetingContextTests: XCTestCase {
     func testDefaultDisabledSettingAndToggleWriteThrough() throws {
         let name = UUID().uuidString
         let defaults = try XCTUnwrap(DefaultsSuite.open(name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        defer { DefaultsSuite.remove(name) }
         let settings = AppSettings(defaults: defaults)
         XCTAssertFalse(settings.meetingContextEnabled)
         XCTAssertNil(settings.meetingContextConfiguration())
