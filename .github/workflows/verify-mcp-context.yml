@@ -25,19 +25,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 3c877cd532b176f4b992e1e81d11f873602d8022
+          ref: 02c45de4a66dee662468241aeda78d2affcb3f63
           persist-credentials: false
 
       - name: Verify source and toolchain
         run: |
-          test "$(git rev-parse HEAD)" = 3c877cd532b176f4b992e1e81d11f873602d8022
+          test "$(git rev-parse HEAD)" = 02c45de4a66dee662468241aeda78d2affcb3f63
           xcodebuild -version
           swift --version
 
       - name: Run MCP tests
         timeout-minutes: 15
         working-directory: app/MeetingTranscriber
-        run: swift test ${{ matrix.swift-flags }} --filter 'ContextMCPTests|ContextPolicyTests|PipelineMeetingContextTests'
+        run: swift test ${{ matrix.swift-flags }} --filter 'MCPOAuthTests|ContextMCPTests|ContextPolicyTests|PipelineMeetingContextTests'
 
       - uses: ./.github/actions/setup-swift-test
         timeout-minutes: 20
