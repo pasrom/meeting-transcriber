@@ -351,15 +351,15 @@ Meeting Transcriber is built with help from many people: code, bug reports, test
 <a href="https://github.com/iHateCode"><img src="https://avatars.githubusercontent.com/u/6393143?v=4&amp;s=80" width="40" height="40" alt="iHateCode" title="iHateCode"/></a>
 <a href="https://github.com/GB-D"><img src="https://avatars.githubusercontent.com/u/277263165?v=4&amp;s=80" width="40" height="40" alt="GB-D" title="GB-D"/></a>
 <a href="https://github.com/jhavez"><img src="https://avatars.githubusercontent.com/u/213444590?v=4&amp;s=80" width="40" height="40" alt="Julien" title="Julien"/></a>
+<a href="https://github.com/mickvdv"><img src="https://avatars.githubusercontent.com/u/1532028?v=4&amp;s=80" width="40" height="40" alt="Mick van der Vegt" title="Mick van der Vegt"/></a>
+<a href="https://github.com/wapp-its"><img src="https://avatars.githubusercontent.com/u/26138299?v=4&amp;s=80" width="40" height="40" alt="wapp-its" title="wapp-its"/></a>
 <a href="https://github.com/jianjettfu-oss"><img src="https://avatars.githubusercontent.com/u/229418358?v=4&amp;s=80" width="40" height="40" alt="jianjettfu-oss" title="jianjettfu-oss"/></a>
 <a href="https://danielsogl.de/"><img src="https://avatars.githubusercontent.com/u/15234844?v=4&amp;s=80" width="40" height="40" alt="Daniel Sogl" title="Daniel Sogl"/></a>
 <a href="https://github.com/duncanwood"><img src="https://avatars.githubusercontent.com/u/7288228?v=4&amp;s=80" width="40" height="40" alt="Duncan Wood" title="Duncan Wood"/></a>
 <a href="https://github.com/niftan5"><img src="https://avatars.githubusercontent.com/u/57637411?v=4&amp;s=80" width="40" height="40" alt="Steffen" title="Steffen"/></a>
 <a href="https://github.com/zunami"><img src="https://avatars.githubusercontent.com/u/4697822?v=4&amp;s=80" width="40" height="40" alt="zunami" title="zunami"/></a>
-<a href="https://github.com/DevUrandomFoo"><img src="https://avatars.githubusercontent.com/u/15967780?v=4&amp;s=80" width="40" height="40" alt="Manuel J." title="Manuel J."/></a>
-<a href="https://github.com/nsanitas"><img src="https://avatars.githubusercontent.com/u/909637?v=4&amp;s=80" width="40" height="40" alt="Nicolas Sanitas" title="Nicolas Sanitas"/></a>
 
-And [38 more](<CONTRIBUTORS.md>), credited in full there.
+And [39 more](<CONTRIBUTORS.md>), credited in full there.
 <!-- CONTRIBUTORS-PREVIEW:END -->
 
 [CONTRIBUTING.md](CONTRIBUTING.md) explains how to join them.
