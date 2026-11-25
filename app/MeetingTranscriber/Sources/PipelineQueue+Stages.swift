@@ -1096,7 +1096,7 @@ extension PipelineQueue {
     /// A caller that needs to know reads it instead of asking the factory
     /// again: the setting can change while the model writes.
     @discardableResult
-    func generateProtocol( // swiftlint:disable:this function_parameter_count
+    func generateProtocol( // swiftlint:disable:this function_parameter_count function_body_length
         jobID: UUID, transcript: String, title: String, protocolsDir: URL,
         speakerNames: [String], transcriptIsTheOutputWithoutAProvider: Bool,
     ) async throws(CancellationError) -> ProtocolGenerationOutcome {
@@ -1110,49 +1110,48 @@ extension PipelineQueue {
             if transcriptIsTheOutputWithoutAProvider { markOutputWritten(jobID: jobID, output: job.transcriptPath) }
             return .noProvider
         }
-        let shortID = PipelineJob.shortID(for: jobID)
         // Reuse the basename fixed when the transcript was saved (persisted as
         // namingSlug), so the .md shares the .txt/audio stem exactly. This runs
         // only after a transcript exists, so namingSlug is set on every real
         // path; the fallback only keeps generation working without one.
         let initialBasename = job.notesBasename ?? job.namingSlug
             ?? Self.namingSlug(title: title, jobID: jobID, startTime: Date())
-        let meetingStartTime = job.meetingStartTime
+        let initialNotesURL = protocolsDir.appendingPathComponent("\(initialBasename).md")
+        let contextConfiguration = job.notesContextMode == .withoutContext ? nil : meetingContextConfiguration?()
+        if contextConfiguration != nil { contextualNotesJobs.insert(jobID) }
+        defer { contextualNotesJobs.remove(jobID) }
         updateJobState(id: jobID, to: .generatingProtocol)
         let protocolMD: String
+        var expectedNotes: MeetingContextFiles.ExistingNotes?
+        var context: (outcome: MeetingContextOutcome, configuration: MeetingContextConfiguration)?
         do {
-            let diarized = transcript.range(
-                of: #"\[\w[\w\s]*\]"#, options: .regularExpression,
-            ) != nil
-            protocolMD = try await generator.generate(
-                transcript: transcript,
-                title: title,
-                diarized: diarized,
-                meetingStartTime: meetingStartTime,
-            )
+            expectedNotes = try await existingNotesVersion(for: job, at: initialNotesURL)
+            let model = generator as? any ContextNotesModel
+            context = try await collectMeetingContext(for: job, transcript: transcript, model: model, configuration: contextConfiguration)
+            let diarized = transcript.range(of: #"\[\w[\w\s]*\]"#, options: .regularExpression) != nil
+            if let enriched = try await generateContextualNotes(
+                with: model, job: job, transcript: transcript, diarized: diarized, context: &context,
+            ) {
+                protocolMD = enriched
+            } else {
+                try ensureStillQueued(jobID)
+                protocolMD = try await generator.generate(transcript: transcript, title: title, diarized: diarized, meetingStartTime: job.meetingStartTime)
+            }
         } catch {
             // Cancelled while the model was writing. A generator stopped this
             // way may report an error of its own (the CLI one does), and either
             // way it is no failure, and there is no job left to warn.
             try ensureStillQueued(jobID)
-            // Every ProtocolGenerating error's message is now guaranteed
-            // content-free: ClaudeCLIProtocolGenerator sources cliFailed's
-            // text from the stream-json result event (never generated
-            // content, see ClaudeCLIProtocolGenerator.publicFailureMessage)
-            // or a fixed placeholder, never from the accumulated protocol
-            // text; every other case (cliNotFound, timeout, emptyProtocol,
-            // and OpenAIProtocolGenerator's connection/HTTP errors) already
-            // only ever carried diagnostic text. Safe to log at .public —
-            // restores the visibility traded away in PR #692's 4th commit.
-            // Content-free means no meeting content: an HTTP error still
-            // carries part of the server's response body, which is why only
-            // this line keeps the message and the job keeps the kind.
-            logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .public)")
-            // Matched by /v1 clients and persisted jobs; keep the text stable.
+            let reason = context == nil ? error.localizedDescription : "Contextual notes request failed"
+            let shortID = PipelineJob.shortID(for: jobID)
+            logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(reason, privacy: .public)")
+            if let context {
+                recordMeetingContext(context.outcome, jobID: jobID, notes: initialNotesURL, markdown: nil, transcript: transcript)
+            }
             addWarning(id: jobID, Self.protocolGenerationFailedWarning)
             recordNotesFailure(id: jobID, MeetingNotesFailure(error))
             recordNotesSpeakerNames(id: jobID, speakerNames)
-            resolveNotionExport(jobID: jobID)
+            if job.notesContextMode == nil { resolveNotionExport(jobID: jobID) }
             return .attempted
         }
 
@@ -1171,35 +1170,50 @@ extension PipelineQueue {
             )
         }
         // Checked again after the model call, which can take many minutes.
-        if notesAppearedDuringTheCall(of: job, basename: basename, protocolsDir: protocolsDir) { return .attempted }
+        if expectedNotes == nil, notesAppearedDuringTheCall(of: job, basename: basename, protocolsDir: protocolsDir) {
+            return .attempted
+        }
 
         saveGeneratedNotes(
-            protocolMD, transcript: outputOptions.includeFullTranscriptInProtocol ? transcript : nil,
+            protocolMD, transcript: transcript, includeFullTranscript: outputOptions.includeFullTranscriptInProtocol,
             basename: basename, jobID: jobID, protocolsDir: protocolsDir, speakerNames: speakerNames,
+            context: context?.outcome, expectedNotes: expectedNotes,
         )
         return .attempted
     }
 
-    /// Saves the notes the model wrote and queues their Notion export when one
-    /// is configured. `transcript` is the full transcript to carry along with
-    /// them, nil when the job's output options leave it out.
+    /// Saves the notes before handing them to the existing Notion export.
     private func saveGeneratedNotes( // swiftlint:disable:this function_parameter_count
-        _ protocolMD: String, transcript: String?, basename: String, jobID: UUID, protocolsDir: URL,
-        speakerNames: [String],
+        _ protocolMD: String, transcript: String, includeFullTranscript: Bool, basename: String, jobID: UUID,
+        protocolsDir: URL, speakerNames: [String], context: MeetingContextOutcome?,
+        expectedNotes: MeetingContextFiles.ExistingNotes?,
     ) {
-        let markdown = transcript.map { protocolMD + "\n\n---\n\n## Full Transcript\n\n" + $0 } ?? protocolMD
+        let carriedTranscript = includeFullTranscript ? transcript : nil
+        let markdown = carriedTranscript.map { protocolMD + "\n\n---\n\n## Full Transcript\n\n" + $0 } ?? protocolMD
+        let notesURL = protocolsDir.appendingPathComponent("\(basename).md")
 
-        let configuration = resolveNotionExport(jobID: jobID).configuration
-        // Saved first, even for a Notion-only export: the job reaches `.done` and
-        // the queue moves on while the export runs, so this is what a quit or a
-        // failed export falls back on. A successful Notion-only export removes it.
-        let savedLocally = saveProtocolLocally(markdown, basename: basename, jobID: jobID, protocolsDir: protocolsDir)
+        // Explicit replacement is local. It cannot silently create a second
+        // Notion page for a meeting whose existing page may not be known.
+        let configuration = expectedNotes == nil ? resolveNotionExport(jobID: jobID).configuration : nil
+        let savedLocally = saveProtocolLocally(
+            markdown, basename: basename, jobID: jobID, protocolsDir: protocolsDir, expectedNotes: expectedNotes,
+        )
         if savedLocally { markOutputWritten(jobID: jobID, output: job(withID: jobID)?.protocolPath) }
+        if let context {
+            recordMeetingContext(context, jobID: jobID, notes: notesURL, markdown: savedLocally ? markdown : nil, transcript: transcript)
+        } else if savedLocally, expectedNotes != nil {
+            let sidecar = MeetingContextFiles.sidecar(beside: notesURL)
+            if FileManager.default.fileExists(atPath: sidecar.path) {
+                do { try FileManager.default.removeItem(at: sidecar) } catch {
+                    addWarning(id: jobID, "The previous meeting context record could not be removed.")
+                }
+            }
+        }
         if let configuration {
             queueNotionExport(
                 PendingNotionExport(
                     protocolMD: protocolMD,
-                    transcript: transcript,
+                    transcript: carriedTranscript,
                     speakerNames: speakerNames,
                     configuration: configuration,
                     savedLocally: savedLocally,
@@ -1222,10 +1236,18 @@ extension PipelineQueue {
         return resolution
     }
 
-    private func saveProtocolLocally(_ markdown: String, basename: String, jobID: UUID, protocolsDir: URL) -> Bool {
+    private func saveProtocolLocally(
+        _ markdown: String, basename: String, jobID: UUID, protocolsDir: URL, expectedNotes: MeetingContextFiles.ExistingNotes?,
+    ) -> Bool {
         let shortID = PipelineJob.shortID(for: jobID)
         do {
-            let mdPath = try ProtocolGenerator.saveProtocol(markdown, basename: basename, dir: protocolsDir)
+            let mdPath: URL
+            if let expectedNotes {
+                mdPath = protocolsDir.appendingPathComponent("\(basename).md")
+                try MeetingContextFiles.replaceNotes(markdown, at: mdPath, expected: expectedNotes)
+            } else {
+                mdPath = try ProtocolGenerator.saveProtocol(markdown, basename: basename, dir: protocolsDir)
+            }
             logger.info("[\(shortID, privacy: .public)] protocol_saved file=\(mdPath.lastPathComponent, privacy: .private)")
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
                 jobs[idx].protocolPath = mdPath
@@ -1236,7 +1258,12 @@ extension PipelineQueue {
             // CocoaError names the file, and the file name is the meeting title.
             logger.warning("[\(shortID, privacy: .public)] protocol_save_failed error=\(error.localizedDescription, privacy: .private)")
             // Matched by /v1 clients and persisted jobs; keep the text stable.
-            addWarning(id: jobID, "Protocol was generated but could not be saved; the transcript was saved")
+            if expectedNotes == nil {
+                addWarning(id: jobID, "Protocol was generated but could not be saved; the transcript was saved")
+            } else {
+                addWarning(id: jobID, "The regenerated notes could not replace the previous file.")
+                recordNotesFailure(id: jobID, .other)
+            }
             return false
         }
     }

@@ -116,7 +116,7 @@ struct OutputSettingsView: View {
             recordingRetentionSection
 
             meetingNotesSection
-            providerSection
+            notesProviderAndContext
 
             if settings.protocolProvider == .openAICompatible {
                 OpenAIConnectionSection(settings: settings, apiKeyDrafts: apiKeyDrafts)
@@ -139,6 +139,11 @@ struct OutputSettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             apiKeyDrafts.commitPending(to: settings)
         }
+    }
+
+    @ViewBuilder private var notesProviderAndContext: some View {
+        providerSection
+        ContextMCPSettingsSection(settings: settings)
     }
 
     private var meetingNotesSection: some View {

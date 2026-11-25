@@ -306,6 +306,7 @@ final class PipelineController {
             diarizationFactory: { [self] in makeFluidDiarizer(mode: settings.diarizerMode) },
             diarizationFactoryWithMode: { [self] mode in makeFluidDiarizer(mode: mode) },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
+            meetingContextConfiguration: { [settings] in settings.meetingContextConfiguration() },
             // Captured by value: this is the moment the destination of every job this queue will run is
             // decided, so a fallback is reported here and not from `effectiveOutputDir`, which `body` reads on every render.
             outputDir: queueEnvironment.resolveOutputDir(outputDirectory),
@@ -396,12 +397,16 @@ final class PipelineController {
 
     func configureCallbacks(on target: PipelineQueue? = nil) {
         let queue = target ?? queue
+        queue.onContextNotesCancelled = { [notifier] job in
+            notifier.notify(title: "Contextual Meeting Notes Cancelled", body: job.meetingTitle)
+        }
         queue.onNotionExportFinished = { [notifier] in notifier.notifyNotionExport(job: $0, failureReason: $1) }
         queue.onJobStateChange = { [notifier, settings] job, _, newState in
             switch newState {
             case .done:
                 let note = PipelineQueue.doneNotification(for: job, announceNotesFailure: settings.notifyOnMeetingNotesFailure)
-                notifier.notify(title: note.title, body: note.body)
+                let body = job.meetingContextMessage.map { note.body + "\n" + $0 } ?? note.body
+                notifier.notify(title: note.title, body: body)
 
             case .error:
                 if let err = job.error {

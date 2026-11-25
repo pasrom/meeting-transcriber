@@ -214,7 +214,8 @@ struct MeetingTranscriberApp: App {
             pendingConsentApp: appState.pendingConsentApp,
             onAnswerPendingConsent: appState.answerPendingConsent,
             notionExportEnabled: appState.settings.notionExportEnabled,
-            onGenerateNotesFromTranscripts: generateNotesFromTranscripts,
+            onGenerateNotesFromTranscripts: { generateNotesFromTranscripts() },
+            onRegenerateMeetingNotes: { generateNotesFromTranscripts(regenerate: $0) },
             captionsPreparing: appState.liveTranscription.warmup.isPreparing,
         )
     }
@@ -463,10 +464,15 @@ struct MeetingTranscriberApp: App {
     }
 
     /// Starts in the notes folder, where the app's transcripts are.
-    private func generateNotesFromTranscripts() {
+    private func generateNotesFromTranscripts(regenerate: NotesContextMode? = nil) {
         let panel = NSOpenPanel()
         panel.title = "Select Transcripts"
-        panel.message = "Meeting notes are saved next to each transcript. Transcripts that already have notes are skipped."
+        if regenerate != nil {
+            panel.message = "Regenerate local notes from each selected transcript. Existing notes are replaced after successful generation."
+            panel.prompt = "Regenerate"
+        } else {
+            panel.message = "Meeting notes are saved next to each transcript. Transcripts that already have notes are skipped."
+        }
         panel.allowedContentTypes = [.plainText]
         let filter = TranscriptPanelDelegate()
         panel.delegate = filter
@@ -475,7 +481,7 @@ struct MeetingTranscriberApp: App {
         panel.directoryURL = appState.settings.effectiveOutputDir
         // The panel holds its delegate weakly.
         guard withExtendedLifetime(filter, { panel.runModal() }) == .OK, !panel.urls.isEmpty else { return }
-        appState.pipeline.generateNotes(fromTranscripts: panel.urls)
+        appState.pipeline.generateNotes(fromTranscripts: panel.urls, regenerate: regenerate)
     }
 
     private func bringWindowToFront(id: String) {

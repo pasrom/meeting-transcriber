@@ -27,7 +27,7 @@ enum ArtifactRenamePlan {
         let recordingSuffixes = [
             RecordingFileSuffix.mix, RecordingFileSuffix.app, RecordingFileSuffix.mic,
         ] + SpeakerNamingStore.sidecarSuffixes + [SpeakerNamingStore.namingJSONSuffix, RecordingSidecar.recordingFilenameSuffix]
-        return ["\(stem).md", "\(stem).txt"].map { dirs.protocols.appendingPathComponent($0) }
+        return ["\(stem).md", "\(stem).txt", stem + MeetingContextFiles.suffix].map { dirs.protocols.appendingPathComponent($0) }
             + recordingSuffixes.map { dirs.recordings.appendingPathComponent("\(stem)\($0)") }
     }
 

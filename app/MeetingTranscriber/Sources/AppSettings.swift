@@ -649,6 +649,16 @@ final class AppSettings { // swiftlint:disable:this type_body_length
 
     // MARK: - Protocol Generation
 
+    var meetingContextEnabled: Bool {
+        didSet { defaults.set(meetingContextEnabled, forKey: "meetingContextEnabled") }
+    }
+
+    var mcpSources: [MCPSource] {
+        didSet {
+            if let data = try? JSONEncoder().encode(mcpSources) { defaults.set(data, forKey: "mcpSources") }
+        }
+    }
+
     var protocolProvider: ProtocolProvider {
         didSet { defaults.set(protocolProvider.rawValue, forKey: "protocolProvider") }
     }
@@ -990,6 +1000,10 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         (clusterThreshold, warmStartFa, warmStartFb, minSegmentDurationSeconds, excludeOverlap) =
             (t.clusterThreshold, t.warmStartFa, t.warmStartFb, t.minSegmentDuration, t.excludeOverlap)
 
+        meetingContextEnabled = defaults.bool(forKey: "meetingContextEnabled")
+        mcpSources = defaults.data(forKey: "mcpSources").flatMap { data in
+            try? JSONDecoder().decode([MCPSource].self, from: data)
+        } ?? []
         let storedProvider = defaults.string(forKey: "protocolProvider")
             .flatMap(ProtocolProvider.init(rawValue:))
         #if APPSTORE

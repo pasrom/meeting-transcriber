@@ -86,6 +86,8 @@ enum A11yID {
     static let protocolProviderSection = "protocolProviderSection"
     static let openAIConnectionSection = "openAIConnectionSection"
     static let notifyOnMeetingNotesFailureToggle = "notifyOnMeetingNotesFailureToggle"
+    static let meetingContextToggle = "settings.output.context.enabled"
+    static let regenerateMeetingNotesButton = "menu.regenerateMeetingNotes"
     static let includeFullTranscriptToggle = "includeFullTranscriptToggle"
     static let saveRawTranscriptToggle = "saveRawTranscriptToggle"
     static let useAITitleForFilenamesToggle = "useAITitleForFilenamesToggle"

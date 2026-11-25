@@ -75,6 +75,9 @@ class PipelineQueue {
     /// (current global setting). Production wires both via `AppState`.
     let diarizationFactoryWithMode: ((DiarizerMode) -> any DiarizationProvider)?
     let protocolGeneratorFactory: (() -> (any ProtocolGenerating)?)?
+    let meetingContextConfiguration: (() -> MeetingContextConfiguration?)?
+    @ObservationIgnored var contextualNotesJobs: Set<UUID> = []
+    @ObservationIgnored var onContextNotesCancelled: ((PipelineJob) -> Void)?
     let outputDir: URL?
     /// Opens and closes security-scoped access on `outputDir`. Injectable so a
     /// test can record where and when the scope is held; see `SecurityScopeAccess`.
@@ -416,6 +419,7 @@ class PipelineQueue {
         self.diarizationFactory = nil
         self.diarizationFactoryWithMode = nil
         self.protocolGeneratorFactory = nil
+        meetingContextConfiguration = nil
         self.outputDir = nil
         securityScope = .live
         scopedOutputDir = nil
@@ -570,6 +574,7 @@ class PipelineQueue {
         diarizationFactory: @escaping () -> any DiarizationProvider,
         diarizationFactoryWithMode: ((DiarizerMode) -> any DiarizationProvider)? = nil,
         protocolGeneratorFactory: @escaping () -> (any ProtocolGenerating)?,
+        meetingContextConfiguration: (() -> MeetingContextConfiguration?)? = nil,
         outputDir: URL,
         logDir: URL,
         stagingDir: URL = AppPaths.recordingsDir,
@@ -606,6 +611,7 @@ class PipelineQueue {
         self.diarizationFactory = diarizationFactory
         self.diarizationFactoryWithMode = diarizationFactoryWithMode
         self.protocolGeneratorFactory = protocolGeneratorFactory
+        self.meetingContextConfiguration = meetingContextConfiguration
         self.outputDir = outputDir
         self.securityScope = securityScope
         scopedOutputDir = securityScope.start(outputDir) ? outputDir : nil
@@ -881,6 +887,7 @@ class PipelineQueue {
     /// while the move runs, or after it failed, has to be marked already.
     func cancelJob(id: UUID) {
         guard let job = job(withID: id), job.state != .done, job.state != .error else { return }
+        if contextualNotesJobs.contains(id) { onContextNotesCancelled?(job) }
         relocateRecordingOfCancelledJob(job)
         removeJob(id: id)
     }

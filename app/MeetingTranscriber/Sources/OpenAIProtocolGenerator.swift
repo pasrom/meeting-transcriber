@@ -4,7 +4,7 @@ import os.log
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "OpenAIProtocolGenerator")
 
 /// Generates meeting protocols via an OpenAI-compatible HTTP API (e.g. Ollama, LM Studio, llama.cpp).
-struct OpenAIProtocolGenerator: ProtocolGenerating {
+struct OpenAIProtocolGenerator: ProtocolGenerating, ContextNotesModel {
     let endpoint: URL
     let model: String
     let apiKey: String?
@@ -22,10 +22,8 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     /// attempt, so a call can span up to three times it (see `RequestShape`) —
     /// only reachable via an endpoint that trickles its 400 bodies.
     let maxTotalSeconds: TimeInterval
-    /// Output-token cap sent as `max_tokens`, or `max_completion_tokens` when the
-    /// endpoint rejects the former. Bounds a runaway/verbose
-    /// generation (the 131k-context case that ground for ~2h) by length rather
-    /// than time. Generous — a meeting protocol is well under this — and a hit
+    /// Output-token cap sent as `max_tokens`, or `max_completion_tokens` when
+    /// the endpoint rejects the former. A hit
     /// is surfaced as `protocolTruncated`, never silently presented as complete.
     ///
     /// The two names are not interchangeable: `max_completion_tokens` bounds
@@ -88,13 +86,17 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
             ["role": "user", "content": transcript],
         ]
 
+        return try await complete(messages, context: nil)
+    }
+
+    func complete(_ messages: [[String: Any]], context: ContextRequest?) async throws -> String {
         var shape = RequestShape(
             tokenLimit: .maxTokens,
             includesSampling: temperature != nil || topP != nil,
         )
         while true {
             do {
-                return try await send(messages: messages, shape: shape)
+                return try await send(messages: messages, shape: shape, context: context)
             } catch let refusal as HTTPRefusal {
                 guard let next = shape.fallback(status: refusal.status, after: refusal.body) else {
                     throw ProtocolError.httpError(refusal.status, refusal.shownBody)
@@ -268,12 +270,14 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     /// The chat-completions request body for one attempt. An unset override is
     /// omitted rather than sent as a default, and a shape without sampling
     /// leaves both overrides out.
-    func requestBody(messages: [[String: Any]], shape: RequestShape) -> [String: Any] {
+    func requestBody(
+        messages: [[String: Any]], shape: RequestShape, outputTokens: Int? = nil,
+    ) -> [String: Any] {
         var body: [String: Any] = [
             "model": model,
             "messages": messages,
             "stream": true,
-            shape.tokenLimit.rawValue: maxOutputTokens,
+            shape.tokenLimit.rawValue: min(maxOutputTokens, outputTokens ?? maxOutputTokens),
         ]
         if shape.includesSampling {
             if let temperature { body[OpenAISamplingParameter.temperature.rawValue] = temperature }
@@ -283,10 +287,10 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     }
 
     private func send(
-        messages: [[String: Any]], shape: RequestShape,
+        messages: [[String: Any]], shape: RequestShape, context: ContextRequest?,
     ) async throws -> String {
         let bodyData = try JSONSerialization.data(
-            withJSONObject: requestBody(messages: messages, shape: shape),
+            withJSONObject: requestBody(messages: messages, shape: shape, outputTokens: context?.outputTokens),
         )
 
         let requestURL = Self.apiBaseURL(from: endpoint)
@@ -303,8 +307,11 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         )
         request.httpBody = bodyData
         request.timeoutInterval = timeoutSeconds
-
-        logger.info("Generating protocol via OpenAI-compatible API (\(model))...")
+        if context != nil {
+            request.httpShouldHandleCookies = false
+        } else {
+            logger.info("Generating protocol via OpenAI-compatible API (\(model))...")
+        }
 
         // Race the streaming consume against a hard total deadline: the idle
         // timeout above can't end a stream that keeps trickling bytes, so a
@@ -312,21 +319,30 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         // Capture only immutable Sendable locals so the task closure is safe.
         let session = self.session
         let model = self.model
-        let deadline = maxTotalSeconds
+        var deadline = maxTotalSeconds
+        if let expires = context?.deadline {
+            let remaining = ContinuousClock.now.duration(to: expires).components
+            deadline = min(deadline, Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18)
+            guard deadline > 0 else { throw ContextFailure.timeout }
+        }
+        let requestDeadline = deadline
         let finalRequest = request
         return try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask {
-                try await Self.streamProtocol(
+                if let context, await !context.authorize() { throw ContextFailure.revoked }
+                try Task.checkCancellation()
+                return try await Self.streamProtocol(
                     session: session,
                     request: finalRequest,
-                    redirectGuard: redirectGuard,
-                    requestURL: requestURL,
+                    redirectGuard: context == nil ? redirectGuard : CrossOriginRedirectRefuser(refuseAll: true),
                     model: model,
+                    contextOutputBytes: context?.outputBytes,
                 )
             }
             group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(deadline * 1_000_000_000))
-                throw ProtocolError.generationTimedOut(Int(deadline))
+                try await Task.sleep(nanoseconds: UInt64(requestDeadline * 1_000_000_000))
+                if context?.deadline != nil { throw ContextFailure.timeout }
+                throw ProtocolError.generationTimedOut(Int(requestDeadline))
             }
             defer { group.cancelAll() }
             guard let result = try await group.next() else {
@@ -342,30 +358,36 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         session: URLSession,
         request: URLRequest,
         redirectGuard: CrossOriginRedirectRefuser?,
-        requestURL: URL,
         model: String,
+        contextOutputBytes: Int?,
     ) async throws -> String {
+        let requestURL = request.url?.absoluteString ?? ""
         let (bytes, response): (URLSession.AsyncBytes, URLResponse)
         do {
             (bytes, response) = try await session.bytes(for: request, delegate: redirectGuard)
         } catch {
+            if contextOutputBytes != nil { throw ProtocolError.connectionFailed("Context request failed") }
             logger.error(
-                "openai_connection_failed endpoint=\(requestURL.absoluteString, privacy: .public) model=\(model, privacy: .public) error=\(error.localizedDescription, privacy: .public)",
+                "openai_connection_failed endpoint=\(requestURL, privacy: .public) model=\(model, privacy: .public) error=\(error.localizedDescription, privacy: .public)",
             )
             throw ProtocolError.connectionFailed(error.localizedDescription)
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            logger.error("openai_invalid_response endpoint=\(requestURL.absoluteString, privacy: .public)")
+            if contextOutputBytes == nil {
+                logger.error("openai_invalid_response endpoint=\(requestURL, privacy: .public)")
+            }
             throw ProtocolError.connectionFailed("Invalid response")
         }
 
         guard (200 ... 299).contains(httpResponse.statusCode) else {
             let lines = try await errorBodyLines(from: bytes.lines)
-            let shownBody = shownErrorBody(lines)
-            logger.error(
-                "openai_http_error status=\(httpResponse.statusCode, privacy: .public) endpoint=\(requestURL.absoluteString, privacy: .public) body=\(shownBody, privacy: .public)",
-            )
+            let shownBody = contextOutputBytes == nil ? shownErrorBody(lines) : ""
+            if contextOutputBytes == nil {
+                logger.error(
+                    "openai_http_error status=\(httpResponse.statusCode, privacy: .public) endpoint=\(requestURL, privacy: .public) body=\(shownBody, privacy: .public)",
+                )
+            }
             throw HTTPRefusal(
                 status: httpResponse.statusCode,
                 body: lines.joined(separator: "\n"),
@@ -373,28 +395,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
             )
         }
 
-        var parts: [String] = []
-        var finishReason: String?
-        for try await line in bytes.lines {
-            guard let chunk = parseSSELine(line) else { continue }
-            if let content = chunk.content { parts.append(content) }
-            if let reason = chunk.finishReason { finishReason = reason }
-        }
-
-        // "length" = the model hit max_tokens or the context window, so the
-        // protocol is cut off mid-way. Surface it rather than save a partial as
-        // if it finished cleanly (only "stop" is a real completion).
-        guard finishReason != "length" else {
-            logger.error("openai_truncated finish_reason=length model=\(model, privacy: .public)")
-            throw ProtocolError.protocolTruncated
-        }
-
-        let result = parts.joined().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !result.isEmpty else {
-            throw ProtocolError.emptyProtocol
-        }
-
-        return result
+        return try await readCompletion(bytes, mimeType: httpResponse.mimeType, model: model, cap: contextOutputBytes)
     }
 
     /// One parsed SSE chunk: the content delta (if any) and the finish reason,
@@ -561,6 +562,12 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
 /// there. Hops within the origin are followed unchanged. A request without a
 /// custom header keeps URLSession's default redirect handling.
 private final class CrossOriginRedirectRefuser: NSObject, URLSessionTaskDelegate, Sendable {
+    private let refuseAll: Bool
+
+    init(refuseAll: Bool = false) {
+        self.refuseAll = refuseAll
+    }
+
     func urlSession(
         _: URLSession,
         task _: URLSessionTask,
@@ -571,6 +578,7 @@ private final class CrossOriginRedirectRefuser: NSObject, URLSessionTaskDelegate
         // swiftlint:disable:next unneeded_escaping
         completionHandler: @escaping @Sendable (URLRequest?) -> Void,
     ) {
+        if refuseAll { completionHandler(nil); return }
         // An unknown source or target cannot be shown to be the same origin.
         guard let from = response.url, let to = request.url, Self.origin(from) == Self.origin(to) else {
             logger.error(
