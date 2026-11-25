@@ -46,9 +46,12 @@ extension LiveTranscriptionController {
             await self.micProbeFeed.retire()
             await self.appProbeFeed.retire()
             await self.retireFeeds(logDrops: true)
-            async let mic: Void? = self.micPipeline?.flush()
+            let micChain = self.micCaptionChain ?? self.micPipeline
+            async let mic: Void? = micChain?.flush()
             async let app: Void? = self.appPipeline?.flush()
             _ = await (mic, app)
+            self.micCaptionChain = nil
+            self.echoReference.clear(collecting: false)
         }
         pendingFlush = task
         return task
@@ -76,6 +79,9 @@ extension LiveTranscriptionController {
         recordingStartedAt = Date()
         runtimeState = .detecting
         micPipeline = nil
+        micCaptionChain = nil
+        // The held mic audio is replayed into the canceller later, so its reference is kept from now.
+        echoReference.clear(collecting: echoCancellationEnabled())
         appPipeline = nil
         await micProbeFeed.retire()
         await appProbeFeed.retire()
@@ -211,7 +217,7 @@ extension LiveTranscriptionController {
         micProbeFeed.cancel()
         appProbeFeed.cancel()
         let replayLast = streaming ? nil : Self.reTranscribeReplaySeconds
-        micFeed.installHeld(to: micPipeline, replayLast: replayLast)
+        micFeed.installHeld(to: makeMicCaptionPipeline(micPipeline), replayLast: replayLast)
         appFeed.installHeld(to: appPipeline, replayLast: replayLast) {
             let resampler = LiveAudioResampler()
             return { resampler.resample($0) }

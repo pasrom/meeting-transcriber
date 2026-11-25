@@ -272,6 +272,8 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `SpeakerKey.swift` | Speaker identity in the dual-track pipeline: raw diarizer id + track; single home for the `R_`/`M_` prefix convention |
 | `NamingWindowPolicy.swift` | Pins the "Name Speakers" window so it stays available while the user works in other apps (issue #504) |
 | `LiveTranscriptionController.swift` | Wires the per-channel live-caption pipeline (streaming or re-transcribe) to both `DualSourceRecorder` sinks (mic + app), feeds `LiveCaptionsState` |
+| `LiveCaptionEchoCanceller.swift` | Pre-ASR live microphone echo cancellation via bundled LocalVQE when `echoCancellationEnabled` is on (one context per recording, 1 CPU thread, waits briefly for the app reference, load-gated backlog pass-through) |
+| `LiveCaptionEchoReference.swift` | `LiveAudioTimeline` sample-count timeline for live buffers, and `LiveCaptionEchoReference`, the bounded app-audio reference store |
 | `LiveTranscriptionController+Nemotron.swift` | Nemotron streaming-pipeline construction, split out for size; injectable factory for testing the build + model-load-failure fallback |
 | `LiveTranscriptionController+StreamingModels.swift` | The streaming caption model set a controller loads (Nemotron or Parakeet EOU), its download ahead of the warm-up queue (one per model folder at a time across controllers), and the English EOU pipeline build |
 | `LiveTranscriptionController+LanguageProbe.swift` | Auto-detect captions with WhisperKit: holds caption audio, detects the recording's language, then installs Parakeet EOU (English) or re-transcribe; also the stop-time `flush()` |
