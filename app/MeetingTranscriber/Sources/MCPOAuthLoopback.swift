@@ -24,7 +24,7 @@ final class MCPOAuthLoopback {
         listener.newConnectionHandler = { [weak self] connection in
             Task { @MainActor in
                 guard let self else { connection.cancel(); return }
-                accept(connection)
+                self.accept(connection)
             }
         }
     }
@@ -133,17 +133,17 @@ final class MCPOAuthLoopback {
         guard let connection = connections[id] else { return }
         connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, closed, error in
             Task { @MainActor in
-                guard let self, connections[id] != nil else { return }
+                guard let self, self.connections[id] != nil else { return }
                 var received = bytes
                 if let data { received.append(data) }
                 if received.count > 16 * 1024 || error != nil {
-                    reject(id)
+                    self.reject(id)
                 } else if let end = received.range(of: Data("\r\n\r\n".utf8))?.lowerBound {
-                    handle(id, header: Data(received[..<end]))
+                    self.handle(id, header: Data(received[..<end]))
                 } else if closed {
-                    reject(id)
+                    self.reject(id)
                 } else {
-                    read(id, bytes: received)
+                    self.read(id, bytes: received)
                 }
             }
         }

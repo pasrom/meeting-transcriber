@@ -35,7 +35,7 @@ actor ContextEnrichment {
 
     typealias Authorization = @MainActor @Sendable (MCPSource) -> Bool
     typealias Credentials = @Sendable (MCPSource) -> MCPSecrets
-    typealias OAuthPreparation = @Sendable (MCPSource, Authorization, ContinuousClock.Instant) async throws -> MCPSecrets
+    typealias OAuthPreparation = @Sendable (MCPSource, @escaping Authorization, ContinuousClock.Instant) async throws -> MCPSecrets
     private let prepareOAuth: OAuthPreparation
     private let authorized: Authorization
     private let credentials: Credentials
