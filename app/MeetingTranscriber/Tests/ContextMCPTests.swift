@@ -351,7 +351,8 @@ final class MCPTestFixture {
             do {
                 try process.run()
                 let portURL = URL(fileURLWithPath: log.path + ".port")
-                for _ in 0 ..< 100 {
+                let deadline = ContinuousClock.now + .seconds(15)
+                while ContinuousClock.now < deadline {
                     if let value = try? String(contentsOf: portURL, encoding: .utf8), let port = Int(value) {
                         self.port = port
                         return
