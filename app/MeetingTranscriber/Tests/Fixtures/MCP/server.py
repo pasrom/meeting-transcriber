@@ -51,6 +51,12 @@ def handle(message):
             return {"jsonrpc": "2.0", "id": message["id"], "result": {"content": [
                 {"type": "text", "text": "x" * 140000},
             ]}}
+        if STATUS == "verbose-evidence":
+            term = params["arguments"]["term"]
+            filler = "A historical table lists unrelated milestones.\n" * 900
+            return {"jsonrpc": "2.0", "id": message["id"], "result": {"content": [
+                {"type": "text", "text": filler + "\n" + term + " is described in the synthetic current guide."},
+            ]}}
         name = "Unrelated" if os.environ.get("FIXTURE_KEY") == "first-fixture-auth" else "Blackwell"
         data = {
             "name": name,

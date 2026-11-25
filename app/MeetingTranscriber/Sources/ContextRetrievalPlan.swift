@@ -48,6 +48,7 @@ struct ContextRetrievalPlan {
 struct ContextLookup: Sendable {
     struct Mention: Sendable {
         let segmentID: String
+        let surfaceText: String
     }
 
     let requestID: String
@@ -73,7 +74,7 @@ struct ContextLookup: Sendable {
                   let id = item["segment_id"]?.string, let segment = segments[id],
                   let surface = item["surface_text"]?.string, !surface.isEmpty, surface.utf8.count <= 160,
                   segment.range(of: surface, options: [.caseInsensitive, .diacriticInsensitive]) != nil else { return nil }
-            mentions.append(Mention(segmentID: id))
+            mentions.append(Mention(segmentID: id, surfaceText: surface))
         }
         guard let textBytes = ContextDataSafety.safeArgumentBytes(arguments, in: transcript, secrets: secrets) else { return nil }
         self.requestID = requestID
