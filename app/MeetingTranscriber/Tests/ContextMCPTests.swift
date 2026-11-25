@@ -124,6 +124,47 @@ final class ContextMCPTests: XCTestCase {
         XCTAssertEqual(try fixture.methods(), [])
     }
 
+    func testAuthenticationFailureLeavesOtherApprovedSourcesAvailable() async throws {
+        let refused = try await MCPTestFixture(.http)
+        let healthy = try await MCPTestFixture(.http)
+        defer { refused.stop(); healthy.stop() }
+        let unauthorized = try refused.approvedSource()
+        let good = try healthy.approvedSource()
+        let model = ContextTestModel()
+        let enrichment = ContextEnrichment(authorized: { _ in true }, credentials: { source in
+            source.id == good.id ? MCPTestFixture.httpCredentials : MCPSecrets()
+        })
+        let outcome = try await enrichment.collect(
+            meetingID: UUID(), transcript: noisyTranscript, sources: [unauthorized, good], model: model,
+        )
+        XCTAssertEqual(outcome.record.status, .partial)
+        XCTAssertEqual(outcome.record.sourceFailures[unauthorized.id], .authentication)
+        XCTAssertEqual(outcome.items.first?.source.id, good.id)
+        XCTAssertFalse(try refused.methods().contains("tools/call"))
+        XCTAssertTrue(try healthy.methods().contains("tools/call"))
+    }
+
+    func testUnknownToolAndSchemaInvalidRequestsDoNotExecute() async throws {
+        let fixture = try await MCPTestFixture(.http)
+        defer { fixture.stop() }
+        let source = try fixture.approvedSource()
+        let plan = #"""
+        {"schema_version":1,"requests":[
+          {"request_id":"unknown","tool_id":"unapproved", "arguments":{"term":"fly wheel project"},
+           "mentions":[{"segment_id":"seg-1","surface_text":"fly wheel"}]},
+          {"request_id":"wrong-type","tool_id":"tool-1","arguments":{"term":1},
+           "mentions":[{"segment_id":"seg-1","surface_text":"fly wheel"}]}
+        ]}
+        """#
+        let enrichment = ContextEnrichment(authorized: { _ in true }, credentials: { _ in MCPTestFixture.httpCredentials })
+        let outcome = try await enrichment.collect(
+            meetingID: UUID(), transcript: noisyTranscript, sources: [source], model: ContextTestModel(reply: plan),
+        )
+        XCTAssertEqual(outcome.record.status, .failed)
+        XCTAssertTrue(outcome.record.reasons.contains(.invalidRequest))
+        XCTAssertFalse(try fixture.methods().contains("tools/call"))
+    }
+
     func testHTTPDoesNotFollowRedirects() async throws {
         let fixture = try await MCPTestFixture(.http)
         defer { fixture.stop() }
