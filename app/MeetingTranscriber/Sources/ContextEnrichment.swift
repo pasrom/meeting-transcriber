@@ -318,11 +318,14 @@ actor ContextEnrichment {
         let tool = group.tool
         var evidenceID: String?
         var failure: ContextFailure?
+        var responseContentBytes: Int?
+        var evidenceContentBytes: Int?
         do {
             let result = try await tool.client.call(tool.tool, arguments: group.primary.arguments)
             guard await authorized(tool.server) else { throw ContextFailure.revoked }
             try Task.checkCancellation()
             let content = try Self.normalize(result, prohibited: prohibited, record: &outcome.record)
+            responseContentBytes = try ContextJSON.encoded(content).count
             var evidence = ContextEvidence(
                 evidenceID: "ev-\(outcome.items.count + 1)", requestID: group.primary.requestID,
                 serverID: tool.server.id, toolName: tool.tool.name, segmentIDs: group.segmentIDs,
@@ -336,8 +339,10 @@ actor ContextEnrichment {
                 mentions: group.primary.mentions.map(\.surfaceText),
             )
             guard !ContextDataSafety.containsSensitive(evidence.content, secrets: prohibited) else { throw ContextFailure.unsafeData }
-            let bytes = try ContextJSON.encoded(evidence).count + 1
+            let keptBytes = try ContextJSON.encoded(evidence.content).count
+            let bytes = overhead + keptBytes
             guard contextBytes + bytes <= ContextLimits.context else { throw ContextFailure.limit }
+            evidenceContentBytes = keptBytes
             if evidence.content != content { outcome.record.add(.evidenceExcerpted) }
             contextBytes += bytes
             outcome.items.append(.init(source: tool.server, evidence: evidence))
@@ -347,6 +352,7 @@ actor ContextEnrichment {
             switch failure {
             case .revoked: outcome.record.add(.revoked)
             case .limit: outcome.record.add(.evidenceLimit)
+            case .responseTooLarge: outcome.record.add(.responseTooLarge)
             case .unsafeData: outcome.record.add(.unsafeData)
             case .unsupportedContent: outcome.record.add(.unsupportedContent)
             case .timeout: outcome.record.add(.timeout)
@@ -358,6 +364,7 @@ actor ContextEnrichment {
             outcome.record.requests.append(.init(
                 id: lookup.requestID, serverID: tool.server.id, toolName: tool.tool.name,
                 segmentIDs: lookup.mentions.map(\.segmentID), status: status, failure: failure, evidenceID: evidenceID,
+                responseContentBytes: responseContentBytes, evidenceContentBytes: evidenceContentBytes,
             ))
         }
     }

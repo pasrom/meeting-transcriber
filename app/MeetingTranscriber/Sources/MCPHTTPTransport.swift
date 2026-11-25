@@ -174,10 +174,14 @@ private final class MCPHTTPTransfer: NSObject, URLSessionDataDelegate, @unchecke
             return
         }
         streaming = http.mimeType?.lowercased() == "text/event-stream"
-        guard id != nil, streaming || http.mimeType?.lowercased() == "application/json",
-              response.expectedContentLength <= Int64(ContextLimits.wire) else {
+        guard id != nil, streaming || http.mimeType?.lowercased() == "application/json" else {
             completionHandler(.cancel)
             finish(.failure(ContextFailure.invalidResponse))
+            return
+        }
+        guard response.expectedContentLength <= Int64(ContextLimits.wire) else {
+            completionHandler(.cancel)
+            finish(.failure(ContextFailure.responseTooLarge))
             return
         }
         completionHandler(.allow)
@@ -185,7 +189,7 @@ private final class MCPHTTPTransfer: NSObject, URLSessionDataDelegate, @unchecke
 
     func urlSession(_: URLSession, dataTask _: URLSessionDataTask, didReceive data: Data) {
         received += data.count
-        guard received <= ContextLimits.wire else { finish(.failure(ContextFailure.limit)); return }
+        guard received <= ContextLimits.wire else { finish(.failure(ContextFailure.responseTooLarge)); return }
         bytes.append(data)
         guard streaming else { return }
         do {

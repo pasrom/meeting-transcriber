@@ -250,6 +250,8 @@ final class ContextMCPTests: XCTestCase {
             meetingID: UUID(), transcript: noisyTranscript, sources: [source], model: ContextTestModel(),
         )
         XCTAssertEqual(outcome.record.status, .failed)
+        XCTAssertEqual(outcome.record.reasons, [.responseTooLarge])
+        XCTAssertEqual(outcome.record.requests.first?.failure, .responseTooLarge)
         XCTAssertTrue(outcome.items.isEmpty)
     }
 
@@ -272,6 +274,10 @@ final class ContextMCPTests: XCTestCase {
         XCTAssertEqual(outcome.record.requests.map(\.status), ["used", "used"])
         XCTAssertEqual(outcome.record.status, .partial)
         XCTAssertEqual(outcome.record.reasons, [.evidenceExcerpted])
+        for request in outcome.record.requests {
+            XCTAssertGreaterThan(try XCTUnwrap(request.responseContentBytes), ContextLimits.result)
+            XCTAssertLessThan(try XCTUnwrap(request.evidenceContentBytes), ContextLimits.context)
+        }
         let evidence = outcome.items.map(\.evidence)
         let encoded = try ContextJSON.encodedText(evidence)
         XCTAssertLessThanOrEqual(encoded.utf8.count, ContextLimits.context)

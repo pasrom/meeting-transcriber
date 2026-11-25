@@ -35,7 +35,7 @@ struct MeetingContextRecord: Encodable, Sendable {
         // swiftlint:disable raw_value_for_camel_cased_codable_enum
         case unsupportedProvider, unapprovedSources, transcriptTooLong, sensitiveTranscript, plannerFailed, invalidPlan
         case discoveryFailed, catalogLimit, invalidRequest, callLimit, callFailed, timeout, unsupportedContent
-        case unsafeData, evidenceLimit, evidenceExcerpted, revoked, notesFailed
+        case unsafeData, evidenceLimit, evidenceExcerpted, responseTooLarge, revoked, notesFailed
         // swiftlint:enable raw_value_for_camel_cased_codable_enum
     }
 
@@ -47,6 +47,8 @@ struct MeetingContextRecord: Encodable, Sendable {
         let status: String
         var failure: ContextFailure?
         var evidenceID: String?
+        var responseContentBytes: Int?
+        var evidenceContentBytes: Int?
     }
 
     struct Provenance: Encodable, Sendable {
@@ -92,6 +94,7 @@ struct MeetingContextRecord: Encodable, Sendable {
         case .catalogLimit, .callLimit: "An enrichment size or call limit was reached."
         case .evidenceLimit: "A lookup response or the notes request exceeded a size limit."
         case .evidenceExcerpted: "Long lookup results were shortened to fit the evidence budget."
+        case .responseTooLarge: "A lookup response exceeded the 128 KiB download limit."
         case .invalidRequest: "A proposed lookup did not pass validation."
         case .callFailed, .timeout: "A lookup failed or timed out."
         case .unsupportedContent, .unsafeData: "Some returned content was withheld."
@@ -126,6 +129,7 @@ struct MeetingContextOutcome: Sendable {
             return MeetingContextRecord.Request(
                 id: request.id, serverID: request.serverID, toolName: request.toolName,
                 segmentIDs: request.segmentIDs, status: "withheld", failure: reason,
+                responseContentBytes: request.responseContentBytes,
             )
         }
         record.status = items.isEmpty ? .skipped : .partial
