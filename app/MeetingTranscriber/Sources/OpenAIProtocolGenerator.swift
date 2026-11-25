@@ -4,7 +4,7 @@ import os.log
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "OpenAIProtocolGenerator")
 
 /// Generates meeting protocols via an OpenAI-compatible HTTP API (e.g. Ollama, LM Studio, llama.cpp).
-struct OpenAIProtocolGenerator: ProtocolGenerating {
+struct OpenAIProtocolGenerator: ProtocolGenerating, Sendable {
     let endpoint: URL
     let model: String
     let apiKey: String?
