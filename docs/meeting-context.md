@@ -55,3 +55,8 @@ swift build --build-tests
 ```
 
 For a live check, use an existing local notes model and a trusted test source with synthetic names. Try a transcript with a misheard project term, then a transcript with two plausible speaker identities. Check the notes, source permissions, context record and unchanged transcript digest. Repeat after disabling the source or stopping its server. Regenerate the same transcript with context and without it, then cause a model failure and check that the last successful notes still open.
+
+
+### Controlled local model results
+
+Synthetic smoke tests on Linux used llama.cpp b12721 with Qwen2.5 1.5B Instruct and 3B Instruct (Q4_K_M). Both models returned usable lookup plans and received evidence from the controlled HTTP source. The 1.5B model put the canonical project name in the participants list. The 3B model kept the spoken project alias. Both preserved the ambiguity of the person's full name, and the samples also contained unsupported participant labels or task attributions. Retrieval and evidence forwarding succeeded in these checks. The semantic acceptance cases still need a suitable model and a macOS app run.
