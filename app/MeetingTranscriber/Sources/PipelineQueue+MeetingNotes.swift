@@ -1,5 +1,10 @@
 import Foundation
 
+enum NotesContextMode: String, Codable {
+    case configuredContext = "configured_context"
+    case withoutContext = "without_context"
+}
+
 /// Retrying meeting notes that could not be generated, from the transcript the
 /// job saved. A failed generation leaves the job `.done` with its transcript
 /// and `notesFailure` set; such a job stays listed (`isHeldAfterCompletion`)
@@ -50,7 +55,7 @@ extension PipelineQueue {
             saveSnapshot()
             return false
         }
-        if Self.existingNotes(for: jobs[index], transcriptPath: transcriptPath) {
+        if jobs[index].notesContextMode == nil, Self.existingNotes(for: jobs[index], transcriptPath: transcriptPath) {
             stopOfferingNotesRetry(id: id, warning: Self.notesRetryNotesExistWarning)
             scheduleCompletedJobRemoval(id: id)
             return false
@@ -82,7 +87,7 @@ extension PipelineQueue {
             updateJobState(id: job.id, to: .done)
             return
         }
-        if Self.existingNotes(for: job, transcriptPath: transcriptPath) {
+        if job.notesContextMode == nil, Self.existingNotes(for: job, transcriptPath: transcriptPath) {
             stopOfferingNotesRetry(id: job.id, warning: Self.notesRetryNotesExistWarning)
             updateJobState(id: job.id, to: .done)
             return
@@ -139,6 +144,7 @@ extension PipelineQueue {
     func clearNotesFailure(at index: Int) {
         jobs[index].notesFailure = nil
         jobs[index].generatesNotesOnly = nil
+        jobs[index].notesContextMode = nil
         jobs[index].notesSpeakerNames = nil
         let stale = [
             Self.protocolGenerationFailedWarning, Self.notesRetryTranscriptMissingWarning,
@@ -233,20 +239,20 @@ extension PipelineQueue {
     /// (`generateNotesOnly`). The same transcript is queued once, whether it
     /// is given twice or is already waiting in a notes-only job.
     @discardableResult
-    func enqueueNotes(fromTranscripts urls: [URL]) -> NotesFromTranscriptOutcome {
+    func enqueueNotes(fromTranscripts urls: [URL], regenerate: NotesContextMode? = nil) -> NotesFromTranscriptOutcome {
         var outcome = NotesFromTranscriptOutcome()
-        var queuedPaths = Set(jobs.filter { $0.generatesNotesOnly == true && !$0.state.isTerminal }
-            .compactMap { $0.transcriptPath?.standardizedFileURL.path })
+        var queuedPaths = Set(jobs.filter { !$0.state.isTerminal }
+            .compactMap { $0.transcriptPath?.resolvingSymlinksInPath().standardizedFileURL.path })
         for url in urls {
             guard url.pathExtension.lowercased() == "txt", Self.isTranscriptSized(url) else {
                 outcome.unreadable.append(url)
                 continue
             }
-            guard !FileManager.default.fileExists(atPath: Self.notesURL(forTranscript: url).path) else {
+            guard regenerate != nil || !FileManager.default.fileExists(atPath: Self.notesURL(forTranscript: url).path) else {
                 outcome.notesExist.append(url)
                 continue
             }
-            guard queuedPaths.insert(url.standardizedFileURL.path).inserted else {
+            guard queuedPaths.insert(url.resolvingSymlinksInPath().standardizedFileURL.path).inserted else {
                 outcome.alreadyQueued.append(url)
                 continue
             }
@@ -258,6 +264,7 @@ extension PipelineQueue {
             )
             job.transcriptPath = url
             job.notesBasename = stem
+            job.notesContextMode = regenerate
             job.generatesNotesOnly = true
             enqueue(job)
             outcome.queued.append(job.id)

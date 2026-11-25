@@ -232,6 +232,9 @@ struct PipelineJob: Identifiable, Codable {
     /// and is what removing a job deletes by, so a picked transcript that
     /// shares a waiting meeting's name cannot take that meeting's data along.
     var notesBasename: String?
+    /// An explicit regeneration can replace notes after a successful run.
+    var notesContextMode: NotesContextMode?
+    var meetingContextMessage: String?
     /// The Notion page this job created, kept so a retry updates that page
     /// instead of creating a duplicate. Optional so snapshots written before
     /// this field existed still decode.
@@ -453,6 +456,7 @@ struct PipelineJob: Identifiable, Codable {
     mutating func prepareForRetry() {
         error = nil
         warnings = []
+        meetingContextMessage = nil
         trackViability = nil
         echo = nil
         usedDiarizerMode = nil

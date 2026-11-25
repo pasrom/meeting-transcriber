@@ -48,6 +48,7 @@ struct MenuBarView: View {
     var notionExportEnabled: Bool = false
     /// Picks transcripts and queues meeting notes for each.
     var onGenerateNotesFromTranscripts: () -> Void = {}
+    var onRegenerateMeetingNotes: (NotesContextMode) -> Void = { _ in }
     /// Whether the live-caption models are still loading.
     var captionsPreparing: Bool = false
 
@@ -249,6 +250,11 @@ struct MenuBarView: View {
                 Label("Generate Meeting Notes from Transcript...", systemImage: "doc.text")
             }
             .accessibilityIdentifier(A11yID.generateNotesFromTranscriptButton)
+            Menu("Regenerate Meeting Notes") {
+                Button("Use Configured Context…") { onRegenerateMeetingNotes(.configuredContext) }
+                Button("Without Context…") { onRegenerateMeetingNotes(.withoutContext) }
+            }
+            .accessibilityIdentifier(A11yID.regenerateMeetingNotesButton)
         #endif
     }
 
@@ -418,6 +424,8 @@ struct MenuBarView: View {
             Text(msg)
         } else if job.state == .done, job.notionExportStatus == .inProgress {
             Text("Exporting to Notion…")
+        } else if job.state == .done, let context = job.meetingContextMessage {
+            Text((job.warnings + [context]).joined(separator: " · "))
         } else if job.state == .done, !job.warnings.isEmpty {
             Text(job.warnings.joined(separator: "; "))
         } else {

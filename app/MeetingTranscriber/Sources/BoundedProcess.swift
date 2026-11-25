@@ -128,7 +128,7 @@ final class BoundedProcess: Sendable {
 
     /// `Process` starts the child as the leader of a process group of its
     /// own; signal that group, or just the pid if it leads none.
-    private static func signalGroup(of pid: pid_t, _ signal: Int32) {
+    static func signalGroup(of pid: pid_t, _ signal: Int32) {
         if getpgid(pid) == pid {
             killpg(pid, signal)
         } else {
