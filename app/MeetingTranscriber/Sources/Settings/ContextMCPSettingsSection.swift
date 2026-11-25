@@ -129,20 +129,52 @@ private struct ContextMCPSourceEditor: View {
                     Text("Local stdio is unavailable in the App Store build.").foregroundStyle(.secondary)
                 }
             } else {
-                Toggle("Allow plain HTTP on loopback", isOn: $source.allowLocalHTTP)
+                httpAuthentication
             }
-            Toggle("Replace saved credentials", isOn: $replaceSecrets)
-            if replaceSecrets {
-                SecureField(
-                    source.transport == .stdio ? "Environment (JSON object)" : "Static headers (JSON object)",
-                    text: $credentialText,
-                    prompt: Text("{}"),
-                )
-                Text("Enter a JSON object with string values. Enter {} to clear saved credentials.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            if !source.usesOAuth { staticCredentials }
         }
         .disabled(testTask != nil)
+    }
+
+    @ViewBuilder private var httpAuthentication: some View {
+        Picker("Authentication", selection: Binding(
+            get: { source.httpAuthentication ?? .headers },
+            set: { mode in
+                source.httpAuthentication = mode == .oauth ? mode : nil
+                if mode == .oauth { replaceSecrets = false }
+            },
+        )) {
+            ForEach(MCPSource.HTTPAuthentication.allCases, id: \.self) { mode in
+                Text(mode.label).tag(mode)
+            }
+        }
+        if source.usesOAuth {
+            TextField("OAuth client ID or metadata URL (optional)", text: Binding(
+                get: { source.oauthClientID ?? "" },
+                set: { source.oauthClientID = $0 },
+            ))
+            HStack {
+                Button("Sign In in Browser…") { signIn() }
+                if stored?.usesOAuth == true && stored?.location == source.location {
+                    Button("Forget Sign-In") { forgetSignIn() }
+                }
+            }
+        } else {
+            Toggle("Allow plain HTTP on loopback", isOn: $source.allowLocalHTTP)
+        }
+    }
+
+    @ViewBuilder private var staticCredentials: some View {
+        Toggle("Replace saved credentials", isOn: $replaceSecrets)
+        if replaceSecrets {
+            SecureField(
+                source.transport == .stdio ? "Environment (JSON object)" : "Static headers (JSON object)",
+                text: $credentialText,
+                prompt: Text("{}"),
+            )
+            Text("Enter a JSON object with string values. Enter {} to clear saved credentials.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     private var permissionsSection: some View {
@@ -170,7 +202,7 @@ private struct ContextMCPSourceEditor: View {
         Section("Read-only tools") {
             Button("Save and Test Connection") { test() }
                 .disabled(testTask != nil || !source.transportAvailable)
-            if testTask != nil { ProgressView("Discovering tools…") }
+            if testTask != nil { ProgressView() }
             Text("Review the server and approve each retrieval tool. Read-only hints come from the server and cannot guarantee its behavior.")
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(tools, id: \.name) { tool in
@@ -197,6 +229,7 @@ private struct ContextMCPSourceEditor: View {
         var next = source
         next.name = next.name.trimmingCharacters(in: .whitespacesAndNewlines)
         next.location = next.location.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizeAuthentication(&next) else { return nil }
         guard !next.name.isEmpty, next.name.utf8.count <= 100, next.location.utf8.count <= 2048 else {
             feedback = "Enter a name and a valid connection address."
             return nil
@@ -224,13 +257,11 @@ private struct ContextMCPSourceEditor: View {
         }
 
         let previous = stored
-        let connectionChanged = previous.map { existing in
-            existing.location != next.location || existing.arguments != next.arguments || existing.transport != next.transport
-                || existing.allowLocalHTTP != next.allowLocalHTTP
-        } ?? true
+        let connectionChanged = previous.map { connectionDiffers($0, from: next) } ?? true
         // Existing secrets stay bound to the old address or executable.
-        if replaceSecrets || connectionChanged {
-            guard let credentials = readCredentials(transport: next.transport) else { return nil }
+        if (replaceSecrets && !next.usesOAuth) || connectionChanged {
+            let credentials = next.usesOAuth ? MCPSecrets() : readCredentials(transport: next.transport)
+            guard let credentials else { return nil }
             // Use a fresh Keychain account for the new connection revision.
             // A failed save leaves both the previous config and credentials usable.
             next.connectionRevision = UUID()
@@ -258,6 +289,83 @@ private struct ContextMCPSourceEditor: View {
         return next
     }
 
+    private func connectionDiffers(_ previous: MCPSource, from next: MCPSource) -> Bool {
+        previous.location != next.location || previous.arguments != next.arguments || previous.transport != next.transport
+            || previous.allowLocalHTTP != next.allowLocalHTTP || previous.httpAuthentication != next.httpAuthentication
+            || previous.oauthClientID != next.oauthClientID
+    }
+
+    private func normalizeAuthentication(_ next: inout MCPSource) -> Bool {
+        guard next.usesOAuth else {
+            next.httpAuthentication = nil
+            next.oauthClientID = nil
+            return true
+        }
+        next.allowLocalHTTP = false
+        if let id = next.oauthClientID?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+            guard MCPOAuthClient.validClientID(id) else {
+                feedback = "Enter the OAuth client ID exactly as registered."
+                return false
+            }
+            next.oauthClientID = id
+        } else {
+            next.oauthClientID = nil
+        }
+        return true
+    }
+
+    private func signIn() {
+        guard let saved = save(), let endpoint = saved.endpoint, saved.usesOAuth else { return }
+        feedback = "Opening OAuth sign-in…"
+        testTask = Task { @MainActor in
+            defer { testTask = nil }
+            do {
+                let listener = try MCPOAuthLoopback()
+                defer { listener.stop() }
+                let redirect = try await listener.start()
+                let client = MCPOAuthClient()
+                let flow = try await client.begin(endpoint: endpoint, redirect: redirect, clientID: saved.oauthClientID)
+                feedback = "Complete sign-in in your browser."
+                let code = try await listener.authorize(flow)
+                let credentials = try await client.finish(flow, code: code)
+                try Task.checkCancellation()
+                let signedIn = try replaceAuthorization(for: saved, with: MCPSecrets(oauth: credentials))
+                feedback = "Signed in. Discovering tools…"
+                try await testConnection(signedIn)
+            } catch is CancellationError {
+                // The editor closed.
+            } catch {
+                feedback = message(for: error, source: saved)
+                setTestStatus("Test failed")
+            }
+        }
+    }
+
+    private func forgetSignIn() {
+        guard let saved = save(), saved.usesOAuth else { return }
+        do {
+            _ = try replaceAuthorization(for: saved, with: MCPSecrets())
+            feedback = "Saved OAuth credentials were removed from this Mac."
+        } catch {
+            feedback = message(for: error, source: saved)
+        }
+    }
+
+    private func replaceAuthorization(for saved: MCPSource, with credentials: MCPSecrets) throws -> MCPSource {
+        guard let index = settings.mcpSources.firstIndex(of: saved) else { throw ContextFailure.revoked }
+        var next = saved
+        next.connectionRevision = UUID()
+        next.approvals = [:]
+        if credentials.oauth != nil, !ContextMCPKeychain.save(credentials, for: next) { throw MCPOAuthError.storage }
+        settings.mcpSources[index] = next
+        ContextMCPKeychain.remove(saved)
+        source = next
+        tools = []
+        approvedTest = nil
+        setTestStatus(nil)
+        return next
+    }
+
     private func readCredentials(transport: MCPSource.Transport) -> MCPSecrets? {
         guard replaceSecrets else { return MCPSecrets() }
         guard credentialText.utf8.count <= 16 * 1024,
@@ -268,8 +376,8 @@ private struct ContextMCPSourceEditor: View {
         return transport == .stdio ? MCPSecrets(environment: fields) : MCPSecrets(headers: fields)
     }
 
-    private func discover(_ saved: MCPSource, secrets: MCPSecrets) async throws -> [MCPTool] {
-        let client = try ContextMCPClient(source: saved, secrets: secrets, deadline: ContinuousClock.now + .seconds(30)) {
+    private func discover(_ saved: MCPSource, secrets: MCPSecrets, deadline: ContinuousClock.Instant) async throws -> [MCPTool] {
+        let client = try ContextMCPClient(source: saved, secrets: secrets, deadline: deadline) {
             settings.mcpSources.contains(saved)
         }
         do {
@@ -291,25 +399,45 @@ private struct ContextMCPSourceEditor: View {
         testTask = Task { @MainActor in
             defer { testTask = nil }
             do {
-                let credentials = await Task.detached { ContextMCPKeychain.load(saved) }.value
-                let discovered = try await discover(saved, secrets: credentials)
-                tools = discovered.filter { tool in
-                    !ContextDataSafety.containsSensitive(tool.name, secrets: credentials.values)
-                        && !ContextDataSafety.containsSensitive(tool.description, secrets: credentials.values)
-                }
-                let signatures = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0.fingerprint) })
-                source.approvals = source.approvals.filter { signatures[$0.key] == $0.value }
-                approvedTest = saved
-                feedback = "Connection succeeded. \(tools.count) tool(s) available for review."
-                setTestStatus("Connected")
+                try await testConnection(saved)
             } catch is CancellationError {
                 // The editor closed.
             } catch {
-                let reason = error as? ContextFailure
-                feedback = reason == .authentication ? "Authentication failed. Check the saved headers."
-                    : "Connection or tool discovery failed. Check the endpoint or executable."
+                feedback = message(for: error, source: saved)
                 setTestStatus("Test failed")
             }
         }
+    }
+
+    private func testConnection(_ saved: MCPSource) async throws {
+        let deadline = ContinuousClock.now + .seconds(30)
+        let credentials: MCPSecrets
+        if saved.usesOAuth {
+            let settings = self.settings
+            credentials = try await MCPOAuthTokenStore.shared.usable(saved, deadline: deadline) { source in
+                settings.mcpSources.contains(source)
+            }
+        } else {
+            credentials = await Task.detached { ContextMCPKeychain.load(saved) }.value
+        }
+        let discovered = try await discover(saved, secrets: credentials, deadline: deadline)
+        tools = discovered.filter { tool in
+            !ContextDataSafety.containsSensitive(tool.name, secrets: credentials.values)
+                && !ContextDataSafety.containsSensitive(tool.description, secrets: credentials.values)
+        }
+        let signatures = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0.fingerprint) })
+        source.approvals = source.approvals.filter { signatures[$0.key] == $0.value }
+        approvedTest = saved
+        feedback = "Connection succeeded. \(tools.count) tool(s) available for review."
+        setTestStatus("Connected")
+    }
+
+    private func message(for error: any Error, source: MCPSource) -> String {
+        if let oauth = error as? MCPOAuthError, let description = oauth.errorDescription { return description }
+        if error as? ContextFailure == .authentication {
+            return source.usesOAuth ? "The server rejected this authorization. Sign in again."
+                : "Authentication failed. Check the saved headers or choose OAuth sign-in."
+        }
+        return "Connection or tool discovery failed. Check the endpoint or executable."
     }
 }

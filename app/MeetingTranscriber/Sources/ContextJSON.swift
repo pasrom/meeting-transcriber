@@ -105,6 +105,15 @@ struct MCPSource: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
+    enum HTTPAuthentication: String, Codable, CaseIterable, Sendable {
+        case headers
+        case oauth
+
+        var label: String {
+            self == .oauth ? "OAuth sign-in" : "None or static headers"
+        }
+    }
+
     var id = UUID()
     var name = "Knowledge source"
     var transport: Transport = .http
@@ -113,18 +122,24 @@ struct MCPSource: Codable, Equatable, Identifiable, Sendable {
     var arguments: [String] = []
     var allowQueries = false
     var allowLocalHTTP = false
+    var httpAuthentication: HTTPAuthentication?
+    var oauthClientID: String?
     var remoteModelDestination: String?
     var retainEvidence = false
     var approvals: [String: String] = [:]
     // Rotating credentials invalidates approvals and any in-flight authorization.
     var connectionRevision = UUID()
 
+    var usesOAuth: Bool {
+        transport == .http && httpAuthentication == .oauth
+    }
+
     var credentialAccount: String {
         "mcp-source-\(id.uuidString)-\(connectionRevision.uuidString)"
     }
 
     var endpoint: URL? {
-        guard transport == .http, let url = URL(string: location), Self.validEndpoint(url, allowLoopbackHTTP: allowLocalHTTP),
+        guard transport == .http, let url = URL(string: location), Self.validEndpoint(url, allowLoopbackHTTP: allowLocalHTTP && !usesOAuth),
               url.query == nil else { return nil }
         return url
     }
@@ -163,8 +178,9 @@ struct MCPSource: Codable, Equatable, Identifiable, Sendable {
 struct MCPSecrets: Codable, Sendable {
     var headers: [String: String] = [:]
     var environment: [String: String] = [:]
+    var oauth: MCPOAuthCredentials?
     var values: [String] {
-        Array(headers.values) + Array(environment.values)
+        Array(headers.values) + Array(environment.values) + (oauth?.values ?? [])
             + headers.values.compactMap { $0.hasPrefix("Bearer ") ? String($0.dropFirst(7)) : nil }
     }
 }

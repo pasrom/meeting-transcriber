@@ -35,12 +35,18 @@ actor ContextEnrichment {
 
     typealias Authorization = @MainActor @Sendable (MCPSource) -> Bool
     typealias Credentials = @Sendable (MCPSource) -> MCPSecrets
+    typealias OAuthPreparation = @Sendable (MCPSource, Authorization, ContinuousClock.Instant) async throws -> MCPSecrets
+    private let prepareOAuth: OAuthPreparation
     private let authorized: Authorization
     private let credentials: Credentials
 
-    init(authorized: @escaping Authorization, credentials: @escaping Credentials) {
+    init(
+        authorized: @escaping Authorization, credentials: @escaping Credentials,
+        prepareOAuth: @escaping OAuthPreparation = { _, _, _ in throw ContextFailure.authentication },
+    ) {
         self.authorized = authorized
         self.credentials = credentials
+        self.prepareOAuth = prepareOAuth
     }
 
     func collect(
@@ -63,9 +69,18 @@ actor ContextEnrichment {
             outcome.record.add(.unapprovedSources)
             return outcome
         }
-        let secrets = Dictionary(configured.map { ($0.id, credentials($0)) }) { first, _ in first }
-        let prohibited = secrets.values.flatMap(\.values) + [model.contextSecret].compactMap(\.self)
-        guard !ContextDataSafety.containsSensitive(transcript, secrets: prohibited) else {
+        let deadline = ContinuousClock.now + .seconds(ContextLimits.stageSeconds)
+        let stored = Dictionary(configured.map { ($0.id, credentials($0)) }) { first, _ in first }
+        let storedProhibited = stored.values.flatMap(\.values) + [model.contextSecret].compactMap(\.self)
+        guard !ContextDataSafety.containsSensitive(transcript, secrets: storedProhibited) else {
+            outcome.record.add(.sensitiveTranscript)
+            return outcome
+        }
+        let secrets = await preparedCredentials(eligible, stored: stored, deadline: deadline, record: &outcome.record)
+        try Task.checkCancellation()
+        let refreshedProhibited = eligible.filter(\.usesOAuth).flatMap { secrets[$0.id]?.values ?? [] }
+        let prohibited = Array(Set(storedProhibited + refreshedProhibited))
+        guard !ContextDataSafety.containsSensitive(transcript, secrets: refreshedProhibited) else {
             outcome.record.add(.sensitiveTranscript)
             return outcome
         }
@@ -74,7 +89,6 @@ actor ContextEnrichment {
         }
 
         let segments = ContextSegment.index(transcript)
-        let deadline = ContinuousClock.now + .seconds(ContextLimits.stageSeconds)
         var clients: [ContextMCPClient] = []
         let tools = await discover(eligible, secrets: secrets, prohibited: prohibited, deadline: deadline, clients: &clients, record: &outcome.record)
 
@@ -91,6 +105,23 @@ actor ContextEnrichment {
         return outcome
     }
 
+    private func preparedCredentials(
+        _ sources: [MCPSource], stored: [UUID: MCPSecrets], deadline: ContinuousClock.Instant, record: inout MeetingContextRecord,
+    ) async -> [UUID: MCPSecrets] {
+        var result = stored
+        for source in sources where source.usesOAuth {
+            guard !Task.isCancelled, ContinuousClock.now < deadline else { break }
+            do {
+                result[source.id] = try await prepareOAuth(source, authorized, deadline)
+            } catch {
+                let failure = error as? ContextFailure ?? .authentication
+                record.sourceFailures[source.id] = failure
+                record.add(failure == .revoked ? .revoked : .discoveryFailed)
+            }
+        }
+        return result
+    }
+
     private func discover( // swiftlint:disable:this function_parameter_count
         _ eligible: [MCPSource], secrets: [UUID: MCPSecrets], prohibited: [String],
         deadline: ContinuousClock.Instant, clients: inout [ContextMCPClient], record: inout MeetingContextRecord,
@@ -98,6 +129,7 @@ actor ContextEnrichment {
         var tools: [ApprovedTool] = []
         for server in eligible {
             if Task.isCancelled { break }
+            guard record.sourceFailures[server.id] == nil else { continue }
             guard await authorized(server) else { record.add(.revoked); continue }
             do {
                 let liveAuthorization = authorized

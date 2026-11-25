@@ -67,7 +67,14 @@ actor ContextMCPClient {
         switch source.transport {
         case .http:
             guard let url = source.endpoint else { throw ContextFailure.invalidEndpoint }
-            transport = try MCPHTTPTransport(endpoint: url, headers: secrets.headers)
+            if source.usesOAuth {
+                guard let oauth = secrets.oauth, oauth.matches(url),
+                      oauth.expiresAt.map({ $0 > Date() }) ?? true,
+                      MCPOAuthClient.validBearer(oauth.accessToken) else { throw ContextFailure.authentication }
+                transport = try MCPHTTPTransport(endpoint: url, headers: ["Authorization": "Bearer \(oauth.accessToken)"])
+            } else {
+                transport = try MCPHTTPTransport(endpoint: url, headers: secrets.headers)
+            }
 
         case .stdio:
             #if APPSTORE

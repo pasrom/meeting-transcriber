@@ -21,11 +21,19 @@ Claude CLI continues to generate ordinary notes. Context enrichment is unavailab
 ## Configure a Streamable HTTP source
 
 1. Add an MCP source and set **Transport** to **Streamable HTTP**. Enter the endpoint, for example `https://knowledge.example.com/mcp`. Plain HTTP needs **Allow plain HTTP on loopback** and a loopback address such as `http://127.0.0.1:8765/mcp`.
-2. For static authentication, select **Replace saved credentials** and enter headers as a JSON object. Examples include `{"Authorization":"Bearer <your-token>"}` or `{"X-API-Key":"<your-token>"}`. Values are stored in Keychain and sent only to the configured source. Use `{}` in the credentials field to clear them.
-3. Test the connection and approve individual read-only tools. The connection test initializes the server and lists tools without sending meeting data.
+2. Choose how the server authenticates you.
+   - For browser sign-in, choose **OAuth sign-in**, select **Sign In in Browser…**, and grant access in your browser. Start with just the HTTPS server URL. The app discovers the authorization server and uses its supported public client registration.
+   - For static headers, choose **None or static headers**. Select **Replace saved credentials** and enter a JSON object, such as `{"Authorization":"Bearer <your-token>"}` or `{"X-API-Key":"<your-token>"}`. Use `{}` in the credentials field to clear saved headers.
+3. Test the connection and approve individual read-only tools. A successful browser sign-in runs the test automatically. The connection test initializes the server and lists tools without sending meeting data.
 4. Enable the source and explicitly allow **meeting lookup arguments to this HTTP endpoint**. If your notes provider is remote, optionally approve forwarding this source's metadata and evidence to the selected notes endpoint. Save.
 
 New sources are disabled with no tool approvals. The enabled sources and their explicit permissions form the global source policy for automatic notes. Enable work and personal sources together only for meetings where you want both consulted. Editing an MCP source's transport, address, launch arguments or credentials clears tool approvals. A change to discovered tool metadata also requires review and renewed approval. Disable a source or revoke its approvals to stop further lookups and withhold late results. The server's read-only hint is advisory. Approve tools on servers you trust, including local servers that may contact external services.
+
+### OAuth compatibility
+
+The app supports OAuth authorization code sign-in with PKCE (S256). It can use the app's public client metadata document after the project site publishes it, or register a public client dynamically when the server offers that option. If your provider gives you a public client ID or public HTTPS client metadata URL, enter it in **OAuth client ID or metadata URL (optional)**. Configure that client to allow `http://127.0.0.1:47863/oauth/callback` and unauthenticated token exchange for a public client. The app listens on that loopback address while you sign in. Both app variants support this callback.
+
+OAuth tokens and static headers are saved in Keychain. A source's bearer token is sent only to its configured MCP endpoint. Refresh uses the detected authorization server. If the session expires and refresh is unavailable, sign in again in Settings. **Forget Sign-In** clears the authorization from this Mac and clears tool approvals. You can revoke server-side consent from the provider's account settings.
 
 ## Generate and regenerate
 
@@ -37,7 +45,7 @@ The job row and completion notification show whether context was used, partial, 
 
 ## Limits and compatibility
 
-- The app supports MCP stdio and Streamable HTTP with static headers. Streamable HTTP accepts JSON and POST response SSE, and uses negotiated session headers. Standalone SSE subscriptions, legacy HTTP+SSE, OAuth, server-initiated operations, and fetching resources or attachments are outside this implementation.
+- The app supports MCP stdio and Streamable HTTP with static headers or OAuth. Streamable HTTP accepts JSON and POST response SSE, and uses negotiated session headers. Standalone SSE subscriptions, legacy HTTP+SSE, server-initiated operations, and fetching resources or attachments are outside this implementation.
 - Tool inputs use a strict JSON Schema subset covering typed objects, arrays and scalars, declared properties, required fields, additional-property rules, enum and const, and supported size and numeric ranges. Unsupported constraints, including schema references, composition and patterns, require a compatible tool schema. Schema defaults, examples, and annotations are removed from data sent to the model.
 - The app allows up to eight sources, four discovery pages and 48 discovered tools per source, and twelve lookups in one sequential round. The enrichment stage has a 90-second budget, with up to 15 seconds per MCP operation and 30 seconds for planning. A lookup's serialized arguments are capped at 4 KiB with a 384-byte textual allowance per call and a 1 KiB textual allowance per meeting. Normalized results are capped at 32 KiB per call, wire responses at 128 KiB, and the final evidence bundle at 16 KiB. The settings connection test has a 30-second budget. A successful enriched attempt ordinarily makes two model requests. Provider compatibility retries can add requests.
 - Planning uses all nonblank transcript lines with their original line-derived IDs. If the transcript and a usable catalog cannot fit within the 20 KiB planner input budget, the app skips enrichment and reports it. The 48 KiB enriched notes input cap includes the template, transcript and evidence. These are byte budgets. A model may have a smaller effective context window, and ordinary notes keep the provider's own limits.
@@ -49,7 +57,7 @@ Run the targeted tests on macOS with Xcode 26 or later and Python 3 available fo
 
 ```sh
 cd app/MeetingTranscriber
-swift test --filter 'ContextMCPTests|ContextPolicyTests|PipelineMeetingContextTests'
+swift test --filter 'MCPOAuthTests|ContextMCPTests|ContextPolicyTests|PipelineMeetingContextTests'
 swift build --build-tests
 ../../scripts/ci/test-shards.sh run --shards 3 --skip ModelPreloadTests
 ```

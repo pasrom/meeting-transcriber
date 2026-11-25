@@ -6,6 +6,9 @@ struct MeetingContextConfiguration {
     let sources: [MCPSource]
     let authorize: ContextEnrichment.Authorization
     var credentials: ContextEnrichment.Credentials = ContextMCPKeychain.load
+    var prepareOAuth: ContextEnrichment.OAuthPreparation = { source, authorized, deadline in
+        try await MCPOAuthTokenStore.shared.usable(source, deadline: deadline, authorized: authorized)
+    }
 }
 
 extension PipelineQueue {
@@ -18,7 +21,9 @@ extension PipelineQueue {
             record.add(.unsupportedProvider)
             return (MeetingContextOutcome(record: record), configuration)
         }
-        let enrichment = ContextEnrichment(authorized: configuration.authorize, credentials: configuration.credentials)
+        let enrichment = ContextEnrichment(
+            authorized: configuration.authorize, credentials: configuration.credentials, prepareOAuth: configuration.prepareOAuth,
+        )
         let context = try await enrichment.collect(meetingID: job.id, transcript: transcript, sources: configuration.sources, model: model)
         return (context, configuration)
     }
