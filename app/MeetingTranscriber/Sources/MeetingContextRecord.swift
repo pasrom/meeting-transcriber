@@ -60,10 +60,11 @@ struct MeetingContextRecord: Encodable, Sendable {
         let evidenceRetained: Bool
     }
 
-    let schemaVersion = 1
+    // The synthesized encoder writes these fields to the provenance sidecar.
+    let schemaVersion = 1 // swiftlint:disable:this unused_declaration
     let meetingID: UUID
-    let attemptID = UUID()
-    let startedAt = Date()
+    let attemptID = UUID() // swiftlint:disable:this unused_declaration
+    let startedAt = Date() // swiftlint:disable:this unused_declaration
     var completedAt: Date?
     var status: MeetingContextStatus = .skipped
     var reasons: [Reason] = []

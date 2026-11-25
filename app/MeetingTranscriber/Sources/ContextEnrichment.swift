@@ -248,8 +248,9 @@ actor ContextEnrichment {
     }
 
     private struct PlanPayload: Encodable {
-        let segmentCoverage = "all_nonblank_lines"
-        let maxRequests = ContextLimits.calls
+        // The synthesized encoder is the only reader of these fixed planner fields.
+        let segmentCoverage = "all_nonblank_lines" // swiftlint:disable:this unused_declaration
+        let maxRequests = ContextLimits.calls // swiftlint:disable:this unused_declaration
         let segments: [ContextSegment]
         let tools: [ContextCatalogEntry]
 

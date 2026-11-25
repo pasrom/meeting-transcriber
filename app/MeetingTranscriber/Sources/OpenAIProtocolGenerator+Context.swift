@@ -3,7 +3,7 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "OpenAIProtocolGenerator")
 
-extension OpenAIProtocolGenerator {
+extension OpenAIProtocolGenerator: ContextNotesModel {
     var contextProvider: String {
         "openai-compatible"
     }
@@ -52,7 +52,9 @@ extension OpenAIProtocolGenerator {
             ),
         )
     }
+}
 
+extension OpenAIProtocolGenerator {
     struct ContextRequest: Sendable {
         let deadline: ContinuousClock.Instant?
         let outputBytes: Int
