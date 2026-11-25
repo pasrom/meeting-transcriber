@@ -151,7 +151,7 @@
         private func receive(_ data: Data) {
             guard !closed else { return }
             received += data.count
-            guard received <= ContextLimits.wire else { stop(reason: ContextFailure.limit); return }
+            guard received <= ContextLimits.wire else { stop(reason: ContextFailure.responseTooLarge); return }
             bytes.append(data)
             do {
                 while let newline = bytes.firstIndex(of: 10) {

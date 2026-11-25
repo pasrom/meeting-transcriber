@@ -250,7 +250,39 @@ final class ContextMCPTests: XCTestCase {
             meetingID: UUID(), transcript: noisyTranscript, sources: [source], model: ContextTestModel(),
         )
         XCTAssertEqual(outcome.record.status, .failed)
+        XCTAssertEqual(outcome.record.reasons, [.responseTooLarge])
+        XCTAssertEqual(outcome.record.requests.first?.failure, .responseTooLarge)
         XCTAssertTrue(outcome.items.isEmpty)
+    }
+
+    func testLargeSearchResponsesKeepRelevantExcerptsForBothLookups() async throws {
+        let fixture = try await MCPTestFixture(.http, status: "verbose-evidence")
+        defer { fixture.stop() }
+        let source = try fixture.approvedSource()
+        let model = ContextTestModel(reply: """
+        {"schema_version":1,"requests":[
+          {"request_id":"one","tool_id":"tool-1","arguments":{"term":"fly wheel"},
+           "mentions":[{"segment_id":"seg-1","surface_text":"fly wheel"}]},
+          {"request_id":"two","tool_id":"tool-1","arguments":{"term":"curation"},
+           "mentions":[{"segment_id":"seg-1","surface_text":"curation"}]}
+        ]}
+        """)
+        let enrichment = ContextEnrichment(authorized: { _ in true }, credentials: { _ in MCPTestFixture.httpCredentials })
+        let outcome = try await enrichment.collect(
+            meetingID: UUID(), transcript: noisyTranscript, sources: [source], model: model,
+        )
+        XCTAssertEqual(outcome.record.requests.map(\.status), ["used", "used"])
+        XCTAssertEqual(outcome.record.status, .partial)
+        XCTAssertEqual(outcome.record.reasons, [.evidenceExcerpted])
+        for request in outcome.record.requests {
+            XCTAssertGreaterThan(try XCTUnwrap(request.responseContentBytes), ContextLimits.result)
+            XCTAssertLessThan(try XCTUnwrap(request.evidenceContentBytes), ContextLimits.context)
+        }
+        let evidence = outcome.items.map(\.evidence)
+        let encoded = try ContextJSON.encodedText(evidence)
+        XCTAssertLessThanOrEqual(encoded.utf8.count, ContextLimits.context)
+        XCTAssertTrue(encoded.contains("fly wheel is described in the synthetic current guide."))
+        XCTAssertTrue(encoded.contains("curation is described in the synthetic current guide."))
     }
 
     func testLongTranscriptSkipsBeforeDiscovery() async throws {

@@ -25,7 +25,7 @@ enum ContextLimits {
 enum ContextFailure: String, Error, Codable {
     // swiftlint:disable raw_value_for_camel_cased_codable_enum
     case invalidEndpoint, connection, authentication, invalidResponse, unsupportedVersion
-    case limit, timeout, revoked, unavailable, toolError, unsupportedContent, unsafeData
+    case limit, responseTooLarge, timeout, revoked, unavailable, toolError, unsupportedContent, unsafeData
     // swiftlint:enable raw_value_for_camel_cased_codable_enum
 }
 

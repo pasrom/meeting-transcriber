@@ -22,7 +22,7 @@ struct ContextEvidence: Codable, Sendable {
     let toolName: String
     let segmentIDs: [String]
     let retrievedAt: Date
-    let content: ContextJSON
+    var content: ContextJSON
 
     var notesInput: ContextJSON {
         .object(["evidenceID": .string(evidenceID), "segmentIDs": .array(segmentIDs.map(ContextJSON.string)), "content": content])
@@ -35,7 +35,7 @@ struct MeetingContextRecord: Encodable, Sendable {
         // swiftlint:disable raw_value_for_camel_cased_codable_enum
         case unsupportedProvider, unapprovedSources, transcriptTooLong, sensitiveTranscript, plannerFailed, invalidPlan
         case discoveryFailed, catalogLimit, invalidRequest, callLimit, callFailed, timeout, unsupportedContent
-        case unsafeData, evidenceLimit, revoked, notesFailed
+        case unsafeData, evidenceLimit, evidenceExcerpted, responseTooLarge, revoked, notesFailed
         // swiftlint:enable raw_value_for_camel_cased_codable_enum
     }
 
@@ -47,6 +47,8 @@ struct MeetingContextRecord: Encodable, Sendable {
         let status: String
         var failure: ContextFailure?
         var evidenceID: String?
+        var responseContentBytes: Int?
+        var evidenceContentBytes: Int?
     }
 
     struct Provenance: Encodable, Sendable {
@@ -81,14 +83,18 @@ struct MeetingContextRecord: Encodable, Sendable {
     }
 
     var statusMessage: String {
-        let detail = switch reasons.first {
+        let reason = reasons.first { $0 != .evidenceExcerpted } ?? reasons.first
+        let detail = switch reason {
         case .unsupportedProvider: "This notes provider is unavailable for MCP enrichment."
         case .unapprovedSources: "No source is approved for this notes destination."
         case .transcriptTooLong: "The full transcript exceeds the planning budget."
         case .sensitiveTranscript: "The transcript was withheld from planning after a credential check."
         case .plannerFailed, .invalidPlan: "The notes model did not return a usable lookup plan."
         case .discoveryFailed: "A knowledge source could not be connected or listed."
-        case .catalogLimit, .callLimit, .evidenceLimit: "An enrichment size or call limit was reached."
+        case .catalogLimit, .callLimit: "An enrichment size or call limit was reached."
+        case .evidenceLimit: "A lookup response or the notes request exceeded a size limit."
+        case .evidenceExcerpted: "Long lookup results were shortened to fit the evidence budget."
+        case .responseTooLarge: "A lookup response exceeded the 128 KiB download limit."
         case .invalidRequest: "A proposed lookup did not pass validation."
         case .callFailed, .timeout: "A lookup failed or timed out."
         case .unsupportedContent, .unsafeData: "Some returned content was withheld."
@@ -123,6 +129,7 @@ struct MeetingContextOutcome: Sendable {
             return MeetingContextRecord.Request(
                 id: request.id, serverID: request.serverID, toolName: request.toolName,
                 segmentIDs: request.segmentIDs, status: "withheld", failure: reason,
+                responseContentBytes: request.responseContentBytes,
             )
         }
         record.status = items.isEmpty ? .skipped : .partial
