@@ -161,9 +161,9 @@ private struct NotesGenerator: ProtocolGenerating, ContextNotesModel {
     func generateWithContext(
         transcript: String, diarized: Bool, meetingStartTime: Date?, evidence: String,
         authorize: @escaping @MainActor @Sendable () -> Bool,
-    ) async throws -> String {
+    ) async -> String {
         await log.capture(evidence)
-        return try await model.generateWithContext(
+        return await model.generateWithContext(
             transcript: transcript, diarized: diarized, meetingStartTime: meetingStartTime, evidence: evidence, authorize: authorize,
         )
     }
