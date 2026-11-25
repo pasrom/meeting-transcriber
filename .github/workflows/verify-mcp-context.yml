@@ -25,12 +25,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 78ff011604cfc48728097896e43e807848f6af9b
+          ref: 3c877cd532b176f4b992e1e81d11f873602d8022
           persist-credentials: false
 
       - name: Verify source and toolchain
         run: |
-          test "$(git rev-parse HEAD)" = 78ff011604cfc48728097896e43e807848f6af9b
+          test "$(git rev-parse HEAD)" = 3c877cd532b176f4b992e1e81d11f873602d8022
           xcodebuild -version
           swift --version
 
