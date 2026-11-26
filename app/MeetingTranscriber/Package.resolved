@@ -1,13 +1,13 @@
 {
-  "originHash" : "6a16cfb52bf165f8a0f88f2a8049f534c8d55ce7d38363bfcba60d96f5abae77",
+  "originHash" : "126e383c0a7933e3c9269402d85707ab15b91807f30a0040ff135abe1b7724b2",
   "pins" : [
     {
       "identity" : "fluidaudio",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/FluidInference/FluidAudio.git",
       "state" : {
-        "revision" : "c8b41f98eae668794dd0083bbe028fe7e6585051",
-        "version" : "0.18.3"
+        "revision" : "e0c6103bc87a88d25276cad491c86e757f58c865",
+        "version" : "0.18.4"
       }
     },
     {
