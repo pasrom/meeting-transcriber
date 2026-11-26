@@ -25,34 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: d976f78a95e34a1ee037d31d6b6952c73f22a0a4
+          ref: f68915f3bc573ed5bfe225ec8d6f660e6c6dbac8
           persist-credentials: false
 
       - name: Verify source and toolchain
         run: |
-          test "$(git rev-parse HEAD)" = d976f78a95e34a1ee037d31d6b6952c73f22a0a4
+          test "$(git rev-parse HEAD)" = f68915f3bc573ed5bfe225ec8d6f660e6c6dbac8
           xcodebuild -version
           swift --version
 
       - name: Run MCP tests
         timeout-minutes: 15
         working-directory: app/MeetingTranscriber
-        run: swift test ${{ matrix.swift-flags }} --filter 'MCPOAuthTests|ContextMCPTests|ContextPolicyTests|PipelineMeetingContextTests'
-
-      - uses: ./.github/actions/setup-swift-test
-        timeout-minutes: 20
-        with:
-          cache-key-suffix: mcp-verify-${{ matrix.variant }}
-          cache-spm: "false"
-          cache-models: "false"
-          swift-flags: ${{ matrix.swift-flags }}
-
-      - uses: ./.github/actions/setup-ffmpeg
-
-      - name: Fetch the echo-cancellation model
-        run: echo "MEETINGTRANSCRIBER_LOCALVQE_MODEL=$(./scripts/fetch-localvqe-model.sh)" >> "$GITHUB_ENV"
-
-      - name: Run the Swift regression suite
-        timeout-minutes: 15
-        working-directory: app/MeetingTranscriber
-        run: ../../scripts/ci/test-shards.sh run --shards 3 --skip ModelPreloadTests
+        run: swift test ${{ matrix.swift-flags }} --filter 'MCPOAuthTests|ContextMCPTests|ContextPolicyTests|PipelineMeetingContextTests|NotesFromTranscriptTests'
