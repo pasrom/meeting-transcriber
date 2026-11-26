@@ -126,7 +126,8 @@ struct MCPOAuthClient: Sendable {
               let token = document["token_endpoint"]?.string.flatMap({ Self.httpsURL($0) }) else {
             throw MCPOAuthError.discovery
         }
-        let scopes = challenge?.scope ?? resourceMetadata["scopes_supported"]?.array?.compactMap(\.string).joined(separator: " ")
+        // A resource's supported scopes are capabilities, not a request for all of them.
+        let scopes = challenge?.scope
         guard (scopes?.utf8.count ?? 0) <= 2048 else { throw MCPOAuthError.discovery }
         return Metadata(
             resource: endpoint, issuer: issuer, authorizationEndpoint: authorization, tokenEndpoint: token,

@@ -241,8 +241,12 @@ extension PipelineQueue {
     @discardableResult
     func enqueueNotes(fromTranscripts urls: [URL], regenerate: NotesContextMode? = nil) -> NotesFromTranscriptOutcome {
         var outcome = NotesFromTranscriptOutcome()
-        var queuedPaths = Set(jobs.filter { !$0.state.isTerminal }
-            .compactMap { $0.transcriptPath?.resolvingSymlinksInPath().standardizedFileURL.path })
+        func queuePath(_ url: URL) -> String {
+            let location = regenerate == nil ? url : url.resolvingSymlinksInPath()
+            return location.standardizedFileURL.path
+        }
+        var queuedPaths = Set(jobs.filter { !$0.state.isTerminal && (regenerate != nil || $0.generatesNotesOnly == true) }
+            .compactMap { $0.transcriptPath.map(queuePath) })
         for url in urls {
             guard url.pathExtension.lowercased() == "txt", Self.isTranscriptSized(url) else {
                 outcome.unreadable.append(url)
@@ -252,7 +256,7 @@ extension PipelineQueue {
                 outcome.notesExist.append(url)
                 continue
             }
-            guard queuedPaths.insert(url.resolvingSymlinksInPath().standardizedFileURL.path).inserted else {
+            guard queuedPaths.insert(queuePath(url)).inserted else {
                 outcome.alreadyQueued.append(url)
                 continue
             }

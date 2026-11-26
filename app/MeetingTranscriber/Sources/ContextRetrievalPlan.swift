@@ -88,7 +88,7 @@ struct ContextLookup: Sendable {
 enum ContextDataSafety {
     // Data minimization is structural. These common credential signatures
     // supplement the exact configured-secret checks without claiming DLP.
-    private static let sensitivePattern = #"(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:bearer|basic)\s+[a-z0-9+/_.=~-]{8,}"#
+    private static let sensitivePattern = #"(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\bbearer\s+[a-z0-9+/_.=~-]{8,}"#
         + #"|\b(?:sk-[a-z0-9_-]{10,}|gh[pousr]_[a-z0-9]{10,}|github_pat_[a-z0-9_]{10,}|AKIA[A-Z0-9]{16})\b"#
         + #"|\b(?:password|passwd|api.?key|secret|token|authorization)\s*["']?\s*[:=]\s*["']?\S+)"#
 
@@ -104,8 +104,13 @@ enum ContextDataSafety {
     }
 
     static func containsSensitive(_ string: String, secrets: [String]) -> Bool {
-        containsKnownSecret(string, secrets: secrets)
+        let basicCredentialPattern = /\b(?i:basic)\h+([A-Za-z0-9+\/]+={0,2})(?![A-Za-z0-9+\/=])/
+        return containsKnownSecret(string, secrets: secrets)
             || string.range(of: sensitivePattern, options: .regularExpression) != nil
+            || string.matches(of: basicCredentialPattern).contains { match in
+                guard let decoded = Data(base64Encoded: String(match.1)) else { return false }
+                return decoded.contains(UInt8(ascii: ":")) && decoded.allSatisfy { $0 >= 32 && $0 != 127 }
+            }
     }
 
     static func containsSensitive(_ value: ContextJSON, secrets: [String]) -> Bool {

@@ -48,6 +48,7 @@ struct MenuBarView: View {
     var notionExportEnabled: Bool = false
     /// Picks transcripts and queues meeting notes for each.
     var onGenerateNotesFromTranscripts: () -> Void = {}
+    var showsRegenerateMeetingNotes = false
     var onRegenerateMeetingNotes: (NotesContextMode) -> Void = { _ in }
     /// Whether the live-caption models are still loading.
     var captionsPreparing: Bool = false
@@ -250,11 +251,13 @@ struct MenuBarView: View {
                 Label("Generate Meeting Notes from Transcript...", systemImage: "doc.text")
             }
             .accessibilityIdentifier(A11yID.generateNotesFromTranscriptButton)
-            Menu("Regenerate Meeting Notes") {
-                Button("Use Configured Context…") { onRegenerateMeetingNotes(.configuredContext) }
-                Button("Without Context…") { onRegenerateMeetingNotes(.withoutContext) }
+            if showsRegenerateMeetingNotes {
+                Menu("Regenerate Meeting Notes") {
+                    Button("Use Configured Context…") { onRegenerateMeetingNotes(.configuredContext) }
+                    Button("Without Context…") { onRegenerateMeetingNotes(.withoutContext) }
+                }
+                .accessibilityIdentifier(A11yID.regenerateMeetingNotesButton)
             }
-            .accessibilityIdentifier(A11yID.regenerateMeetingNotesButton)
         #endif
     }
 

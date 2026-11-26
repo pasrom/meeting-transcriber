@@ -78,7 +78,8 @@ final class MCPOAuthTests: XCTestCase {
         let client = fixture.client
         let flow = try await client.begin(endpoint: fixture.resource, redirect: fixture.redirect, clientID: "provided-client-id")
         XCTAssertEqual(flow.clientID, "provided-client-id")
-        XCTAssertEqual(flow.metadata.scopes, "tools:read")
+        XCTAssertNil(flow.metadata.scopes)
+        XCTAssertFalse(flow.authorizationURL.query?.contains("scope=") ?? false)
         let paths = await fixture.requests.compactMap { $0.url?.path }
         XCTAssertEqual(paths, [
             "/api/mcp", "/.well-known/oauth-protected-resource/api/mcp", "/.well-known/oauth-protected-resource",
@@ -229,7 +230,8 @@ private actor OAuthFixture {
         case protectedMetadata.path, "/.well-known/oauth-protected-resource":
             return try response([
                 "resource": .string(mode == .wrongResource ? "https://mcp.example.test/other" : resource.absoluteString),
-                "authorization_servers": .array([.string(issuer)]), "scopes_supported": .array([.string("tools:read")]),
+                "authorization_servers": .array([.string(issuer)]),
+                "scopes_supported": .array([.string("tools:read"), .string("files:read"), .string("files:write")]),
             ])
 
         case "/.well-known/oauth-authorization-server/tenant" where mode != .fallback, "/tenant/.well-known/openid-configuration":
