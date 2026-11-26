@@ -56,6 +56,28 @@ final class ContextPolicyTests: XCTestCase {
         XCTAssertNil(try lookup(valid.replacingOccurrences(of: "term", with: "password")))
     }
 
+    func testOrdinaryBasicPhrasesDoNotTriggerCredentialDetection() {
+        XCTAssertFalse(ContextDataSafety.containsSensitive("A basic understanding is enough.", secrets: []))
+        let credential = Data("fixture-user:fixture-password".utf8).base64EncodedString()
+        XCTAssertTrue(ContextDataSafety.containsSensitive("Basic \(credential)", secrets: []))
+        XCTAssertTrue(ContextDataSafety.containsSensitive("Bearer fixture-token-12345", secrets: []))
+    }
+
+    func testToolNeedsExplicitReadOnlyHintAndCannotDeclareDestructiveBehavior() throws {
+        let tool = try decode(#"{"name":"lookup","inputSchema":{"type":"object","properties":{}}}"#)
+        let fields = try XCTUnwrap(tool.object)
+        XCTAssertFalse(try XCTUnwrap(MCPTool(wire: tool)).permitsReadOnlyApproval)
+        for (annotations, eligible) in [
+            (#"{"readOnlyHint":false}"#, false),
+            (#"{"readOnlyHint":true,"destructiveHint":true}"#, false),
+            (#"{"readOnlyHint":true}"#, true),
+        ] {
+            var annotated = fields
+            annotated["annotations"] = try decode(annotations)
+            XCTAssertEqual(try XCTUnwrap(MCPTool(wire: .object(annotated))).permitsReadOnlyApproval, eligible)
+        }
+    }
+
     func testExistingNotesChangeBlocksStaleReplacement() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

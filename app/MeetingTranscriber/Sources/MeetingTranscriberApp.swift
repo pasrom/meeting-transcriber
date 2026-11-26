@@ -215,6 +215,7 @@ struct MeetingTranscriberApp: App {
             onAnswerPendingConsent: appState.answerPendingConsent,
             notionExportEnabled: appState.settings.notionExportEnabled,
             onGenerateNotesFromTranscripts: { generateNotesFromTranscripts() },
+            showsRegenerateMeetingNotes: appState.settings.meetingContextEnabled,
             onRegenerateMeetingNotes: { generateNotesFromTranscripts(regenerate: $0) },
             captionsPreparing: appState.liveTranscription.warmup.isPreparing,
         )

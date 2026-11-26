@@ -208,7 +208,7 @@ struct MCPTool: Sendable {
     var permitsReadOnlyApproval: Bool {
         let readOnly = annotations?["readOnlyHint"]
         let destructive = annotations?["destructiveHint"]
-        return (readOnly == nil || readOnly == .bool(true)) && (destructive == nil || destructive == .bool(false))
+        return readOnly == .bool(true) && (destructive == nil || destructive == .bool(false))
             && ContextSchema.catalogSchema(schema) != nil
     }
 

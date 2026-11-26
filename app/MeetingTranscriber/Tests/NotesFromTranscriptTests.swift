@@ -78,6 +78,20 @@ final class NotesFromTranscriptTests: XCTestCase {
         )
     }
 
+    func testOrdinaryNotesGenerationKeepsUpstreamQueueDeduplication() throws {
+        let queue = makeQueue()
+        let url = try transcript("standup")
+        var recording = PipelineJob(meetingTitle: "Standup", appName: "Capture", mixPath: nil, appPath: nil, micPath: nil, micDelay: 0)
+        recording.transcriptPath = url
+        queue.insertJobForTesting(recording)
+
+        let regeneration = queue.enqueueNotes(fromTranscripts: [url], regenerate: .configuredContext)
+        XCTAssertEqual(regeneration.alreadyQueued, [url])
+        let ordinary = queue.enqueueNotes(fromTranscripts: [url])
+        XCTAssertTrue(ordinary.alreadyQueued.isEmpty)
+        XCTAssertEqual(ordinary.queued.count, 1)
+    }
+
     func testNotesWrittenWhileTheJobWaitedAreNotOverwritten() async throws {
         let queue = makeQueue()
         let url = try transcript("20261030_0900_standup")
@@ -329,7 +343,7 @@ final class NotesFromTranscriptTests: XCTestCase {
     #if !APPSTORE
         func testTheMenuItemAsksForTranscripts() throws {
             var asked = false
-            let menu = MenuBarView(
+            var menu = MenuBarView(
                 status: nil, isWatching: false, pipelineQueue: makeQueue(),
                 onStartStop: {}, onRecordApp: {}, onRecordMicrophone: {}, noMic: false,
                 manualRecordingPendingOrActive: false, onStopManualRecording: nil,
@@ -339,6 +353,9 @@ final class NotesFromTranscriptTests: XCTestCase {
             )
             try menu.inspect().find(viewWithAccessibilityIdentifier: A11yID.generateNotesFromTranscriptButton).button().tap()
             XCTAssertTrue(asked)
+            XCTAssertThrowsError(try menu.inspect().find(viewWithAccessibilityIdentifier: A11yID.regenerateMeetingNotesButton))
+            menu.showsRegenerateMeetingNotes = true
+            XCTAssertNoThrow(try menu.inspect().find(viewWithAccessibilityIdentifier: A11yID.regenerateMeetingNotesButton))
         }
     #endif
 

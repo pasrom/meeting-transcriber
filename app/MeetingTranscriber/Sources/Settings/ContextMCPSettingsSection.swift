@@ -215,7 +215,8 @@ private struct ContextMCPSourceEditor: View {
                     if !tool.description.isEmpty { Text(String(tool.description.prefix(512))).font(.caption) }
                     if let annotations = tool.annotationSummary { Text(annotations).font(.caption).foregroundStyle(.secondary) }
                     if !tool.permitsReadOnlyApproval {
-                        Text("Tool reports write access or uses an unsupported schema.").font(.caption).foregroundStyle(.secondary)
+                        Text("Approval requires an explicit read-only hint, a nondestructive tool, and a supported schema.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
