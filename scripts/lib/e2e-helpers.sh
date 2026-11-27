@@ -1027,6 +1027,7 @@ _e2e_launch_setting() {
         autoWatch) echo "bool .settings.detection.autoWatch" ;;
         recordOnly) echo "bool .settings.recording.recordOnly" ;;
         liveTranscriptionEnabled) echo "bool .settings.recording.liveTranscriptionEnabled" ;;
+        liveTranscriptFileEnabled) echo "bool .settings.recording.liveTranscriptFileEnabled" ;;
         transcriptionEngine) echo "string .settings.transcription.engine" ;;
         unloadModelsWhenIdle) echo "bool .settings.transcription.unloadModelsWhenIdle" ;;
         *) return 1 ;;
@@ -1432,6 +1433,32 @@ record_only_violation() {
         printf '%s pipeline job(s) waiting or running' "$in_flight"
         return 0
     fi
+}
+
+# live_transcript_violation <file>: why a finished live transcript file (one
+# JSON Lines file per recording, docs/live-transcript.md) breaks its format, or
+# nothing at all when it holds. A finished file starts with `start`, ends with
+# `end`, carries at least one `final` with text, and every line is a JSON object
+# with `v` 1. Each line is parsed on its own (`jq -R`), so one broken line names
+# its number instead of failing the whole read. A file with no text at all
+# gives exactly LIVE_TRANSCRIPT_NO_TEXT, so a caller that reads several files
+# (a recording split into two calls) can accept one without finals.
+LIVE_TRANSCRIPT_NO_TEXT="no final event carries text"
+live_transcript_violation() {
+    local file="$1" verdict
+    [ -s "$file" ] || { printf 'the live transcript %s is missing or empty' "$file"; return 0; }
+    verdict="$(jq -R -s -r --arg no_text "$LIVE_TRANSCRIPT_NO_TEXT" '
+        [split("\n") | to_entries[] | select(.value != "")
+         | {n: (.key + 1), e: (.value | try fromjson catch null)}] as $lines
+        | ([$lines[] | select((.e | type) != "object" or .e.v != 1)] | first) as $bad
+        | if $bad != null and ($bad.e | type) != "object" then "line \($bad.n) is not a JSON object"
+          elif $bad != null then "line \($bad.n) has v \($bad.e.v | tojson), not 1"
+          elif $lines[0].e.type != "start" then "the first line is a \($lines[0].e.type | tojson) event, not start"
+          elif $lines[-1].e.type != "end" then "the last line is a \($lines[-1].e.type | tojson) event, not end: the recording was never ended"
+          elif ([$lines[] | select(.e.type == "final" and ((.e.text // "") | length) > 0)] | length) == 0
+            then $no_text
+          else empty end' "$file" 2>/dev/null)" || verdict="jq could not read $file"
+    printf '%s' "$verdict"
 }
 
 # echo_suppressed_violation <job-json> <min>: why the job left fewer than <min>
@@ -2393,7 +2420,8 @@ e2e_redact_state() {
             settings: (.settings as $s | if $s == null then null else {
                 detection: pick($s.detection; ["watchTeams", "watchZoom", "watchWebex", "autoWatch", "pollIntervalSeconds"]),
                 recording: pick($s.recording; ["endGraceSeconds", "noMic", "recordOnly", "perChannelIndicatorEnabled",
-                    "liveTranscriptionEnabled", "liveCaptionsOverlayEnabled", "liveCaptionsSize", "asymmetricSilenceWarningSeconds"]),
+                    "liveTranscriptionEnabled", "liveCaptionsOverlayEnabled", "liveCaptionsSize", "liveTranscriptFileEnabled",
+                    "asymmetricSilenceWarningSeconds"]),
                 transcription: pick($s.transcription; ["engine", "whisperKitModel", "whisperLanguage", "parakeetLanguage",
                     "customVocabularyEnabled"]),
                 diarization: pick($s.diarization; ["diarize", "mode", "numSpeakers", "vadEnabled", "vadThreshold",

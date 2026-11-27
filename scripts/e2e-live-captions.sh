@@ -8,6 +8,9 @@
 #   AudioCaptureSession → DualSourceRecorder → app/mic live sinks →
 #   LiveTranscriptionController → StreamingTranscriber → engine →
 #   LiveCaptionsState → RPC snapshot.
+# With the live transcript file on, it then checks the file the same
+# recording wrote (docs/live-transcript.md): `start`, a `final` with text and,
+# once the quit has ended the recording, `end`.
 #
 # Runs on the same self-hosted Mac runner as e2e-app.sh and reuses the
 # same one-time TCC setup (scripts/setup-self-hosted-runner.sh).
@@ -61,6 +64,7 @@ RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 # shellcheck disable=SC2034 # read by the RPC helpers in lib/e2e-helpers.sh
 RPC_BASE="http://127.0.0.1:9876"
 REC_DIR="$HOME/Library/Application Support/MeetingTranscriber/recordings"
+LIVE_TRANSCRIPTS_DIR="$HOME/Library/Application Support/MeetingTranscriber/live-transcripts"
 
 [ -n "$SIMULATOR_FIXTURE" ] || SIMULATOR_FIXTURE="$DEFAULT_FIXTURE"
 
@@ -74,6 +78,10 @@ RPC_READY_TIMEOUT_S=30
 # emits a finalised utterance ~3-6 s after the first speech segment ends;
 # 90 s is generous so a model load on a cold runner doesn't blow the budget.
 CAPTION_DEADLINE_S=90
+# From the quit's return to the transcript's `end`. The quit waits for the
+# recording's mix and the `end` behind it, so `end` is normally there already;
+# the wait only covers a file system that has not shown the last write yet.
+TRANSCRIPT_END_DEADLINE_S=20
 
 # --- helpers --------------------------------------------------------------
 
@@ -122,6 +130,9 @@ on_exit() {
         # staging dir, where the next lane's launch would recover it as a job
         # (the rationale + the CI guard live in sweep_run_artifacts).
         sweep_run_artifacts "$REC_DIR" "${RUN_START_MARKER:-}"
+        # The run's live transcript too, so a later lane or rerun that looks for
+        # the newest file does not find this one.
+        sweep_run_artifacts "$LIVE_TRANSCRIPTS_DIR" "${RUN_START_MARKER:-}"
     fi
     rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
 }
@@ -192,9 +203,9 @@ RUN_START_MARKER="$(mktemp "${TMPDIR:-/tmp}/e2e-live-captions-start.XXXXXX")"
 # the one env var brings up the RPC server the lane reads, nothing else.
 log "Launching $DEV_BUNDLE_DEPLOY (waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz)"
 launch_dev_app "$DEV_BUNDLE_DEPLOY" --env MEETINGTRANSCRIBER_DEBUG_RPC=1 -- \
-    liveTranscriptionEnabled=true transcriptionEngine=parakeet autoWatch=true \
+    liveTranscriptionEnabled=true liveTranscriptFileEnabled=true transcriptionEngine=parakeet autoWatch=true \
     || fail "$E2E_LAUNCH_ERR"
-log "RPC up; the app reports the launch settings (live transcription on, Parakeet, auto-watch)"
+log "RPC up; the app reports the launch settings (live transcription and its file on, Parakeet, auto-watch)"
 
 # --- trigger meeting + poll captions --------------------------------------
 
@@ -245,6 +256,64 @@ log "PASS — live transcription chain produced finalised captions through the p
 # meeting; the trap then sweeps what the recording left.
 kill "$SIM_PID" 2>/dev/null || true
 SIM_PID=""
-if [ "$APP_AFTER" = quit ]; then
-    quit_running_app
+if [ "$APP_AFTER" != quit ]; then
+    log "--keep-app: the recording goes on, so its live transcript has no end yet and is not checked"
+    exit 0
 fi
+quit_running_app
+
+# --- live transcript file -------------------------------------------------
+
+# The files this run wrote: the marker predates the launch, so an earlier run's
+# file is never taken for one of them. Newest first by modification time, not by
+# name: a second file in the same second is `<stamp>-2_live.jsonl`, which sorts
+# before `<stamp>_live.jsonl`.
+run_transcripts() {
+    find "$LIVE_TRANSCRIPTS_DIR" -name '*_live.jsonl' -newer "$RUN_START_MARKER" -exec ls -t {} + 2>/dev/null
+}
+_newest_transcript_ended() {
+    local newest
+    newest="$(run_transcripts | head -n 1)"
+    [ -n "$newest" ] && tail -n 1 "$newest" | jq -e '.type == "end"' >/dev/null 2>&1
+}
+# The whole file when it is short, its head and tail otherwise, so the line a
+# check is about (most often the last) is in the log: on CI the trap deletes the
+# file afterwards.
+print_transcript() {
+    log "Live transcript $1:"
+    if [ "$(wc -l <"$1")" -le 60 ]; then
+        sed 's/^/    /' "$1"
+    else
+        head -n 30 "$1" | sed 's/^/    /'
+        echo "    ..."
+        tail -n 30 "$1" | sed 's/^/    /'
+    fi
+}
+log "Checking the live transcript file (waiting up to ${TRANSCRIPT_END_DEADLINE_S}s for its end)"
+poll_until "$TRANSCRIPT_END_DEADLINE_S" 1 _newest_transcript_ended || true
+transcripts=()
+while IFS= read -r path; do transcripts+=("$path"); done < <(run_transcripts)
+[ "${#transcripts[@]}" -gt 0 ] \
+    || fail "no *_live.jsonl newer than the launch in $LIVE_TRANSCRIPTS_DIR, although the app reported liveTranscriptFileEnabled=true and produced finals"
+# A recording the watch loop split into two calls leaves two files. Each must be
+# well formed; the finals can sit in either.
+with_text=0
+for path in "${transcripts[@]}"; do
+    violation="$(live_transcript_violation "$path")"
+    case "$violation" in
+        "") with_text=$(( with_text + 1 )) ;;
+        "$LIVE_TRANSCRIPT_NO_TEXT") ;;
+        *)
+            print_transcript "$path"
+            case "$violation" in
+                *"not end"*) violation+=". If the dev app had to be ended by signal (a 'dev app did not quit' warning above), its quit hold never ran, so nothing could write the end" ;;
+            esac
+            fail "live transcript file $(basename "$path"): $violation"
+            ;;
+    esac
+done
+if [ "$with_text" -eq 0 ]; then
+    for path in "${transcripts[@]}"; do print_transcript "$path"; done
+    fail "none of the run's ${#transcripts[@]} live transcript file(s) carries a final with text, although /state showed finals"
+fi
+log "PASS: the run's live transcript (${#transcripts[@]} file(s)) has start, a final with text and end, all v 1 JSON lines"

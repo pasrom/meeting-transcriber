@@ -78,7 +78,8 @@ cat >"$TMP/state.json" <<'JSON'
     "detection": {"watchTeams": true, "watchZoom": true, "watchWebex": true, "autoWatch": true, "pollIntervalSeconds": 3},
     "recording": {"endGraceSeconds": 15, "noMic": false, "recordOnly": false, "micDeviceUID": "AirPods-UID",
                   "micName": "Speaker A's AirPods", "perChannelIndicatorEnabled": true, "liveTranscriptionEnabled": false,
-                  "liveCaptionsOverlayEnabled": true, "liveCaptionsSize": "medium", "asymmetricSilenceWarningSeconds": 90},
+                  "liveCaptionsOverlayEnabled": true, "liveCaptionsSize": "medium", "liveTranscriptFileEnabled": true,
+                  "asymmetricSilenceWarningSeconds": 90},
     "transcription": {"engine": "parakeet", "whisperKitModel": "openai_whisper-small", "whisperLanguage": "de",
                       "parakeetLanguage": "", "customVocabularyEnabled": true, "customVocabularyPath": "/Users/someone/vocab.txt"},
     "diarization": {"diarize": true, "mode": "offline", "numSpeakers": 2, "vadEnabled": false, "vadThreshold": 0.5,
@@ -118,6 +119,7 @@ jq -e '.pipeline.activeJobCount == 1 and .pipeline.pendingNamingJobCount == 1
     and .notifications == [{title: "Transcript Saved", postedAt: "2026-11-10T10:00:00Z", posted: true}]
     and .settings.detection.autoWatch == true
     and .settings.recording.recordOnly == false and (.settings.recording | has("micName") | not)
+    and .settings.recording.liveTranscriptFileEnabled == true
     and .settings.transcription.engine == "parakeet" and (.settings.transcription | has("customVocabularyPath") | not)
     and .settings.diarization.numSpeakers == 2
     and .settings.protocolGeneration == {provider: "openAICompatible", language: "German", openAITemperature: 0.5, openAITopP: null}
