@@ -61,4 +61,59 @@ final class WavVerdictCommandTests: XCTestCase {
             try WavVerdictCommand.loadSamples(path: "/tmp/definitely-missing-\(UUID().uuidString).wav"),
         )
     }
+
+    /// A read that returns fewer frames than asked for is continued until the
+    /// last frame.
+    func testAShortFirstReadIsContinuedToTheLastFrame() throws {
+        var sizes = [4, 3, 100]
+        var requests: [Int] = []
+
+        let read = try WavVerdictCommand.readAllFrames(total: 10) { maxFrames in
+            requests.append(maxFrames)
+            return min(sizes.isEmpty ? 0 : sizes.removeFirst(), maxFrames)
+        }
+
+        XCTAssertEqual(read, 10)
+        XCTAssertEqual(requests, [10, 6, 3])
+    }
+
+    func testAReadOfZeroFramesEndsTheLoop() throws {
+        var sizes = [4, 0, 6]
+        var requests = 0
+
+        let read = try WavVerdictCommand.readAllFrames(total: 10) { maxFrames in
+            requests += 1
+            return min(sizes.removeFirst(), maxFrames)
+        }
+
+        XCTAssertEqual(read, 4)
+        XCTAssertEqual(requests, 2)
+    }
+
+    /// A read at the end of a file throws; after frames were read that is the
+    /// end of a file shorter than its length, not a failure.
+    func testAnEndOfFileErrorAfterSomeFramesEndsTheLoop() throws {
+        var reads = 0
+
+        let read = try WavVerdictCommand.readAllFrames(total: 10) { maxFrames in
+            reads += 1
+            if reads == 1 { return min(4, maxFrames) }
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(eofErr))
+        }
+
+        XCTAssertEqual(read, 4)
+    }
+
+    /// A mono 32-bit float file longer than 65,536 frames: one read sized to the
+    /// whole file returns short for it (measured on macOS 27.2.1).
+    func testLoadSamplesReadsEveryFrameOfALongFile() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("wav-verdict-long-\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeToneWav(url: url, freq: 440, seconds: 10, sampleRate: 16000, amplitude: 0.3)
+
+        let (samples, _) = try WavVerdictCommand.loadSamples(path: url.path)
+
+        XCTAssertEqual(samples.count, 160_000)
+    }
 }
