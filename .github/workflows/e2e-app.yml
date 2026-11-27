@@ -378,6 +378,9 @@ jobs:
       # covers everything from `LiveTranscriptionController` inward;
       # this lane covers the parts outside the xctest harness (CATap
       # tap, AudioCaptureSession, recorder live-sink wiring).
+      # The lane also turns the live transcript file on and checks the file
+      # its recording wrote (see the script's header); no other lane turns
+      # the file on.
       # `--no-build` reuses the bundle the build step deployed.
       - id: live-captions
         name: Run live-transcription overlay E2E
