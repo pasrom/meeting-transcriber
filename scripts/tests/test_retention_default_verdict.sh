@@ -58,6 +58,17 @@ for on in 1 2 -1 YES yes true TRUE; do
     expect_output "on_as_${on}_skips" skip "$(retention_default_verdict "$on" "$MIX" 0)"
 done
 
+# Converted to FLAC during the grace period (the setting on): still kept. Only
+# the FLAC there from the start counts as kept too. Neither one is deleted.
+touch "$MIX"
+( sleep 0.3; touch "${MIX%.wav}.flac"; rm -f "$MIX" ) &
+expect_output converted_to_flac_during_grace_is_kept kept "$(retention_default_verdict "" "$MIX" 1)"
+wait
+expect_output flac_only_is_kept kept "$(retention_default_verdict "" "$MIX" 0)"
+( sleep 0.3; rm -f "${MIX%.wav}.flac" ) &
+expect_output flac_deleted_after_done_is_caught deleted "$(retention_default_verdict "" "$MIX" 1)"
+wait
+
 # Values the app reads as off or as unset do not skip.
 for off in 0 no NO false maybe 1x -; do
     expect_output "off_as_${off}_does_not_skip" missing "$(retention_default_verdict "$off" "$MIX" 0)"

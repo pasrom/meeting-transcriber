@@ -60,7 +60,21 @@ another PR would run them unlabelled.
   developer's own listed recordings, and the check only catches a delete that
   ignores the period too. A host with retention switched on skips the check
   and logs that it did. Not covered: the `--mic-stall` lane, and a pass that
-  starts more than 5 s after `done`.
+  starts more than 5 s after `done`. The check takes the `.flac` twin of the
+  mix as the same recording (`kept_file_exists`), and the lanes find kept
+  tracks with `kept_track`, WAV first, since with "Store recordings as FLAC"
+  on the app converts them right after `done`.
+- The `--flac` lane is the default meeting with that setting on for its
+  launch only (`-compressKeptRecordings YES`, a launch argument, nothing
+  stored). It waits on `/state.recordingStorage` for the converter to go idle
+  with nothing owed, fails when the launch probe found no FLAC, and asserts
+  all three tracks are native FLAC (`fLaC`; FLAC inside a CAF decodes through
+  the same Apple API, so only the marker tells) with no WAV of the stem left,
+  no hidden partial copy, `retained_recordings.json` listing exactly the FLAC
+  tracks and the sidecar, `mt-cli wav-verdict` passing on the FLAC app track,
+  and the FLAC pair imported again through `POST /v1/jobs` as one job that
+  finishes. It leaves FLAC recordings in the runner's output folder like any
+  meeting lane leaves WAVs; the lanes after it run with the setting off.
 - The `--naming-escape` lane is the only automated cover for "the user pressed
   Escape on the naming dialog" (issue #577, where Escape used to commit the
   auto-matched names). It parks a job at naming, fronts the app, posts a real
