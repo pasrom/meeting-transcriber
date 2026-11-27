@@ -188,6 +188,12 @@ final class AppSettings { // swiftlint:disable:this type_body_length
     /// processes don't race on the shared on-disk plist.
     @ObservationIgnored private let defaults: UserDefaults
 
+    /// Hub repository/variant pairs whose launch download still needs its first tokenizer load.
+    var pendingWhisperTokenizers: Set<String> {
+        get { Set(defaults.stringArray(forKey: "pendingWhisperTokenizers") ?? []) }
+        set { defaults.set(Array(newValue), forKey: "pendingWhisperTokenizers") }
+    }
+
     /// Keychain account backing `openAIAPIKey`. Production callers pass
     /// nothing → the real account. Tests inject a unique account so they never
     /// touch the key the user configured in the app: the Keychain is scoped
