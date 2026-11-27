@@ -1,6 +1,6 @@
 # Meeting Transcriber
 
-> **The local-first meeting transcriber for macOS.** Records Teams, Zoom, and Webex calls, transcribes them on-device with Whisper / Parakeet, separates speakers, and turns the result into Markdown meeting notes using your own Claude CLI or any local LLM. **No cloud. No subscription. No audio ever leaves your Mac.**
+> **The local-first meeting transcriber for macOS.** Records Teams, Zoom, and Webex calls, transcribes them on-device with Whisper / Parakeet, separates speakers, and turns the result into Markdown meeting notes using your own Claude CLI or any local LLM. **No cloud by default. No subscription. Audio leaves your Mac only if you turn on cloud transcription.**
 
 <p align="center">
   <img src="docs/hero.gif" alt="Meeting Transcriber turning a Teams call into Markdown meeting notes on-device" width="860">
@@ -19,7 +19,7 @@
 
 Cloud meeting recorders (Otter, Fireflies, Granola, tl;dv) work great, until you remember that every word from every meeting goes to a third-party server. For a lot of teams (legal, healthcare, M&A, anything under NDA, or just folks who'd rather not) that's a non-starter.
 
-Meeting Transcriber runs the entire pipeline (recording, transcription, speaker diarization, summarization) on your Mac. No account, no upload, no monthly bill.
+By default Meeting Transcriber records, transcribes and separates speakers on your Mac. No account, no audio upload, no monthly bill. The summary goes to the provider you set: in the Homebrew build that is your Claude Code CLI, which sends the transcript to Anthropic when signed in, or point it at a local Ollama or LM Studio model to keep it offline. Transcription and the summary each have their own opt-in provider setting, so you choose what, if anything, goes to a server.
 
 |                                | Cloud transcribers | **Meeting Transcriber** |
 |--------------------------------|:------------------:|:-----------------------:|
