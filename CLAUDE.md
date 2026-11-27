@@ -155,7 +155,7 @@ Read the matching doc before changing or debugging that area. Each holds the are
 - `docs/architecture/gui-testing.md`: any UI change or GUI test, `A11yID`, `/ui/*` drivers, snapshots, Escape and typing injection
 - `docs/architecture/diagnostics.md`: reading or adding capture log lines, triaging a silent-track report
 - `docs/architecture-macos.md`: overview of source files, state machine, data flow and settings UI
-- `docs/automation-api.md`: the `/v1` API reference; `docs/stream-deck.md`: Stream Deck and hotkey control
+- `docs/automation-api.md`: the `/v1` API reference; `docs/stream-deck.md`: Stream Deck and hotkey control; `docs/live-transcript.md`: the live transcript file format, a versioned contract for readers
 
 ## Maintaining This File
 
