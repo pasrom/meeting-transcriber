@@ -16,8 +16,9 @@ enum KeychainHelper {
     }
 
     /// Store or update a value in the Keychain.
-    static func save(key: String, value: String) {
-        guard let data = value.data(using: .utf8) else { return }
+    @discardableResult
+    static func save(key: String, value: String) -> Bool {
+        let data = Data(value.utf8)
         var query = baseQuery(for: key)
         query[kSecValueData as String] = data
 
@@ -28,26 +29,32 @@ enum KeychainHelper {
             if updateStatus != errSecSuccess {
                 logger.error("Failed to update \(key): \(updateStatus)")
             }
-        } else if addStatus != errSecSuccess {
+            return updateStatus == errSecSuccess
+        }
+        if addStatus != errSecSuccess {
             logger.error("Failed to save \(key): \(addStatus)")
         }
+        return addStatus == errSecSuccess
     }
 
-    /// Read a value from the Keychain. Returns `nil` if not found.
-    static func read(key: String) -> String? {
+    /// Read a value from the Keychain. Only a confirmed missing item uses `ifMissing`.
+    static func read(key: String, ifMissing: String? = nil) -> String? {
         var query = baseQuery(for: key)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return ifMissing }
         guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     /// Delete a value from the Keychain.
-    static func delete(key: String) {
-        SecItemDelete(baseQuery(for: key) as CFDictionary)
+    @discardableResult
+    static func delete(key: String) -> Bool {
+        let status = SecItemDelete(baseQuery(for: key) as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
     /// Check whether a value exists in the Keychain.

@@ -42,6 +42,7 @@ final class EngineController {
 
     private struct LifetimeState {
         let unloadWhenIdle: Bool
+        let cloud: Bool
         let engine: TranscriptionEngineSetting
         let busy: Bool
         let captionsUseEngine: Bool
@@ -54,7 +55,8 @@ final class EngineController {
     private var lifetimeState: LifetimeState {
         let queue = queueProvider()
         return LifetimeState(
-            unloadWhenIdle: settings.unloadModelsWhenIdle,
+            unloadWhenIdle: unloadsWhenIdle,
+            cloud: settings.cloudTranscriptionEnabled,
             engine: settings.transcriptionEngine,
             busy: isRecording() || Self.hasWork(queue),
             captionsUseEngine: captionsUseEngine(),
@@ -69,6 +71,11 @@ final class EngineController {
     /// it on the CI runners.
     private static func lastDrainID(of queue: PipelineQueue?) -> UUID? {
         queue?.lastDrainID
+    }
+
+    /// Cloud transcription counts as idle unloading: the local model only costs memory then.
+    private var unloadsWhenIdle: Bool {
+        settings.unloadModelsWhenIdle || settings.cloudTranscriptionEnabled
     }
 
     private static func hasWork(_ queue: PipelineQueue?) -> Bool {
@@ -144,13 +151,17 @@ final class EngineController {
     /// first) so the first transcription doesn't pay the cold-load cost. Called
     /// from the menu-bar `.task` at launch. With idle unloading on, it only
     /// downloads a model that is not on disk yet, so the first job need not.
+    /// With cloud transcription on, it does neither.
     func preloadActiveModel(whenIdle: Bool = false) async {
+        guard !settings.cloudTranscriptionEnabled else { return }
         guard !settings.unloadModelsWhenIdle else {
             guard !whenIdle else { return }
             syncEngineSettings()
             await warmupQueue.run("ASR launch download") { [self] in
+                // Re-read inside the slot: cloud may have gone on while this waited.
+                guard !settings.cloudTranscriptionEnabled else { return }
                 switch settings.transcriptionEngine {
-                case .whisperKit: await fetchTokenizer(afterDownload: whisperKit.downloadModelIfMissing())
+                case .whisperKit: await prepareWhisperKitDownload()
                 case .parakeet: await parakeetEngine.downloadModelIfMissing()
                 }
             }
@@ -165,7 +176,8 @@ final class EngineController {
         // loads don't compile at once. `run` awaits the load, so the caller still
         // returns only after the model is loaded.
         await warmupQueue.run(whenIdle ? "ASR preload" : "ASR launch preload") { [self] in
-            guard !settings.unloadModelsWhenIdle else { return }
+            // Re-read inside the slot: cloud may have gone on while this waited.
+            guard !unloadsWhenIdle else { return }
             guard !whenIdle || !lifetimeState.busy else {
                 pendingIdlePreferenceChange = true
                 return
@@ -178,9 +190,21 @@ final class EngineController {
 
     /// WhisperKit fetches its tokenizer only during a load, so a fresh download
     /// is loaded once while the machine is online, then released if still idle.
-    private func fetchTokenizer(afterDownload downloaded: Bool) async {
-        guard downloaded else { return }
+    /// A load skipped because cloud went on stays pending for the next Local launch.
+    private func prepareWhisperKitDownload() async {
+        let model = settings.whisperKitModelSelection
+        guard case let .hub(repoID) = model.origin else { return }
+        let id = "\(repoID)/\(model.variant)"
+        if !settings.pendingWhisperTokenizers.contains(id) {
+            guard await whisperKit.downloadModelIfMissing() else { return }
+            settings.pendingWhisperTokenizers.insert(id)
+        }
+        guard !settings.cloudTranscriptionEnabled, settings.transcriptionEngine == .whisperKit,
+              settings.whisperKitModelSelection == model else { return }
         if whisperKit.modelState != .loaded { await whisperKit.loadModel() }
+        if whisperKit.modelState == .loaded, whisperKit.modelVariant == model.variant, whisperKit.modelOrigin == model.origin {
+            settings.pendingWhisperTokenizers.remove(id)
+        }
         let state = lifetimeState
         if state.unloadWhenIdle, state.engine == .whisperKit, !state.busy, !state.captionsUseEngine {
             whisperKit.releaseModel()
@@ -236,7 +260,10 @@ final class EngineController {
         let previous = previousLifetimeState
         previousLifetimeState = current
         guard let previous else { return }
+        // Entering cloud releases even when idle unloading was already on, so
+        // `unloadWhenIdle` itself does not change.
         pendingIdlePreferenceChange = pendingIdlePreferenceChange || previous.unloadWhenIdle != current.unloadWhenIdle
+            || (!previous.cloud && current.cloud)
         pendingInactiveRelease = pendingInactiveRelease || previous.engine != current.engine
         let priorQueueDrained = previous.queue?.lastDrainID != nil && previous.queue?.lastDrainID != previous.drainID
         pendingDrain = pendingDrain || priorQueueDrained || (current.drainID != nil && previous.drainID != current.drainID)
@@ -244,7 +271,7 @@ final class EngineController {
 
         // A queue and a recording's captions can still use the previous engine.
         // Retire it only after their work (including the caption tail) finishes.
-        // Off keeps it: the queue runs on its engine until it is rebuilt.
+        // Off keeps it loaded, as it keeps every model.
         if current.unloadWhenIdle,
            pendingInactiveRelease || previous.busy || pendingDrain || inactiveTranscriptionEngineState != .unloaded {
             switch current.engine {

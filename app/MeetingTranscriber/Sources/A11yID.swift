@@ -51,6 +51,15 @@ enum A11yID {
         "jobRetryButton.\(index)"
     }
 
+    /// The two actions that replace Retry on a job whose cloud transcription failed.
+    static func jobRetryInCloudButton(_ index: Int) -> String {
+        "jobRetryInCloudButton.\(index)"
+    }
+
+    static func jobRunLocallyButton(_ index: Int) -> String {
+        "jobRunLocallyButton.\(index)"
+    }
+
     static func jobNotionRetryButton(_ index: Int) -> String {
         "jobNotionRetryButton.\(index)"
     }
@@ -135,6 +144,7 @@ enum A11yID {
     static let liveCaptionsSizePicker = "liveCaptionsSizePicker"
     static let liveCaptionsWarmupStatus = "liveCaptionsWarmupStatus"
     static let liveCaptionsWarmupElapsed = "liveCaptionsWarmupElapsed"
+    static let liveCaptionsCloudOffNote = "liveCaptionsCloudOffNote"
     static let channelIndicatorSection = "channelIndicatorSection"
     static let silentTrackWatchdogToggle = "silentTrackWatchdogToggle"
     static let experimentalTuningDisclosure = "experimentalTuningDisclosure"
@@ -153,6 +163,20 @@ enum A11yID {
     static let terminologyRulesEditor = "terminologyRulesEditor"
     static let terminologyRulesFilePathField = "terminologyRulesFilePathField"
     static let terminologyRulesFilePreview = "terminologyRulesFilePreview"
+    static let transcriptionMethodPicker = "transcriptionMethodPicker"
+    static let cloudTranscriptionLanguagePicker = "cloudTranscriptionLanguagePicker"
+    static let cloudTranscriptionLocalFallbackNote = "cloudTranscriptionLocalFallbackNote"
+    static let cloudTranscriptionHostNote = "cloudTranscriptionHostNote"
+    static let cloudTranscriptionBaseURLField = "cloudTranscriptionBaseURLField"
+    static let cloudTranscriptionModelField = "cloudTranscriptionModelField"
+    static let cloudTranscriptionModelPicker = "cloudTranscriptionModelPicker"
+    static let cloudTranscriptionFetchModelsButton = "cloudTranscriptionFetchModelsButton"
+    static let cloudTranscriptionModelsFailure = "cloudTranscriptionModelsFailure"
+    static let cloudTranscriptionAPIKeyField = "cloudTranscriptionAPIKeyField"
+    static let cloudTranscriptionTestButton = "cloudTranscriptionTestButton"
+    static let cloudTranscriptionTestStatus = "cloudTranscriptionTestStatus"
+    static let cloudTranscriptionSaveButton = "cloudTranscriptionSaveButton"
+    static let cloudTranscriptionUnsavedNote = "cloudTranscriptionUnsavedNote"
 
     /// Settings sidebar row for one tab (`settings-tab-<rawValue>`). The detail
     /// pane renders only the selected tab, so a control in another tab is absent

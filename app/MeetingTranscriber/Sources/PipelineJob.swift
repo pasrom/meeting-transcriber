@@ -164,6 +164,11 @@ struct PipelineJob: Identifiable, Codable {
         protocolPath != nil || hasCompletedNotionExport
     }
 
+    /// Whether this failed job failed in the cloud: see `cloudTranscriptionFailed`.
+    var isCloudFailure: Bool {
+        state == .error && cloudTranscriptionFailed == true
+    }
+
     /// Whether a failed export has a Markdown backup recorded to retry from.
     /// State only, never the file system, so a view body can ask it; a file
     /// removed behind the app's back is found, and reported, by the retry.
@@ -261,6 +266,15 @@ struct PipelineJob: Identifiable, Codable {
     // See `includeFullTranscriptInProtocol`.
     // swiftlint:disable:next discouraged_optional_boolean
     var useAITitleForFilenames: Bool?
+    /// Captured when the job enters the queue, like the output options above.
+    /// Nil (a snapshot from before this existed) means `.local`.
+    var transcriptionTarget: TranscriptionTarget?
+    // Set when the run failed in the transcription stage on a cloud engine
+    // error while the target was `.cloud`, so the menu offers "Retry in
+    // Cloud" and "Run Locally" instead of the plain Retry, also after a
+    // relaunch. Optional so older snapshots decode; a retry clears it.
+    // swiftlint:disable:next discouraged_optional_boolean
+    var cloudTranscriptionFailed: Bool?
     /// Diarizer mode that produced the *current* `speakerNamingDataByJob`
     /// entry. Set by `PipelineQueue` after diarisation completes (in the
     /// initial pipeline run and after `lateDiarization`). Used by the
@@ -450,8 +464,15 @@ struct PipelineJob: Identifiable, Codable {
     /// the retry never saw that way. The paths stay: the audio is the input
     /// the retry needs, and the slug and transcript path name files the retry
     /// overwrites under the same basename.
-    mutating func prepareForRetry() {
+    ///
+    /// `target`, when given, replaces this job's transcription target, never
+    /// the setting: after a cloud failure, "Retry in Cloud" passes `.cloud`
+    /// and "Run Locally" `.local`. `PipelineQueue.retryJob` applies it only
+    /// once the retry goes ahead, so a refused retry changes nothing.
+    mutating func prepareForRetry(target: TranscriptionTarget? = nil) {
         error = nil
+        cloudTranscriptionFailed = nil
+        if let target { transcriptionTarget = target }
         warnings = []
         trackViability = nil
         echo = nil

@@ -225,6 +225,27 @@
             XCTAssertFalse(json.contains("openAIAPIKey"), "secret field name leaked")
         }
 
+        /// Cloud transcription settings are exposed; its API key is not. The
+        /// key goes to a per-test Keychain account, never the app's own.
+        func test_snapshot_cloudTranscriptionSettingsWithoutTheKey() throws {
+            let account = "RPCSettingsStateTests-cloudKey-\(getpid())-\(UUID().uuidString)"
+            defer { KeychainHelper.delete(key: account) }
+            let cloud = AppSettings(defaults: defaults, cloudTranscriptionAPIKeyAccount: account)
+            cloud.cloudTranscriptionEnabled = true
+            cloud.cloudTranscriptionBaseURL = "https://sentinel-cloud.example/v1"
+            cloud.cloudTranscriptionModel = "sentinel-cloud-model"
+            cloud.cloudTranscriptionLanguage = "id"
+            cloud.cloudTranscriptionAPIKey = "sk-sentinel-cloud-key"
+
+            let s = cloud.rpcSettingsSnapshot()
+            XCTAssertTrue(s.transcription.cloudTranscriptionEnabled)
+            XCTAssertEqual(s.transcription.cloudTranscriptionBaseURL, "https://sentinel-cloud.example/v1")
+            XCTAssertEqual(s.transcription.cloudTranscriptionModel, "sentinel-cloud-model")
+            XCTAssertEqual(s.transcription.cloudTranscriptionLanguage, "id")
+            let json = try XCTUnwrap(String(bytes: JSONEncoder().encode(s), encoding: .utf8))
+            XCTAssertFalse(json.contains("sk-sentinel-cloud-key"), "cloud API key leaked")
+        }
+
         /// Exact key allowlist: the settings wire shape may only ever contain
         /// these leaf fields. Any new field must be consciously added here (and
         /// consciously judged non-secret); a secret slipping into the projection
@@ -262,6 +283,9 @@
                 "transcription.whisperLanguage", "transcription.parakeetLanguage",
                 "transcription.customVocabularyEnabled", "transcription.customVocabularyPath",
                 "transcription.unloadModelsWhenIdle",
+                "transcription.cloudTranscriptionEnabled",
+                "transcription.cloudTranscriptionBaseURL", "transcription.cloudTranscriptionModel",
+                "transcription.cloudTranscriptionLanguage",
                 "diarization.diarize", "diarization.mode", "diarization.numSpeakers",
                 "diarization.vadEnabled", "diarization.vadThreshold",
                 "diarization.clusterThreshold", "diarization.warmStartFa",

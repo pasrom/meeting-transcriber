@@ -369,12 +369,21 @@ struct MenuBarView: View {
     }
 
     /// Runs a failed job again from its audio, instead of the user having to
-    /// find the staged recording and import it by hand.
+    /// find the staged recording and import it by hand. A cloud failure offers
+    /// the choice of where to run it instead; Run Locally changes only this
+    /// job's target, never the cloud setting.
     @ViewBuilder
     private func retryButton(_ job: PipelineJob, index: Int) -> some View {
         if pipelineQueue.canRetryJob(id: job.id) {
-            Button("Retry") { pipelineQueue.retryJob(id: job.id) }
-                .accessibilityIdentifier(A11yID.jobRetryButton(index))
+            if job.isCloudFailure {
+                Button("Retry in Cloud") { pipelineQueue.retryJob(id: job.id, target: .cloud) }
+                    .accessibilityIdentifier(A11yID.jobRetryInCloudButton(index))
+                Button("Run Locally") { pipelineQueue.retryJob(id: job.id, target: .local) }
+                    .accessibilityIdentifier(A11yID.jobRunLocallyButton(index))
+            } else {
+                Button("Retry") { pipelineQueue.retryJob(id: job.id) }
+                    .accessibilityIdentifier(A11yID.jobRetryButton(index))
+            }
         }
     }
 

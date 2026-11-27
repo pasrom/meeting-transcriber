@@ -19,7 +19,7 @@ final class CustomVocabularyTests: XCTestCase {
             return
         }
         defaults = suite
-        settings = AppSettings(defaults: defaults)
+        settings = AppSettings(defaults: defaults, cloudTranscriptionAPIKeyAccount: testSuiteName)
     }
 
     override func tearDown() {
@@ -76,6 +76,32 @@ final class CustomVocabularyTests: XCTestCase {
         defaults.set(true, forKey: "whisperKitVocabularyPromptEnabled")
 
         XCTAssertTrue(AppSettings(defaults: defaults).customVocabularyEnabled)
+    }
+
+    func testUpgradeWithCloudOnIgnoresTheOldWhisperKitFlag() {
+        defaults.removeObject(forKey: "customVocabularyEnabled")
+        defaults.set("whisperKit", forKey: "transcriptionEngine")
+        defaults.set(true, forKey: "cloudTranscriptionEnabled")
+        defaults.set(false, forKey: "whisperKitVocabularyPromptEnabled")
+        defaults.set("/tmp/vocab.txt", forKey: "customVocabularyPath")
+
+        XCTAssertTrue(AppSettings(defaults: defaults).customVocabularyEnabled)
+    }
+
+    func testCloudSendsNoVocabularyWhileTheSwitchIsOff() throws {
+        guard settings.cloudTranscriptionAPIKeyAccount == testSuiteName else {
+            XCTFail("Cloud vocabulary configuration needs an isolated Keychain account")
+            return
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("vocab-\(UUID().uuidString).txt")
+        try "Kubernetes\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        settings.setCustomVocabularyPath(file.path)
+
+        settings.customVocabularyEnabled = false
+        XCTAssertEqual(settings.cloudTranscriptionConfiguration.vocabularyTerms, [])
+        settings.customVocabularyEnabled = true
+        XCTAssertEqual(settings.cloudTranscriptionConfiguration.vocabularyTerms, ["Kubernetes"])
     }
 
     // MARK: - Persistence

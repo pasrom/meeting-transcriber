@@ -1,14 +1,14 @@
 /// Pure decision logic for whether live captions run, and which per-channel
 /// streaming backend they use. Shared single source of truth between
-/// `AppState.shouldShowLiveCaptions` (overlay-window visibility),
-/// `LiveTranscriptionCoordinator` (whether to build + arm the controller), and
+/// `LiveTranscriptionCoordinator` (whether to build + arm the controller and,
+/// through it, `AppState.shouldShowLiveCaptions` overlay visibility) and
 /// `LiveTranscriptionController` (which pipeline each channel gets) so all three
 /// agree. Pure + value-typed → unit-testable as a truth table without
 /// constructing the actors.
 ///
 /// **Master toggle (`liveEnabled`) still gates the pipeline** — off means no
-/// captions, regardless of the other inputs. `overlayEnabled` only gates the
-/// overlay window (`overlayVisible`); it is not a strategy input.
+/// captions, regardless of the other inputs. The overlay toggle only gates the
+/// overlay window (`AppState.shouldShowLiveCaptions`); it is not a strategy input.
 ///
 /// **The backend follows the active engine's EXPLICITLY configured language**
 /// (not auto-detect): trained non-English languages → Nemotron, English → Parakeet
@@ -17,6 +17,10 @@
 /// for engines without the re-transcribe hook. Auto-detect (nil language) and
 /// languages outside `LiveCaptionLanguages` use the engine-driven `.reTranscribe`
 /// fallback when supported, otherwise captions are off.
+///
+/// **Cloud transcription keeps captions off the local engine.** With it on,
+/// `.reTranscribe` becomes `.none`: that path loads the local model, which
+/// `EngineController` frees while cloud is on. The streaming backends stay.
 enum LiveCaptionsGate {
     /// Which per-channel pipeline strategy to build, or none.
     enum Strategy: Equatable {
@@ -41,50 +45,37 @@ enum LiveCaptionsGate {
     /// - Parameters:
     ///   - liveEnabled: master live-captions toggle.
     ///   - engineLanguage: the active engine's explicitly configured language
-    ///     (ISO 639-1, e.g. `de`/`en`), or `nil` for auto-detect.
+    ///     (ISO 639-1, e.g. `de`/`en`), or `nil` for auto-detect; the cloud
+    ///     language while cloud transcription is on (`liveCaptionsLanguageOrNil`).
     ///   - engineSupportsLive: whether the active engine implements the
     ///     in-memory `transcribeSamples` re-transcribe hook.
+    ///   - cloudTranscriptionEnabled: cloud transcription is on, so the local
+    ///     engine must not be used (no `.reTranscribe`).
     static func strategy(
         liveEnabled: Bool,
         engineLanguage: String?,
         engineSupportsLive: Bool,
+        cloudTranscriptionEnabled: Bool,
     ) -> Strategy {
         guard liveEnabled else { return .none }
-        guard let engineLanguage else { return engineSupportsLive ? .reTranscribe : .none }
-        guard let tag = LiveCaptionLanguages.canonicalTag(for: engineLanguage) else { return engineSupportsLive ? .reTranscribe : .none }
+        let fallback: Strategy = engineSupportsLive && !cloudTranscriptionEnabled ? .reTranscribe : .none
+        guard let engineLanguage else { return fallback }
+        guard let tag = LiveCaptionLanguages.canonicalTag(for: engineLanguage) else { return fallback }
         return tag.hasPrefix("en-") ? .englishStreaming : .nemotronStreaming
     }
 
-    /// Whether live captions are available at all (any non-`none` strategy).
-    /// Drives the coordinator's eligibility gate. Overlay-window visibility is
-    /// `overlayVisible`, which ANDs this with recording + the overlay toggle.
-    static func captionsAvailable(
-        liveEnabled: Bool,
-        engineLanguage: String?,
-        engineSupportsLive: Bool,
-    ) -> Bool {
-        strategy(
-            liveEnabled: liveEnabled,
-            engineLanguage: engineLanguage,
-            engineSupportsLive: engineSupportsLive,
-        ) != .none
-    }
-
-    /// Whether the click-through caption bar should be on screen. Calls
-    /// `captionsAvailable` (pipeline gate unchanged), then ANDs recording and
-    /// the overlay toggle. `overlayEnabled` is UI-only: it never feeds
-    /// `strategy` / coordinator arming.
-    static func overlayVisible(
-        liveEnabled: Bool,
-        engineLanguage: String?,
-        engineSupportsLive: Bool,
-        isRecording: Bool,
-        overlayEnabled: Bool,
-    ) -> Bool {
-        captionsAvailable(
-            liveEnabled: liveEnabled,
-            engineLanguage: engineLanguage,
-            engineSupportsLive: engineSupportsLive,
-        ) && isRecording && overlayEnabled
+    /// Whether cloud transcription is what turns captions off for this
+    /// language: they would run with cloud off and do not with it on. Drives
+    /// the Settings note under the live-transcription toggle.
+    static func offForCloud(engineLanguage: String?, engineSupportsLive: Bool) -> Bool {
+        let local = strategy(
+            liveEnabled: true, engineLanguage: engineLanguage,
+            engineSupportsLive: engineSupportsLive, cloudTranscriptionEnabled: false,
+        )
+        let cloud = strategy(
+            liveEnabled: true, engineLanguage: engineLanguage,
+            engineSupportsLive: engineSupportsLive, cloudTranscriptionEnabled: true,
+        )
+        return local != .none && cloud == .none
     }
 }

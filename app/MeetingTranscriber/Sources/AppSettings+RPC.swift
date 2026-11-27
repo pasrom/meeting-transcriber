@@ -63,6 +63,10 @@
                 customVocabularyEnabled: customVocabularyEnabled,
                 customVocabularyPath: customVocabularyPath,
                 unloadModelsWhenIdle: unloadModelsWhenIdle,
+                cloudTranscriptionEnabled: cloudTranscriptionEnabled,
+                cloudTranscriptionBaseURL: cloudTranscriptionBaseURL,
+                cloudTranscriptionModel: cloudTranscriptionModel,
+                cloudTranscriptionLanguage: cloudTranscriptionLanguage,
             )
         }
 

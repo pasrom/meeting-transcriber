@@ -22,7 +22,7 @@ final class LiveCaptionsGateTests: XCTestCase {
     func testLiveDisabledYieldsNoneRegardlessOfLanguage() {
         for lang in ["de", "en", "ru", "id", nil, "zh"] {
             XCTAssertEqual(
-                LiveCaptionsGate.strategy(liveEnabled: false, engineLanguage: lang, engineSupportsLive: true),
+                LiveCaptionsGate.strategy(liveEnabled: false, engineLanguage: lang, engineSupportsLive: true, cloudTranscriptionEnabled: false),
                 .none, "live disabled must be .none (lang=\(lang ?? "nil"))",
             )
         }
@@ -33,7 +33,7 @@ final class LiveCaptionsGateTests: XCTestCase {
         // route to Nemotron; FluidAudio picks the variant from the language code.
         for lang in ["de", "es", "fr", "it", "pt", "pt-PT", "nl", "ru", "zh", "ja", "no", "PT_br"] {
             XCTAssertEqual(
-                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: true),
+                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: true, cloudTranscriptionEnabled: false),
                 .nemotronStreaming, "\(lang) must route to Nemotron",
             )
         }
@@ -42,7 +42,7 @@ final class LiveCaptionsGateTests: XCTestCase {
     func testEnglishLanguageYieldsEnglishStreaming() {
         for lang in ["en", "en-US", "en-GB", "EN_us"] {
             XCTAssertEqual(
-                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: false),
+                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: false, cloudTranscriptionEnabled: false),
                 .englishStreaming, "\(lang) uses the English-optimized EOU path",
             )
         }
@@ -51,11 +51,11 @@ final class LiveCaptionsGateTests: XCTestCase {
     func testUntrainedExplicitLanguageFallsBackOnlyWhenEngineSupportsLive() {
         for lang in ["id", "id-ID", "ms", "pt-AO"] {
             XCTAssertEqual(
-                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: true),
+                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: true, cloudTranscriptionEnabled: false),
                 .reTranscribe, lang,
             )
             XCTAssertEqual(
-                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: false),
+                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: false, cloudTranscriptionEnabled: false),
                 .none, lang,
             )
         }
@@ -63,77 +63,85 @@ final class LiveCaptionsGateTests: XCTestCase {
 
     func testAutoDetectLanguageFallsBackToReTranscribe() {
         XCTAssertEqual(
-            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: nil, engineSupportsLive: true),
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: nil, engineSupportsLive: true, cloudTranscriptionEnabled: false),
             .reTranscribe,
         )
     }
 
     func testAutoDetectWithUnsupportedEngineYieldsNone() {
         XCTAssertEqual(
-            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: nil, engineSupportsLive: false),
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: nil, engineSupportsLive: false, cloudTranscriptionEnabled: false),
             .none,
         )
     }
 
-    // MARK: - captionsAvailable
+    private func available(
+        liveEnabled: Bool, engineLanguage: String?, engineSupportsLive: Bool, cloudTranscriptionEnabled: Bool,
+    ) -> Bool {
+        LiveCaptionsGate.strategy(
+            liveEnabled: liveEnabled, engineLanguage: engineLanguage,
+            engineSupportsLive: engineSupportsLive, cloudTranscriptionEnabled: cloudTranscriptionEnabled,
+        ) != .none
+    }
+
+    // MARK: - Availability (any strategy but none)
 
     func testStreamingBackendsAvailableEvenWhenEngineUnsupported() {
-        XCTAssertTrue(LiveCaptionsGate.captionsAvailable(
-            liveEnabled: true, engineLanguage: "de", engineSupportsLive: false,
+        XCTAssertTrue(available(
+            liveEnabled: true, engineLanguage: "de", engineSupportsLive: false, cloudTranscriptionEnabled: false,
         ))
-        XCTAssertTrue(LiveCaptionsGate.captionsAvailable(
-            liveEnabled: true, engineLanguage: "en", engineSupportsLive: false,
+        XCTAssertTrue(available(
+            liveEnabled: true, engineLanguage: "en", engineSupportsLive: false, cloudTranscriptionEnabled: false,
         ))
     }
 
     func testReTranscribeAvailabilityRequiresEngineSupport() {
-        XCTAssertTrue(LiveCaptionsGate.captionsAvailable(
-            liveEnabled: true, engineLanguage: nil, engineSupportsLive: true,
+        XCTAssertTrue(available(
+            liveEnabled: true, engineLanguage: nil, engineSupportsLive: true, cloudTranscriptionEnabled: false,
         ))
-        XCTAssertFalse(LiveCaptionsGate.captionsAvailable(
-            liveEnabled: true, engineLanguage: nil, engineSupportsLive: false,
+        XCTAssertFalse(available(
+            liveEnabled: true, engineLanguage: nil, engineSupportsLive: false, cloudTranscriptionEnabled: false,
         ))
-        XCTAssertTrue(LiveCaptionsGate.captionsAvailable(
-            liveEnabled: true, engineLanguage: "id-ID", engineSupportsLive: true,
+        XCTAssertTrue(available(
+            liveEnabled: true, engineLanguage: "id-ID", engineSupportsLive: true, cloudTranscriptionEnabled: false,
         ))
-        XCTAssertFalse(LiveCaptionsGate.captionsAvailable(
-            liveEnabled: true, engineLanguage: "id-ID", engineSupportsLive: false,
+        XCTAssertFalse(available(
+            liveEnabled: true, engineLanguage: "id-ID", engineSupportsLive: false, cloudTranscriptionEnabled: false,
         ))
     }
 
     func testCaptionsUnavailableWhenLiveDisabled() {
-        XCTAssertFalse(LiveCaptionsGate.captionsAvailable(
-            liveEnabled: false, engineLanguage: "de", engineSupportsLive: true,
+        XCTAssertFalse(available(
+            liveEnabled: false, engineLanguage: "de", engineSupportsLive: true, cloudTranscriptionEnabled: false,
         ))
     }
 
-    // MARK: - overlayVisible
+    // MARK: - Cloud transcription
 
-    func testOverlayVisibleWhenCaptionsAvailableRecordingAndOverlayOn() {
-        XCTAssertTrue(LiveCaptionsGate.overlayVisible(
-            liveEnabled: true, engineLanguage: "en", engineSupportsLive: true,
-            isRecording: true, overlayEnabled: true,
-        ))
+    func testCloudOnTurnsEveryReTranscribeRouteOff() {
+        for lang in [nil, "id", "pt-AO"] as [String?] {
+            XCTAssertEqual(
+                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: true, cloudTranscriptionEnabled: true),
+                .none, "\(lang ?? "auto"): re-transcribe would load the local model",
+            )
+        }
     }
 
-    func testOverlayHiddenWhenOverlayDisabledEvenIfCaptionsAvailableAndRecording() {
-        XCTAssertFalse(LiveCaptionsGate.overlayVisible(
-            liveEnabled: true, engineLanguage: "en", engineSupportsLive: true,
-            isRecording: true, overlayEnabled: false,
-        ))
+    func testCloudOnKeepsTheStreamingBackends() {
+        XCTAssertEqual(
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "en", engineSupportsLive: true, cloudTranscriptionEnabled: true),
+            .englishStreaming,
+        )
+        XCTAssertEqual(
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "de", engineSupportsLive: true, cloudTranscriptionEnabled: true),
+            .nemotronStreaming,
+        )
     }
 
-    func testOverlayHiddenWhenNotRecording() {
-        XCTAssertFalse(LiveCaptionsGate.overlayVisible(
-            liveEnabled: true, engineLanguage: "en", engineSupportsLive: true,
-            isRecording: false, overlayEnabled: true,
-        ))
-    }
-
-    func testOverlayHiddenWhenUntrainedLanguageCannotReTranscribe() {
-        XCTAssertFalse(LiveCaptionsGate.overlayVisible(
-            liveEnabled: true, engineLanguage: "id", engineSupportsLive: false,
-            isRecording: true, overlayEnabled: true,
-        ))
+    func testOffForCloudOnlyWhereCloudIsWhatTurnsCaptionsOff() {
+        XCTAssertTrue(LiveCaptionsGate.offForCloud(engineLanguage: nil, engineSupportsLive: true))
+        XCTAssertTrue(LiveCaptionsGate.offForCloud(engineLanguage: "id", engineSupportsLive: true))
+        XCTAssertFalse(LiveCaptionsGate.offForCloud(engineLanguage: "en", engineSupportsLive: true), "streams without the engine")
+        XCTAssertFalse(LiveCaptionsGate.offForCloud(engineLanguage: nil, engineSupportsLive: false), "off with cloud off too")
     }
 }

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy Policy &middot; Meeting Transcriber</title>
-<meta name="description" content="Privacy policy for Meeting Transcriber. The app runs on your Mac and does not collect or transmit your data.">
+<meta name="description" content="Privacy policy for Meeting Transcriber, including data sent to configured transcription, meeting-notes and Notion providers.">
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32x32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16x16.png">
 <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
@@ -27,25 +27,26 @@
 <div class="wrap legal">
 
   <h1>Privacy Policy</h1>
-  <p class="updated">Last updated: November 11, 2026</p>
+  <p class="updated">Last updated: November 27, 2026</p>
 
-  <p>Meeting Transcriber is a macOS app that runs on your own computer. The short version: it does not collect your data, and there is no server in the picture to send it to. This page spells out exactly what that means.</p>
+  <p>Meeting Transcriber is a macOS app that runs on your own computer. The short version: it does not collect your data, and unless you set up a provider yourself, there is no server in the picture to send it to. This page spells out exactly what that means.</p>
 
   <h2>What the app collects about you</h2>
   <p>Nothing. There is no account, no sign-up, no analytics, no telemetry, and no usage tracking. The developer has no way to see who uses the app or what they record.</p>
 
   <h2>Where your recordings and transcripts live</h2>
-  <p>Your recordings, transcripts, summaries and saved voice profiles are stored as files on your Mac, in your user folder: by default in Downloads/MeetingTranscriber and in Library/Application Support/MeetingTranscriber, or in the output folder you choose. Your audio is never uploaded anywhere by the app. Text only leaves your Mac through the summary step and the Notion export described below, and only as you set them up. If you delete the files, they are gone. You can move or back them up like any other file.</p>
-  <p>Next to them the app keeps a few working files of its own: a log of speaker recognition results (meeting titles and the names you assigned), and in the Homebrew version a diagnostic log in Library/Logs/MeetingTranscriber that is deleted after 30 days. API keys you enter (for a summary provider or Notion) are stored in your macOS Keychain.</p>
+  <p>Your recordings, transcripts, summaries and saved voice profiles are stored as files on your Mac, in your user folder: by default in Downloads/MeetingTranscriber and in Library/Application Support/MeetingTranscriber, or in the output folder you choose. Your audio is not uploaded anywhere unless you turn on cloud transcription, described below. Text can leave your Mac through the summary step and the Notion export described below. When cloud transcription is enabled, the request also includes the first terms of your vocabulary file if its switch is on. If you delete the files, they are gone. You can move or back them up like any other file.</p>
+  <p>Next to them the app keeps a few working files of its own: a log of speaker recognition results (meeting titles and the names you assigned), and in the Homebrew version a diagnostic log in Library/Logs/MeetingTranscriber that is deleted after 30 days. API keys you enter (for cloud transcription, a summary provider or Notion) are stored in your macOS Keychain.</p>
 
   <h2>Voice profiles</h2>
   <p>When you name a speaker, the app saves a voice profile so it can recognise the same voice in later meetings. A profile is the name you gave and a numeric description of that person's voice (a speaker embedding), stored in speakers.json in Library/Application Support/MeetingTranscriber. It stays on your Mac and is never sent anywhere. You can rename or delete profiles in Settings &rarr; Speakers &rarr; Known Voices.</p>
 
   <h2>When the app uses the network</h2>
-  <p>The app works offline once it is set up. There are only four reasons it talks to the network:</p>
+  <p>The app works offline once it is set up. There are only five reasons it talks to the network:</p>
   <ul class="plain">
     <li><b>Model download, once per model.</b> The first time a speech model is needed, the app downloads it from Hugging Face (for example WhisperKit, Parakeet, the diarization model, or the live captions model when you turn live captions on). That happens on first run and again when you switch to a model you have not used before. This is a normal file download. Your audio is not involved and nothing about you is sent.</li>
     <li><b>Update check, on by default.</b> About 30 seconds after launch and then once a day, the app asks GitHub for the public release list so it can tell you a newer version is available. Nothing about your recordings is sent. You can turn it off in Settings &rarr; About.</li>
+    <li><b>Cloud transcription, off by default.</b> If you choose Settings &rarr; Transcription &rarr; Transcribe with: Cloud and confirm the prompt, each recording queued while it is on is uploaded as audio to the endpoint you configure, together with the language you picked and, when the custom vocabulary switch is on, the first terms of your vocabulary file. The provider returns the text, and it is handled under that provider's privacy terms. Speaker identification and voice profiles stay on your Mac. Switching back to Local applies to recordings queued from then on: one queued while Cloud was on still goes to the cloud. To keep it on your Mac, cancel it in the menu bar before its transcription starts; the recording itself is kept in your output folder. With Local selected throughout (the default), no audio leaves your Mac.</li>
     <li><b>The summary step, your choice.</b> Writing the summary sends the transcript, including the speaker names in it, and the meeting date and time to the model you configure. In the Homebrew version the default is the Claude Code CLI installed on your Mac: if it is installed and signed in, the transcript goes to Anthropic (or wherever your Claude CLI is set up to send it) and is handled under their privacy terms. The same applies to a cloud OpenAI-compatible API. If you point it at a local model (Ollama, LM Studio, llama.cpp) or set the summary to None, nothing leaves your Mac.</li>
     <li><b>Notion export, off by default.</b> If you turn it on and enter a Notion API key, each finished summary is sent to your Notion database: its title, the meeting date and the summary text, plus the full transcript while "Include full transcript" (Settings → Output → Meeting Notes) is on (it is by default) and the speaker names if you turn on speaker tags. It is handled under Notion's privacy terms.</li>
   </ul>

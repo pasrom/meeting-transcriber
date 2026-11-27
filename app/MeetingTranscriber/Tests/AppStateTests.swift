@@ -1008,6 +1008,22 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertEqual(notifier.calls[0].body, "Transcription failed")
     }
 
+    func testConfigureCallbacksCloudFailureNamesTheCause() throws {
+        let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
+        let (state, notifier) = makeIsolatedState(logDir: tmpDir)
+        state.pipeline.configureCallbacks()
+        let cause = CloudTranscriptionError.httpError(status: 401, body: "invalid key").localizedDescription
+        var job = jobWithError(makeJob(), message: cause)
+        job.state = .error
+        job.cloudTranscriptionFailed = true
+
+        state.pipeline.queue.onJobStateChange?(job, .transcribing, .error)
+
+        XCTAssertEqual(notifier.calls.count, 1)
+        XCTAssertEqual(notifier.calls.first?.title, "Cloud Transcription Failed")
+        XCTAssertEqual(notifier.calls.first?.body, cause)
+    }
+
     func testConfigureCallbacksTranscribingNoNotification() throws {
         let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
 

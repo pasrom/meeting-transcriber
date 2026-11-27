@@ -100,6 +100,7 @@ final class CancelledJobWritesNothingTests: XCTestCase {
 
         XCTAssertEqual(files(endingIn: ".txt"), [], "a draft transcript was written for a cancelled job")
         XCTAssertEqual(diarizer.runCount, 0, "a cancelled job was diarized")
+        XCTAssertNil(queue.runEngineTags[job.id])
         XCTAssertNil(queue.jobAudioSeconds[job.id], "the cancel's cleared bookkeeping was written back")
     }
 

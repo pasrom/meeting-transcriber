@@ -65,6 +65,7 @@ final class LiveTranscriptionController {
             liveEnabled: true,
             engineLanguage: engineLanguage,
             engineSupportsLive: engine != nil,
+            cloudTranscriptionEnabled: false, // cloud on arrives as a nil engine (coordinator)
         )
     }
 

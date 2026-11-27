@@ -163,6 +163,13 @@ extension PipelineQueue {
         }
     }
 
+    /// Mark a job whose cloud transcription failed, ahead of its move to
+    /// `.error`, so the transition's snapshot and notification carry it.
+    private func markCloudFailure(_ id: UUID) {
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        jobs[index].cloudTranscriptionFailed = true
+    }
+
     /// Clear `isProcessing` on the way out of `processNext`, unless another
     /// entry's run is still going: the flag is what keeps `triggerProcessing`
     /// from starting a second run beside it, and entries overlap whenever
@@ -243,10 +250,11 @@ extension PipelineQueue {
         }
         if await resumeProtocolOnly(job) { return true }
 
-        guard let engine, let outputDir else {
+        guard let engine = transcriptionEngine(for: job), let outputDir else {
             logger.warning("Processing dependencies not configured — skipping")
             return false
         }
+        runEngineTags[job.id] = String(describing: type(of: engine))
         let ctx = Self.makeContext(for: job)
 
         do {
@@ -262,8 +270,16 @@ extension PipelineQueue {
             try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: workDir) }
 
-            let transcription = try await stage(ctx.jobID) {
-                try await transcribe(ctx, engine: engine, workDir: workDir)
+            let transcription: TranscriptionOutput
+            do {
+                transcription = try await stage(ctx.jobID) {
+                    try await transcribe(ctx, engine: engine, workDir: workDir)
+                }
+            } catch let error as CloudTranscriptionError where job.transcriptionTarget == .cloud {
+                // Only this stage counts: a cloud job that fails later failed
+                // on the Mac, and the plain Retry covers it.
+                markCloudFailure(ctx.jobID)
+                throw error
             }
 
             // The transcript WITHOUT its recording-level note. A dropped track
@@ -311,7 +327,9 @@ extension PipelineQueue {
             if !isStillQueued(ctx.jobID) {
                 logger.info("Job \(ctx.jobID) cancelled")
             } else {
-                logger.error("Pipeline error for job \(ctx.jobID): \(error.localizedDescription, privacy: .public)")
+                logger.error(
+                    "Pipeline error for job \(ctx.jobID): \(CloudTranscriptionError.publicLogDescription(of: error), privacy: .public)",
+                )
                 updateJobState(id: ctx.jobID, to: .error, error: error.localizedDescription)
             }
         }
@@ -411,8 +429,8 @@ extension PipelineQueue {
             setTrackViability(id: ctx.jobID, kept.viability)
         }
         for warning in kept.warnings {
-            logger.warning("[\(ctx.shortID, privacy: .public)] \(warning, privacy: .public)")
-            addWarning(id: ctx.jobID, warning)
+            logDroppedTrack("[\(ctx.shortID)] \(warning.publicSummary)", warning.detail)
+            addWarning(id: ctx.jobID, warning.detail)
         }
         if echoRemoved, !kept.viability.carriesAppAudio {
             // The canceller took the far end out of the microphone track

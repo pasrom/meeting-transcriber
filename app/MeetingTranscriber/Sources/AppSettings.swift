@@ -188,6 +188,12 @@ final class AppSettings { // swiftlint:disable:this type_body_length
     /// processes don't race on the shared on-disk plist.
     @ObservationIgnored private let defaults: UserDefaults
 
+    /// Hub repository/variant pairs whose launch download still needs its first tokenizer load.
+    var pendingWhisperTokenizers: Set<String> {
+        get { Set(defaults.stringArray(forKey: "pendingWhisperTokenizers") ?? []) }
+        set { defaults.set(Array(newValue), forKey: "pendingWhisperTokenizers") }
+    }
+
     /// Keychain account backing `openAIAPIKey`. Production callers pass
     /// nothing → the real account. Tests inject a unique account so they never
     /// touch the key the user configured in the app: the Keychain is scoped
@@ -205,6 +211,11 @@ final class AppSettings { // swiftlint:disable:this type_body_length
 
     /// Keychain account backing `notionAPIKey`, same injection reasoning as above.
     @ObservationIgnored private let notionAPIKeyAccount: String
+
+    /// Keychain account backing `cloudTranscriptionAPIKey`, same injection
+    /// reasoning as above. Its own account so the transcription provider never
+    /// shares a credential with the Meeting Notes provider.
+    @ObservationIgnored let cloudTranscriptionAPIKeyAccount: String
 
     // MARK: - Apps to Watch
 
@@ -385,6 +396,52 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(transcriptionEngine.rawValue, forKey: "transcriptionEngine") }
     }
 
+    /// Send newly queued recordings to the cloud endpoint below instead of
+    /// `transcriptionEngine`, which stays selected for when this is off.
+    var cloudTranscriptionEnabled: Bool {
+        didSet { defaults.set(cloudTranscriptionEnabled, forKey: "cloudTranscriptionEnabled") }
+    }
+
+    /// The user confirmed once that meeting audio leaves the Mac; later
+    /// switches to cloud skip the confirmation.
+    var cloudTranscriptionConsented: Bool {
+        didSet { defaults.set(cloudTranscriptionConsented, forKey: "cloudTranscriptionConsented") }
+    }
+
+    /// OpenAI-compatible API base URL, e.g. `https://api.openai.com/v1`.
+    var cloudEndpoint: CloudEndpointSelection {
+        didSet { cloudEndpoint.persist(in: defaults) }
+    }
+
+    var cloudTranscriptionBaseURL: String {
+        get { cloudEndpoint.baseURL }
+        set { cloudEndpoint.baseURL = newValue }
+    }
+
+    var cloudTranscriptionModel: String {
+        didSet { defaults.set(cloudTranscriptionModel, forKey: "cloudTranscriptionModel") }
+    }
+
+    /// Keychain-backed; empty deletes the item.
+    var cloudTranscriptionAPIKey: String {
+        get {
+            access(keyPath: \.cloudTranscriptionAPIKey)
+            return KeychainHelper.read(key: activeCloudKeyAccount) ?? ""
+        }
+        set {
+            withMutation(keyPath: \.cloudTranscriptionAPIKey) {
+                _ = CloudEndpointSelection.storeKey(newValue, in: activeCloudKeyAccount)
+            }
+        }
+    }
+
+    /// Language sent with cloud requests (Whisper picker code). Empty string =
+    /// auto-detect. Separate from the local engines' languages, which Run
+    /// Locally keeps using; first copied from `whisperLanguage`.
+    var cloudTranscriptionLanguage: String {
+        didSet { defaults.set(cloudTranscriptionLanguage, forKey: "cloudTranscriptionLanguage") }
+    }
+
     /// The stock variant picked in Settings. Stays a stock variant while a custom
     /// model is in use, and is what an unfinished custom model falls back to.
     var whisperKitModel: String {
@@ -448,14 +505,16 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(customVocabularyBookmark, forKey: "customVocabularyBookmark") }
     }
 
-    /// Whether any engine reads the vocabulary file: Parakeet's CTC boosting and
-    /// WhisperKit's experimental prompt, which can reduce transcript completeness.
+    /// Whether any engine reads the vocabulary file: Parakeet's CTC boosting, the
+    /// cloud prompt and WhisperKit's experimental prompt, which can reduce
+    /// transcript completeness.
     var customVocabularyEnabled: Bool {
         didSet { defaults.set(customVocabularyEnabled, forKey: "customVocabularyEnabled") }
     }
 
-    /// Upgrade value for `customVocabularyEnabled`: what the engine in use did
-    /// before the one switch. Only WhisperKit was gated, by its own prompt flag.
+    /// Upgrade value for `customVocabularyEnabled`: what the method in use did
+    /// before the one switch. Only local WhisperKit was gated, by its own prompt flag;
+    /// with cloud on, `whisperKit` is false.
     static func initialCustomVocabularyEnabled(
         whisperKitPromptEnabled: Bool,
         hasVocabularyFile: Bool,
@@ -842,9 +901,9 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         set {
             withMutation(keyPath: \.notionAPIKey) {
                 if newValue.isEmpty {
-                    KeychainHelper.delete(key: notionAPIKeyAccount)
+                    _ = KeychainHelper.delete(key: notionAPIKeyAccount)
                 } else {
-                    KeychainHelper.save(key: notionAPIKeyAccount, value: newValue)
+                    _ = KeychainHelper.save(key: notionAPIKeyAccount, value: newValue)
                 }
             }
         }
@@ -902,12 +961,14 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         apiKeyAccount: String = "openAIAPIKey",
         claudeAPIKeyAccount: String = "claudeAPIKey",
         notionAPIKeyAccount: String = "notionAPIKey",
+        cloudTranscriptionAPIKeyAccount: String = "cloudTranscriptionAPIKey",
         defaultOutputDir: URL = AppPaths.downloadsProtocolsDir,
     ) {
         self.defaults = defaults
         self.apiKeyAccount = apiKeyAccount
         self.claudeAPIKeyAccount = claudeAPIKeyAccount
         self.notionAPIKeyAccount = notionAPIKeyAccount
+        self.cloudTranscriptionAPIKeyAccount = cloudTranscriptionAPIKeyAccount
         self.defaultOutputDir = defaultOutputDir
 
         watchTeams = defaults.bool(forKey: "watchTeams", default: true)
@@ -942,6 +1003,10 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         unloadModelsWhenIdle = defaults.bool(forKey: "unloadModelsWhenIdle", default: true)
         transcriptionEngine = (defaults.string(forKey: "transcriptionEngine")
             .flatMap(TranscriptionEngineSetting.init(rawValue:))) ?? .whisperKit
+        cloudTranscriptionEnabled = defaults.bool(forKey: "cloudTranscriptionEnabled", default: false)
+        cloudTranscriptionConsented = defaults.bool(forKey: "cloudTranscriptionConsented", default: false)
+        cloudEndpoint = CloudEndpointSelection(defaults: defaults)
+        cloudTranscriptionModel = defaults.string(forKey: "cloudTranscriptionModel") ?? "whisper-1"
         whisperKitModel = defaults.object(forKey: "whisperKitModel") as? String
             ?? "openai_whisper-large-v3-v20240930_turbo"
         whisperKitCustomModelEnabled = defaults.bool(forKey: "whisperKitCustomModelEnabled", default: false)
@@ -950,7 +1015,15 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         whisperKitCustomModelFolderPath = defaults.string(forKey: "whisperKitCustomModelFolderPath") ?? ""
         whisperKitCustomModelFolderBookmark = defaults.data(forKey: "whisperKitCustomModelFolderBookmark")
         whisperKitCustomModelValidation = .notConfigured
-        whisperLanguage = defaults.object(forKey: "whisperLanguage") as? String ?? "de"
+        let storedWhisperLanguage = defaults.object(forKey: "whisperLanguage") as? String ?? "de"
+        whisperLanguage = storedWhisperLanguage
+        // Absent on upgrade: start from the WhisperKit language, stored so it no longer follows it.
+        if let stored = defaults.string(forKey: "cloudTranscriptionLanguage") {
+            cloudTranscriptionLanguage = stored
+        } else {
+            cloudTranscriptionLanguage = storedWhisperLanguage
+            defaults.set(storedWhisperLanguage, forKey: "cloudTranscriptionLanguage")
+        }
         parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
         customVocabularyBookmark = defaults.data(forKey: "customVocabularyBookmark")
@@ -962,7 +1035,8 @@ final class AppSettings { // swiftlint:disable:this type_body_length
             let derived = Self.initialCustomVocabularyEnabled(
                 whisperKitPromptEnabled: defaults.bool(forKey: "whisperKitVocabularyPromptEnabled", default: false),
                 hasVocabularyFile: !(defaults.string(forKey: "customVocabularyPath") ?? "").isEmpty,
-                whisperKit: storedEngine == .whisperKit,
+                whisperKit: storedEngine == .whisperKit
+                    && !defaults.bool(forKey: "cloudTranscriptionEnabled", default: false),
             )
             customVocabularyEnabled = derived
             defaults.set(derived, forKey: "customVocabularyEnabled")

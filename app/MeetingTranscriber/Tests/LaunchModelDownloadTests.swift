@@ -20,6 +20,31 @@ final class LaunchModelDownloadTests: XCTestCase {
         XCTAssertEqual(engines.whisperKit.modelState, .unloaded)
     }
 
+    func testNextLocalLaunchFinishesTokenizerLoadSkippedByCloud() async throws {
+        let suite = "LaunchModelDownloadTests-\(getpid())-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(DefaultsSuite.open(suite))
+        defer { DefaultsSuite.remove(suite) }
+        let settings = AppSettings(defaults: defaults)
+        let firstLaunch = EngineController(settings: settings)
+        let source = CountingModelSource(onDisk: false) { settings.cloudTranscriptionEnabled = true }
+        try await firstLaunch.whisperKit.installModelSourceForTesting(source.make())
+
+        await firstLaunch.preloadActiveModel()
+        XCTAssertEqual(source.downloads, 1)
+        XCTAssertEqual(source.pipeBuilds, 0)
+
+        settings.cloudTranscriptionEnabled = false
+        let nextLaunch = EngineController(settings: AppSettings(defaults: defaults))
+        try await nextLaunch.whisperKit.installModelSourceForTesting(source.make())
+        await nextLaunch.preloadActiveModel()
+        XCTAssertEqual(source.downloads, 1)
+        XCTAssertEqual(source.pipeBuilds, 1)
+        XCTAssertEqual(nextLaunch.whisperKit.modelState, .unloaded)
+
+        await nextLaunch.preloadActiveModel()
+        XCTAssertEqual(source.pipeBuilds, 1, "a completed tokenizer load must not repeat")
+    }
+
     func testTheLoadAfterALaunchDownloadIsKeptWhileBusy() async throws {
         let settings = try makeIsolatedSettings()
         let engines = EngineController(settings: settings)

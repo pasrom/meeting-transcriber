@@ -17,6 +17,13 @@ struct TranscriptionSettingsView: View {
     /// acts on every settings write.
     @State private var customModelDrafts: WhisperKitCustomModelDrafts
 
+    /// Whether the cloud consent alert is up; created in `init` for the same
+    /// reason as `customModelDrafts`.
+    @State private var cloudConsent: CloudTranscriptionConsent
+    private let cloudEndpointDrafts: CloudEndpointDrafts
+    @State private var cloudConnectionTest: CloudConnectionTest
+    @State private var cloudModelList: CloudModelList
+
     /// WhisperKit models earlier builds left in `Documents`. Nil leaves the row
     /// out, so a view built without one (as most view tests do) is never bound
     /// to the real `Documents` and Trash; `SettingsView` passes the live one.
@@ -28,6 +35,8 @@ struct TranscriptionSettingsView: View {
         parakeetEngine: ParakeetEngine,
         captionWarmup: LiveCaptionsWarmup = .idle,
         legacyModels: LegacyWhisperModelsState? = nil,
+        cloudEndpointDrafts: CloudEndpointDrafts = CloudEndpointDrafts(),
+        cloudModelList: CloudModelList? = nil,
     ) {
         self.settings = settings
         self.whisperKitEngine = whisperKitEngine
@@ -38,6 +47,10 @@ struct TranscriptionSettingsView: View {
         // so a view inspected outside a hierarchy, as the view tests do, would get
         // a new object on every read and lose each edit.
         _customModelDrafts = State(initialValue: WhisperKitCustomModelDrafts())
+        _cloudConsent = State(initialValue: CloudTranscriptionConsent())
+        self.cloudEndpointDrafts = cloudEndpointDrafts
+        _cloudConnectionTest = State(initialValue: CloudConnectionTest())
+        _cloudModelList = State(initialValue: cloudModelList ?? CloudModelList())
         _legacyModels = State(initialValue: legacyModels)
     }
 
@@ -77,28 +90,51 @@ struct TranscriptionSettingsView: View {
     /// Each group of controls is a named property rather than inline in
     /// `body`: inline, this section made `body` the slowest body in the app
     /// to type-check, close enough to the 300 ms limit CI enforces that a
-    /// slow runner pushed it over. Each property stands for exactly one of the
-    /// section's former direct children, in the same order: view tests reach
-    /// some controls by their position in the section, so merging two of them
+    /// slow runner pushed it over. Keep each group its own property: view
+    /// tests reach some controls by their position, so merging two of them
     /// into one property would move every control after it.
     private var transcriptionSection: some View {
         Section("Transcription") {
-            enginePicker
-            whisperKitPickers
-            parakeetLanguagePicker
-            engineStatusView
-            Toggle("Unload models when idle", isOn: $settings.unloadModelsWhenIdle)
-                .accessibilityIdentifier(A11yID.unloadModelsWhenIdleToggle)
-                .help(
-                    "Free transcription model memory while waiting for meetings. "
-                        + "Models load automatically for processing; live captions keep the models they need.",
-                )
+            TranscriptionMethodPicker(settings: settings, consent: cloudConsent)
+            transcriptionMethodRows
         }
         .accessibilityIdentifier(A11yID.transcriptionSection)
         .recordOnlyDisabled(settings.recordOnly)
         // Not while a removal runs: a model picked or loaded meanwhile could be
         // one whose old copy is on its way to the Trash.
         .disabled(legacyModels?.isRemoving == true)
+    }
+
+    /// Only the selected method's rows, like the Meeting Notes provider picker.
+    @ViewBuilder private var transcriptionMethodRows: some View {
+        if settings.cloudTranscriptionEnabled {
+            CloudTranscriptionControls(
+                settings: settings,
+                drafts: cloudEndpointDrafts,
+                connectionTest: cloudConnectionTest,
+                modelList: cloudModelList,
+                localFallback: Self.localFallbackDescription(for: settings),
+            )
+        } else {
+            localTranscriptionRows
+        }
+    }
+
+    @ViewBuilder private var localTranscriptionRows: some View {
+        enginePicker
+        whisperKitPickers
+        parakeetLanguagePicker
+        engineStatusView
+        unloadModelsWhenIdleToggle
+    }
+
+    private var unloadModelsWhenIdleToggle: some View {
+        Toggle("Unload models when idle", isOn: $settings.unloadModelsWhenIdle)
+            .accessibilityIdentifier(A11yID.unloadModelsWhenIdleToggle)
+            .help(
+                "Free transcription model memory while waiting for meetings. "
+                    + "Models load automatically for processing; live captions keep the models they need.",
+            )
     }
 
     private var enginePicker: some View {
@@ -259,18 +295,13 @@ struct TranscriptionSettingsView: View {
             }
 
             if settings.liveTranscriptionEnabled { CaptionWarmupStatus(warmup: captionWarmup) }
+            captionsOffForCloudNote
+
             captionOverlayToggle
             captionSizePicker
 
-            Text(captionBackendFootnote)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text(liveTranscriptionFootnote)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Self.footnote(captionBackendFootnote)
+            Self.footnote(liveTranscriptionFootnote)
         }
         .accessibilityIdentifier(A11yID.liveTranscriptionSection)
         .recordOnlyDisabled(settings.recordOnly)
@@ -301,13 +332,24 @@ struct TranscriptionSettingsView: View {
         .accessibilityIdentifier(A11yID.liveCaptionsSizePicker)
     }
 
-    /// The backend live captions would use if enabled, from the one routing rule.
+    /// The backend live captions would use if enabled, from the one routing
+    /// rule, cloud included: `.none` is what cloud leaves for a language with
+    /// no streaming model, and the footnote says so instead of naming the
+    /// re-transcribe route that is off.
     static func captionStrategy(for settings: AppSettings) -> LiveCaptionsGate.Strategy {
         LiveCaptionsGate.strategy(
             liveEnabled: true,
-            engineLanguage: settings.activeEngineLanguageOrNil,
+            engineLanguage: settings.liveCaptionsLanguageOrNil,
             engineSupportsLive: settings.transcriptionEngine.supportsLiveTranscription,
+            cloudTranscriptionEnabled: settings.cloudTranscriptionEnabled,
         )
+    }
+
+    static func footnote(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// True when enabling captions would trigger the first-use Nemotron download:
@@ -352,8 +394,9 @@ struct TranscriptionSettingsView: View {
     private var captionBackendFootnote: String {
         Self.captionBackendFootnote(
             strategy: Self.captionStrategy(for: settings),
-            languageIsSet: settings.activeEngineLanguageOrNil != nil,
-            detectsLanguage: activeEngine.supportsCaptionLanguageDetection,
+            languageIsSet: settings.liveCaptionsLanguageOrNil != nil,
+            // Cloud on builds captions without the local engine, so nothing detects.
+            detectsLanguage: !settings.cloudTranscriptionEnabled && activeEngine.supportsCaptionLanguageDetection,
         )
     }
 
@@ -374,8 +417,13 @@ struct TranscriptionSettingsView: View {
             "Caption backend follows your transcription language. It uses the low-latency "
                 + "Nemotron multilingual streaming model (~0.6-0.7 GB, downloads on first use)."
 
-        // `.none` cannot be reached with a language set: both engines support re-transcribe.
-        case .reTranscribe, .none:
+        // Only cloud transcription leaves `.none`: both engines support re-transcribe.
+        case .none:
+            "Caption backend follows your transcription language. With cloud transcription on, "
+                + "captions need a language with a low-latency streaming model, such as English; "
+                + "auto-detect and other languages have none."
+
+        case .reTranscribe:
             if languageIsSet {
                 "Caption backend follows your transcription language. This language has no "
                     + "low-latency streaming model, so captions use the standard re-transcribe engine."
@@ -466,8 +514,8 @@ struct TranscriptionSettingsView: View {
     }
 }
 
-/// The Vocabulary section. An extension so the view's main body stays under
-/// the type-length limit.
+/// The Vocabulary section, shared by both "Transcribe with" methods. An
+/// extension so the view's main body stays under the type-length limit.
 extension TranscriptionSettingsView {
     private var vocabularySection: some View {
         Section("Vocabulary") {
@@ -479,12 +527,12 @@ extension TranscriptionSettingsView {
         .recordOnlyDisabled(settings.recordOnly)
     }
 
-    /// WhisperKit's help adds the experimental warning: it is the engine where the
-    /// vocabulary can cost completeness.
+    /// Local WhisperKit's help adds the experimental warning: it is the one method
+    /// where the vocabulary can cost completeness.
     private var customVocabularyToggle: some View {
         HelpfulToggle(
             title: "Use custom vocabulary",
-            help: settings.transcriptionEngine == .whisperKit
+            help: !settings.cloudTranscriptionEnabled && settings.transcriptionEngine == .whisperKit
                 ? SettingsHelp.customVocabularyWhisperKit
                 : SettingsHelp.customVocabulary,
             isOn: $settings.customVocabularyEnabled,
@@ -517,7 +565,11 @@ extension TranscriptionSettingsView {
                 }
             }
         }
-        .help(Self.vocabularyHelpText(for: settings.transcriptionEngine))
+        .help(
+            settings.cloudTranscriptionEnabled
+                ? Self.cloudVocabularyHelpText
+                : Self.vocabularyHelpText(for: settings.transcriptionEngine),
+        )
     }
 
     private var customVocabularyValidation: some View {
@@ -528,73 +580,5 @@ extension TranscriptionSettingsView {
             .onChange(of: settings.customVocabularyPath) { _, _ in
                 settings.refreshCustomVocabularyValidation()
             }
-    }
-}
-
-// MARK: - Terminology rules
-
-private extension TranscriptionSettingsView {
-    var terminologyRulesEditor: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Canonical terminology")
-            terminologyRulesFileRow
-            terminologyRulesSource
-            Text(
-                "Applied to saved transcripts after ASR. One rule per line: "
-                    + "Canonical spelling => spoken variant | another variant. "
-                    + "Rules only replace whole words or phrases.",
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            Text(settings.terminologyRulesValidation.message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .onAppear { settings.refreshTerminologyRulesValidation() }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                    settings.refreshTerminologyRulesValidation()
-                }
-        }
-    }
-
-    var terminologyRulesFileRow: some View {
-        HStack {
-            TextField("Terminology rules file (optional)", text: Binding(
-                get: { settings.terminologyRulesFilePath },
-                set: { settings.setTerminologyRulesFilePath($0) },
-            ))
-            .textFieldStyle(.roundedBorder)
-            .accessibilityIdentifier(A11yID.terminologyRulesFilePathField)
-            Button("Choose\u{2026}") {
-                let panel = NSOpenPanel()
-                panel.allowedContentTypes = [.plainText]
-                panel.allowsMultipleSelection = false
-                if panel.runModal() == .OK, let url = panel.url {
-                    settings.setTerminologyRulesFile(url)
-                }
-            }
-        }
-        .help("When a file is set, its rules are used instead of the text area and are read again at the start of each job.")
-    }
-
-    /// The text area while no rules file is set; otherwise the file's contents,
-    /// read-only, as of the last read: on appearing, on a change of path, when
-    /// the app becomes active and at each job start.
-    @ViewBuilder
-    var terminologyRulesSource: some View { // swiftlint:disable:this attributes
-        if settings.usesTerminologyRulesFile {
-            ScrollView {
-                Text(settings.terminologyRulesFileContents)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(minHeight: 72)
-            .accessibilityIdentifier(A11yID.terminologyRulesFilePreview)
-        } else {
-            TextEditor(text: $settings.terminologyRulesText)
-                .font(.body.monospaced())
-                .frame(minHeight: 72)
-                .accessibilityIdentifier(A11yID.terminologyRulesEditor)
-        }
     }
 }

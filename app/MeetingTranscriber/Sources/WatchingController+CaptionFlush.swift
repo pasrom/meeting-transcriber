@@ -9,6 +9,7 @@ extension WatchingController {
     /// same main-actor stretch, and a flush started then would run after that
     /// and retire them.
     func startCaptionFlush() {
+        liveTranscription.recordingEnded()
         if let captionFlushOverride {
             captionFlushOverride()
         } else {

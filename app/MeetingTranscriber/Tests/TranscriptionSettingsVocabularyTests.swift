@@ -173,6 +173,19 @@ final class TranscriptionSettingsVocabularyTests: XCTestCase {
         )
     }
 
+    func testCloudHelpBadgeOmitsTheWhisperKitWarning() throws {
+        let settings = AppSettings(defaults: defaults)
+        settings.transcriptionEngine = .whisperKit
+        settings.cloudTranscriptionEnabled = true
+
+        XCTAssertEqual(
+            try makeView(settings: settings).inspect()
+                .find(viewWithAccessibilityIdentifier: A11yID.customVocabularyToggle)
+                .find(HelpBadge.self).actualView().text,
+            SettingsHelp.customVocabulary,
+        )
+    }
+
     private func makeView(settings: AppSettings) -> TranscriptionSettingsView {
         TranscriptionSettingsView(
             settings: settings,

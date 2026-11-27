@@ -43,6 +43,42 @@ final class PipelineSnapshotTests: XCTestCase {
         XCTAssertEqual(loaded[0].warnings, ["one warning"])
     }
 
+    // MARK: - transcription target
+
+    func testTranscriptionTargetSurvivesSaveAndLoad() throws {
+        let dir = try makeTempDirectory(prefix: "pipeline-snapshot")
+        var job = PipelineJob(
+            meetingTitle: "Target", appName: "Zoom",
+            mixPath: dir.appendingPathComponent("rec_mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.transcriptionTarget = .local
+
+        try PipelineSnapshot.save([job], to: dir)
+
+        let loaded = try XCTUnwrap(try PipelineSnapshot.load(from: dir))
+        XCTAssertEqual(loaded.first?.transcriptionTarget, .local)
+    }
+
+    func testSnapshotWithoutTranscriptionTargetStillLoads() throws {
+        let dir = try makeTempDirectory(prefix: "pipeline-snapshot")
+        var job = PipelineJob(
+            meetingTitle: "Before Targets", appName: "Zoom",
+            mixPath: dir.appendingPathComponent("rec_mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.transcriptionTarget = .local
+        let encoded = try JSONEncoder().encode([job])
+        var jobs = try XCTUnwrap(try JSONSerialization.jsonObject(with: encoded) as? [[String: Any]])
+        XCTAssertNotNil(jobs[0].removeValue(forKey: "transcriptionTarget"), "precondition: the key is encoded")
+        try JSONSerialization.data(withJSONObject: jobs)
+            .write(to: dir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let loaded = try XCTUnwrap(try PipelineSnapshot.load(from: dir))
+        XCTAssertEqual(loaded.first?.id, job.id)
+        XCTAssertNil(loaded.first?.transcriptionTarget)
+    }
+
     // MARK: - save: produces the expected filename
 
     func testSaveWritesToSnapshotFilename() throws {
