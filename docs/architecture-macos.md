@@ -277,6 +277,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `LiveTranscriptionController+Nemotron.swift` | Nemotron streaming-pipeline construction, split out for size; injectable factory for testing the build + model-load-failure fallback |
 | `LiveTranscriptionController+StreamingModels.swift` | The streaming caption model set a controller loads (Nemotron or Parakeet EOU), its download ahead of the warm-up queue (one per model folder at a time across controllers), and the English EOU pipeline build |
 | `LiveTranscriptionController+LanguageProbe.swift` | Auto-detect captions with WhisperKit: holds caption audio, detects the recording's language, then installs Parakeet EOU (English) or re-transcribe; also the stop-time `flush()` |
+| `LiveTranscriptionController+EventSink.swift` | The event sink every caption pipeline delivers its partials and finals through, to the captions and the speaker matcher |
 | `LiveTranscriptionController+Sinks.swift` | Recording audio sinks forwarding each channel to its caption and language-probe feeds |
 | `CaptionLanguageProbe.swift` | Per-channel VAD probe that collects 4 s of speech for language detection, and the pure decision rule (probability ≥ 0.8, two English windows for EOU, up to 4 attempts) |
 | `LiveTranscriptionCoordinator.swift` | `@Observable` coordinator: builds + arms `LiveTranscriptionController`, feeds `LiveCaptionsState` |
