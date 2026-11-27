@@ -1,3 +1,4 @@
+import AudioTapLib
 import Foundation
 import os.log
 
@@ -8,6 +9,18 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Pipelin
 /// because `PipelineQueue+Recovery.swift` reached the `file_length` cap.
 extension PipelineQueue {
     // MARK: - Orphaned Recording Recovery
+
+    /// A recording the staging scan will recover, with what it read beside it.
+    struct OrphanedRecording {
+        let group: PairedRecordingResolver.Group
+        /// From the mute log, for a group with a mic track (`MicMuteLog.forRecovery`).
+        let micMuted: [MicMuteInterval]
+        /// From the recording sidecar the watch loop wrote beside the mix
+        /// before enqueueing, so a recording whose job was lost keeps the
+        /// offset its mix was built with. Zero without a readable one, as
+        /// before the sidecar existed.
+        let micDelay: TimeInterval
+    }
 
     /// Scan `recordingsDir` for `*_mix.wav` files not tracked by any loaded job.
     /// Creates recovery jobs for untracked recordings younger than `maxAge`.
@@ -30,7 +43,7 @@ extension PipelineQueue {
     func scanForOrphanedRecordings(
         recordingsDir: URL,
         maxAge: TimeInterval = 86400,
-    ) async -> [MicMuteLog.RecoveryCandidate] {
+    ) async -> [OrphanedRecording] {
         // One-time migration: seed processed list with existing recordings
         // Only for the default recordings directory (not test overrides)
         if recordingsDir == AppPaths.recordingsDir {
@@ -72,6 +85,12 @@ extension PipelineQueue {
                 return true
             }
             return MicMuteLog.forRecovery(recoverable, among: entries, in: recordingsDir, keepingLogsOf: accountedFor)
+                .map { group, micMuted in
+                    OrphanedRecording(
+                        group: group, micMuted: micMuted,
+                        micDelay: group.mix.flatMap(RecordingSidecar.recordedMicDelay(besideMix:)) ?? 0,
+                    )
+                }
         }.value
     }
 
@@ -82,7 +101,7 @@ extension PipelineQueue {
     }
 
     /// Give each scanned orphan a job of its own.
-    func adoptOrphanedRecordings(_ scanned: [MicMuteLog.RecoveryCandidate]) {
+    func adoptOrphanedRecordings(_ scanned: [OrphanedRecording]) {
         // Asked again, because the scan was out on another task: a recording
         // the watch loop enqueued, or another queue started, meanwhile was in
         // neither set the scan checked, and a second job for it would end in
@@ -100,13 +119,14 @@ extension PipelineQueue {
         // one on a queue nobody sees, and a second time on the active one.
         guard !candidates.isEmpty, !isRetired else { return }
 
-        for (group, micMuted) in candidates {
+        for candidate in candidates {
+            let group = candidate.group
             guard let mixURL = group.mix else { continue }
             var job = PipelineJob(
                 meetingTitle: "Recovered Recording (\(group.stem))",
                 appName: "Unknown",
                 mixPath: mixURL, appPath: group.app, micPath: group.mic,
-                micDelay: 0, micMuteIntervals: micMuted,
+                micDelay: candidate.micDelay, micMuteIntervals: candidate.micMuted,
             )
             // The mute log stays beside the recording. This job is not on
             // disk yet (`saveSnapshot()` only schedules the write), so a

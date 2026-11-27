@@ -186,6 +186,16 @@ struct RecordingSidecar: Codable {
         return mix.deletingLastPathComponent().appendingPathComponent(stem + recordingFilenameSuffix)
     }
 
+    /// The mic delay in the recording sidecar beside `mix`, for orphan
+    /// recovery. Nil without one this build can read, and for one whose
+    /// `files.mix` names another file: that sidecar was not written for this
+    /// recording, and its offset would shift the merge as wrongly as zero.
+    static func recordedMicDelay(besideMix mix: URL) -> TimeInterval? {
+        guard let url = recordingSidecarURL(besideMix: mix), let sidecar = read(from: url),
+              sidecar.files.mix == mix.lastPathComponent else { return nil }
+        return sidecar.micDelaySeconds
+    }
+
     /// Rewrite the recording sidecar at `source` as
     /// `<directory>/<stem>_recording.json`, its file names following the
     /// tracks onto `stem`, and remove `source` when that is another file.
