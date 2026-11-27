@@ -66,7 +66,6 @@ struct TranscriptionSettingsView: View {
     var body: some View {
         Form {
             transcriptionSection
-            cloudTranscriptionSection
             vocabularySection
             liveTranscriptionSection
             legacyModelsSection
@@ -88,22 +87,13 @@ struct TranscriptionSettingsView: View {
     /// Each group of controls is a named property rather than inline in
     /// `body`: inline, this section made `body` the slowest body in the app
     /// to type-check, close enough to the 300 ms limit CI enforces that a
-    /// slow runner pushed it over. Each property stands for exactly one of the
-    /// section's former direct children, in the same order: view tests reach
-    /// some controls by their position in the section, so merging two of them
+    /// slow runner pushed it over. Keep each group its own property: view
+    /// tests reach some controls by their position, so merging two of them
     /// into one property would move every control after it.
     private var transcriptionSection: some View {
         Section("Transcription") {
-            enginePicker
-            whisperKitPickers
-            parakeetLanguagePicker
-            engineStatusView
-            Toggle("Unload models when idle", isOn: $settings.unloadModelsWhenIdle)
-                .accessibilityIdentifier(A11yID.unloadModelsWhenIdleToggle)
-                .help(
-                    "Free transcription model memory while waiting for meetings. "
-                        + "Models load automatically for processing; live captions keep the models they need.",
-                )
+            TranscriptionMethodPicker(settings: settings, consent: cloudConsent)
+            transcriptionMethodRows
         }
         .accessibilityIdentifier(A11yID.transcriptionSection)
         .recordOnlyDisabled(settings.recordOnly)
@@ -112,14 +102,35 @@ struct TranscriptionSettingsView: View {
         .disabled(legacyModels?.isRemoving == true)
     }
 
-    private var cloudTranscriptionSection: some View {
-        Section("Cloud Transcription") {
+    /// Only the selected method's rows, like the Meeting Notes provider picker.
+    @ViewBuilder private var transcriptionMethodRows: some View {
+        if settings.cloudTranscriptionEnabled {
             CloudTranscriptionControls(
-                settings: settings, consent: cloudConsent, connectionTest: cloudConnectionTest, drafts: cloudEndpointDrafts,
+                settings: settings,
+                drafts: cloudEndpointDrafts,
+                connectionTest: cloudConnectionTest,
+                localFallback: Self.localFallbackDescription(for: settings),
             )
+        } else {
+            localTranscriptionRows
         }
-        .accessibilityIdentifier(A11yID.cloudTranscriptionSection)
-        .recordOnlyDisabled(settings.recordOnly)
+    }
+
+    @ViewBuilder private var localTranscriptionRows: some View {
+        enginePicker
+        whisperKitPickers
+        parakeetLanguagePicker
+        engineStatusView
+        unloadModelsWhenIdleToggle
+    }
+
+    private var unloadModelsWhenIdleToggle: some View {
+        Toggle("Unload models when idle", isOn: $settings.unloadModelsWhenIdle)
+            .accessibilityIdentifier(A11yID.unloadModelsWhenIdleToggle)
+            .help(
+                "Free transcription model memory while waiting for meetings. "
+                    + "Models load automatically for processing; live captions keep the models they need.",
+            )
     }
 
     private var enginePicker: some View {
@@ -324,34 +335,17 @@ struct TranscriptionSettingsView: View {
     static func captionStrategy(for settings: AppSettings) -> LiveCaptionsGate.Strategy {
         LiveCaptionsGate.strategy(
             liveEnabled: true,
-            engineLanguage: settings.activeEngineLanguageOrNil,
+            engineLanguage: settings.liveCaptionsLanguageOrNil,
             engineSupportsLive: settings.transcriptionEngine.supportsLiveTranscription,
             cloudTranscriptionEnabled: settings.cloudTranscriptionEnabled,
         )
     }
 
-    private static func footnote(_ text: String) -> some View {
+    static func footnote(_ text: String) -> some View {
         Text(text)
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-    }
-
-    @ViewBuilder private var captionsOffForCloudNote: some View {
-        if captionsOffForCloud {
-            Self.footnote("Live captions are off for this language while cloud transcription is on.")
-                .accessibilityIdentifier(A11yID.liveCaptionsCloudOffNote)
-        }
-    }
-
-    /// Live captions are on, but cloud transcription keeps them off for the
-    /// current language (they would need the local engine).
-    private var captionsOffForCloud: Bool {
-        settings.liveTranscriptionEnabled && settings.cloudTranscriptionEnabled
-            && LiveCaptionsGate.offForCloud(
-                engineLanguage: settings.activeEngineLanguageOrNil,
-                engineSupportsLive: settings.transcriptionEngine.supportsLiveTranscription,
-            )
     }
 
     /// True when enabling captions would trigger the first-use Nemotron download:
@@ -396,8 +390,9 @@ struct TranscriptionSettingsView: View {
     private var captionBackendFootnote: String {
         Self.captionBackendFootnote(
             strategy: Self.captionStrategy(for: settings),
-            languageIsSet: settings.activeEngineLanguageOrNil != nil,
-            detectsLanguage: activeEngine.supportsCaptionLanguageDetection,
+            languageIsSet: settings.liveCaptionsLanguageOrNil != nil,
+            // Cloud on builds captions without the local engine, so nothing detects.
+            detectsLanguage: !settings.cloudTranscriptionEnabled && activeEngine.supportsCaptionLanguageDetection,
         )
     }
 
@@ -515,8 +510,8 @@ struct TranscriptionSettingsView: View {
     }
 }
 
-/// The Vocabulary section. An extension so the view's main body stays under
-/// the type-length limit.
+/// The Vocabulary section, shared by both "Transcribe with" methods. An
+/// extension so the view's main body stays under the type-length limit.
 extension TranscriptionSettingsView {
     private var vocabularySection: some View {
         Section("Vocabulary") {
@@ -566,7 +561,11 @@ extension TranscriptionSettingsView {
                 }
             }
         }
-        .help(Self.vocabularyHelpText(for: settings.transcriptionEngine))
+        .help(
+            settings.cloudTranscriptionEnabled
+                ? Self.cloudVocabularyHelpText
+                : Self.vocabularyHelpText(for: settings.transcriptionEngine),
+        )
     }
 
     private var customVocabularyValidation: some View {

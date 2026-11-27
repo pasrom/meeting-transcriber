@@ -107,7 +107,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/GeneralSettingsView.swift` | Startup (Launch at login, Start watching when the app opens = `AppSettings.autoWatch`) · Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack) · Detection (Poll Interval, Grace Period) |
 | `Settings/AudioSettingsView.swift` | Microphone (device, start muted, mute mic shortcut) · VAD (enabled + threshold) · Echo · Per-Channel Indicator |
 | `Settings/MicMuteHotkeyRow.swift` | Settings row that captures the shortcut toggling mic mute during a recording |
-| `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Vocabulary section · Live transcription (PoC) toggle |
+| `Settings/TranscriptionSettingsView.swift` | "Transcribe with" (Local / Cloud) · ASR engine picker · engine-specific options · model status · Vocabulary section · Live transcription (PoC) toggle |
 | `Settings/LegacyWhisperModelsSection.swift` | Transcription settings' Storage section: lets the user move WhisperKit model variants an earlier build left in `Documents` to the Trash |
 | `Settings/LegacyWhisperModelsState.swift` | Lists the leftover WhisperKit variants in `Documents` and moves the ones the user picked to the Trash (backs `LegacyWhisperModelsSection`) |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Speaker Naming (open the naming window automatically, how long unnamed meetings wait) · Mic Speaker Name · Known Voices · Recognition Stats · Experimental: Diarization Tuning |

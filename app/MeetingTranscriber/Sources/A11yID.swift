@@ -82,7 +82,6 @@ enum A11yID {
     static let transcriptionSection = "transcriptionSection"
     static let unloadModelsWhenIdleToggle = "unloadModelsWhenIdleToggle"
     static let vocabularySection = "vocabularySection"
-    static let cloudTranscriptionSection = "cloudTranscriptionSection"
     /// Opens a confirmation dialog, so it stays off the `/ui/press` allowlist.
     static let legacyWhisperModelsTrashButton = "legacyWhisperModelsTrashButton"
 
@@ -164,7 +163,9 @@ enum A11yID {
     static let terminologyRulesEditor = "terminologyRulesEditor"
     static let terminologyRulesFilePathField = "terminologyRulesFilePathField"
     static let terminologyRulesFilePreview = "terminologyRulesFilePreview"
-    static let cloudTranscriptionToggle = "cloudTranscriptionToggle"
+    static let transcriptionMethodPicker = "transcriptionMethodPicker"
+    static let cloudTranscriptionLanguagePicker = "cloudTranscriptionLanguagePicker"
+    static let cloudTranscriptionLocalFallbackNote = "cloudTranscriptionLocalFallbackNote"
     static let cloudTranscriptionHostNote = "cloudTranscriptionHostNote"
     static let cloudTranscriptionBaseURLField = "cloudTranscriptionBaseURLField"
     static let cloudTranscriptionModelField = "cloudTranscriptionModelField"

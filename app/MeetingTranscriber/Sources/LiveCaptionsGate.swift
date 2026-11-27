@@ -45,7 +45,8 @@ enum LiveCaptionsGate {
     /// - Parameters:
     ///   - liveEnabled: master live-captions toggle.
     ///   - engineLanguage: the active engine's explicitly configured language
-    ///     (ISO 639-1, e.g. `de`/`en`), or `nil` for auto-detect.
+    ///     (ISO 639-1, e.g. `de`/`en`), or `nil` for auto-detect; the cloud
+    ///     language while cloud transcription is on (`liveCaptionsLanguageOrNil`).
     ///   - engineSupportsLive: whether the active engine implements the
     ///     in-memory `transcribeSamples` re-transcribe hook.
     ///   - cloudTranscriptionEnabled: cloud transcription is on, so the local

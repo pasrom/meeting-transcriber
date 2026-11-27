@@ -34,6 +34,52 @@ extension AppSettings {
         }
     }
 
+    /// Cloud transcription language as an optional value. Empty string means
+    /// the provider should auto-detect the language.
+    var cloudTranscriptionLanguageOrNil: String? {
+        cloudTranscriptionLanguage.isEmpty ? nil : cloudTranscriptionLanguage
+    }
+
+    /// The language live captions route by (`LiveCaptionsGate`): the cloud
+    /// language while cloud transcription is on, else the active engine's.
+    var liveCaptionsLanguageOrNil: String? {
+        cloudTranscriptionEnabled ? cloudTranscriptionLanguageOrNil : activeEngineLanguageOrNil
+    }
+
+    /// The target a recording queued now is captured with.
+    var transcriptionTarget: TranscriptionTarget {
+        cloudTranscriptionEnabled ? .cloud : .local
+    }
+
+    var cloudTranscriptionConfiguration: CloudTranscriptionConfiguration {
+        CloudTranscriptionConfiguration(
+            baseURL: cloudTranscriptionBaseURL,
+            model: cloudTranscriptionModel,
+            apiKey: cloudTranscriptionAPIKey,
+            language: cloudTranscriptionLanguageOrNil,
+            vocabularyTerms: customVocabularyTerms,
+        )
+    }
+
+    /// Sends local jobs to `local` and cloud jobs to a `CloudTranscriptionEngine`
+    /// that reads the endpoint when it transcribes; only the cloud-or-local
+    /// choice is captured per job. `local` is read per job, so a local job (and
+    /// Run Locally after a cloud failure) uses the engine Settings names now,
+    /// not the one selected when the queue was built.
+    @MainActor
+    func transcriptionEngineResolver(
+        local: @escaping @MainActor () -> any TranscribingEngine,
+        session: URLSession = .shared,
+    ) -> TranscriptionEngineResolver {
+        let cloud = CloudTranscriptionEngine(configuration: { [self] in cloudTranscriptionConfiguration }, session: session)
+        return { target in
+            switch target {
+            case .local: local()
+            case .cloud: cloud
+            }
+        }
+    }
+
     /// The meeting apps the user opted to watch. Drives auto-detection: the
     /// `WatchingController` default detector keeps only the assertion patterns
     /// whose app is listed here (`PowerAssertionDetector.patterns(watching:)`),

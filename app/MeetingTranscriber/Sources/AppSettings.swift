@@ -435,38 +435,11 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         }
     }
 
-    /// The target a recording queued now is captured with.
-    var transcriptionTarget: TranscriptionTarget {
-        cloudTranscriptionEnabled ? .cloud : .local
-    }
-
-    var cloudTranscriptionConfiguration: CloudTranscriptionConfiguration {
-        CloudTranscriptionConfiguration(
-            baseURL: cloudTranscriptionBaseURL,
-            model: cloudTranscriptionModel,
-            apiKey: cloudTranscriptionAPIKey,
-            language: activeEngineLanguageOrNil,
-            vocabularyTerms: customVocabularyTerms,
-        )
-    }
-
-    /// Sends local jobs to `local` and cloud jobs to a `CloudTranscriptionEngine`
-    /// that reads the endpoint when it transcribes; only the cloud-or-local
-    /// choice is captured per job. `local` is read per job, so a local job (and
-    /// Run Locally after a cloud failure) uses the engine Settings names now,
-    /// not the one selected when the queue was built.
-    @MainActor
-    func transcriptionEngineResolver(
-        local: @escaping @MainActor () -> any TranscribingEngine,
-        session: URLSession = .shared,
-    ) -> TranscriptionEngineResolver {
-        let cloud = CloudTranscriptionEngine(configuration: { [self] in cloudTranscriptionConfiguration }, session: session)
-        return { target in
-            switch target {
-            case .local: local()
-            case .cloud: cloud
-            }
-        }
+    /// Language sent with cloud requests (Whisper picker code). Empty string =
+    /// auto-detect. Separate from the local engines' languages, which Run
+    /// Locally keeps using; first copied from `whisperLanguage`.
+    var cloudTranscriptionLanguage: String {
+        didSet { defaults.set(cloudTranscriptionLanguage, forKey: "cloudTranscriptionLanguage") }
     }
 
     /// The stock variant picked in Settings. Stays a stock variant while a custom
@@ -1040,7 +1013,15 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         whisperKitCustomModelFolderPath = defaults.string(forKey: "whisperKitCustomModelFolderPath") ?? ""
         whisperKitCustomModelFolderBookmark = defaults.data(forKey: "whisperKitCustomModelFolderBookmark")
         whisperKitCustomModelValidation = .notConfigured
-        whisperLanguage = defaults.object(forKey: "whisperLanguage") as? String ?? "de"
+        let storedWhisperLanguage = defaults.object(forKey: "whisperLanguage") as? String ?? "de"
+        whisperLanguage = storedWhisperLanguage
+        // Absent on upgrade: start from the WhisperKit language, stored so it no longer follows it.
+        if let stored = defaults.string(forKey: "cloudTranscriptionLanguage") {
+            cloudTranscriptionLanguage = stored
+        } else {
+            cloudTranscriptionLanguage = storedWhisperLanguage
+            defaults.set(storedWhisperLanguage, forKey: "cloudTranscriptionLanguage")
+        }
         parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
         customVocabularyBookmark = defaults.data(forKey: "customVocabularyBookmark")

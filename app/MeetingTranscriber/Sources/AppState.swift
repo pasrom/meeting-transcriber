@@ -263,7 +263,7 @@ final class AppState {
             captions: liveCaptions,
             liveEnabled: { [settings] in settings.liveTranscriptionEnabled },
             engineSupportsLive: { [settings] in settings.transcriptionEngine.supportsLiveTranscription },
-            engineLanguage: { [settings] in settings.activeEngineLanguageOrNil },
+            engineLanguage: { [settings] in settings.liveCaptionsLanguageOrNil },
             cloudTranscriptionEnabled: { [settings] in settings.cloudTranscriptionEnabled },
             verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
             echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },

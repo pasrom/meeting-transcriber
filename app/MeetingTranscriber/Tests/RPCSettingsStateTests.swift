@@ -234,12 +234,14 @@
             cloud.cloudTranscriptionEnabled = true
             cloud.cloudTranscriptionBaseURL = "https://sentinel-cloud.example/v1"
             cloud.cloudTranscriptionModel = "sentinel-cloud-model"
+            cloud.cloudTranscriptionLanguage = "id"
             cloud.cloudTranscriptionAPIKey = "sk-sentinel-cloud-key"
 
             let s = cloud.rpcSettingsSnapshot()
             XCTAssertTrue(s.transcription.cloudTranscriptionEnabled)
             XCTAssertEqual(s.transcription.cloudTranscriptionBaseURL, "https://sentinel-cloud.example/v1")
             XCTAssertEqual(s.transcription.cloudTranscriptionModel, "sentinel-cloud-model")
+            XCTAssertEqual(s.transcription.cloudTranscriptionLanguage, "id")
             let json = try XCTUnwrap(String(bytes: JSONEncoder().encode(s), encoding: .utf8))
             XCTAssertFalse(json.contains("sk-sentinel-cloud-key"), "cloud API key leaked")
         }
@@ -283,6 +285,7 @@
                 "transcription.unloadModelsWhenIdle",
                 "transcription.cloudTranscriptionEnabled",
                 "transcription.cloudTranscriptionBaseURL", "transcription.cloudTranscriptionModel",
+                "transcription.cloudTranscriptionLanguage",
                 "diarization.diarize", "diarization.mode", "diarization.numSpeakers",
                 "diarization.vadEnabled", "diarization.vadThreshold",
                 "diarization.clusterThreshold", "diarization.warmStartFa",

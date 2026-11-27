@@ -111,6 +111,31 @@ final class CloudTranscriptionFieldsTests: XCTestCase {
         XCTAssertNil(try Self.field("language", in: XCTUnwrap(bodies.all.first)))
     }
 
+    /// The settings send the cloud language picker's value, not the local
+    /// engine's, which Run Locally keeps using.
+    func testSettingsSendTheCloudLanguageNotTheLocalEngines() async throws {
+        let suiteName = "CloudTranscriptionFieldsTests-\(getpid())-\(UUID().uuidString)"
+        defer { DefaultsSuite.remove(suiteName) }
+        let settings = try AppSettings(
+            defaults: XCTUnwrap(DefaultsSuite.open(suiteName)),
+            cloudTranscriptionAPIKeyAccount: "CloudTranscriptionFieldsTests-key-\(getpid())-\(UUID().uuidString)",
+        )
+        settings.cloudTranscriptionBaseURL = "https://cloud.test/v1"
+        settings.transcriptionEngine = .whisperKit
+        settings.whisperLanguage = "de"
+        settings.cloudTranscriptionLanguage = "fil"
+        let bodies = Self.serve()
+        let cloud = settings.transcriptionEngineResolver(local: { WhisperKitEngine() }, session: makeSession())(.cloud)
+
+        _ = try await cloud.transcribeSegments(audioPath: createTestAudioFile(in: tmpDir))
+        settings.cloudTranscriptionLanguage = ""
+        _ = try await cloud.transcribeSegments(audioPath: createTestAudioFile(in: tmpDir))
+
+        XCTAssertEqual(bodies.all.count, 2)
+        XCTAssertEqual(Self.field("language", in: bodies.all[0]), "tl", "picker code mapped as before")
+        XCTAssertNil(Self.field("language", in: bodies.all[1]), "Auto-detect sends no language")
+    }
+
     func testPickerCodesWithoutAnISO6391CodeAreMapped() {
         XCTAssertEqual(CloudTranscriptionEngine.isoLanguage("fil"), "tl")
         XCTAssertEqual(CloudTranscriptionEngine.isoLanguage("yue"), "zh")
@@ -156,7 +181,9 @@ final class CloudTranscriptionFieldsTests: XCTestCase {
     }
 
     func testEveryPieceOfASplitRecordingCarriesLanguageAndPrompt() async throws {
-        let samples = (0 ..< 5 * 16000).map { 0.5 * Float(sin(2 * .pi * 440 * Double($0) / 16000)) }
+        let samples: [Float] = (0 ..< 5 * 16000).map { (i: Int) -> Float in
+            0.5 * Float(sin(2 * Double.pi * 440 * Double(i) / 16000))
+        }
         let audio = tmpDir.appendingPathComponent("long.wav")
         try AudioMixer.saveWAV(samples: samples, sampleRate: 16000, url: audio)
         let bodies = Self.serve()

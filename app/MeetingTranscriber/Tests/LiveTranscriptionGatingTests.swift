@@ -145,6 +145,7 @@ final class LiveTranscriptionGatingTests: XCTestCase {
     func testACloudSwitchDuringARecordingKeepsItsCaptionsBar() async throws {
         settings.transcriptionEngine = .parakeet
         settings.parakeetLanguage = ""
+        settings.cloudTranscriptionLanguage = ""
         settings.liveTranscriptionEnabled = true
         settings.liveCaptionsOverlayEnabled = true
         let state = try makeState()

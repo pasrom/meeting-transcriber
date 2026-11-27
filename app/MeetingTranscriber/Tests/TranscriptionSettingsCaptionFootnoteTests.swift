@@ -70,7 +70,7 @@ final class TranscriptionSettingsCaptionFootnoteTests: XCTestCase {
         let settings = makeSettings()
         settings.transcriptionEngine = .whisperKit
         settings.cloudTranscriptionEnabled = true
-        settings.whisperLanguage = ""
+        settings.cloudTranscriptionLanguage = ""
         settings.liveTranscriptionEnabled = true
         let view = TranscriptionSettingsView(
             settings: settings,

@@ -2,8 +2,9 @@
 import ViewInspector
 import XCTest
 
-/// One wiring test per cloud-transcription control in Settings → Transcribe,
-/// plus the consent alert's two buttons.
+/// One wiring test per "Transcribe with" control in Settings → Transcribe:
+/// the dropdown, the rows each method shows, the consent alert's two buttons,
+/// the cloud fields and the shared Vocabulary section.
 @MainActor
 final class TranscriptionSettingsCloudTests: XCTestCase {
     // swiftlint:disable implicitly_unwrapped_optional
@@ -41,33 +42,80 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         )
     }
 
-    private func tapToggle(in view: TranscriptionSettingsView) throws {
+    private func selectMethod(_ method: TranscriptionMethod, in view: TranscriptionSettingsView) throws {
         try view.inspect()
-            .find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionToggle)
-            .find(ViewType.Toggle.self)
-            .tap()
+            .find(viewWithAccessibilityIdentifier: A11yID.transcriptionMethodPicker)
+            .find(ViewType.Picker.self)
+            .select(value: method)
     }
 
-    // MARK: - Placement
+    private static let cloudRows = [
+        A11yID.cloudTranscriptionHostNote, A11yID.cloudTranscriptionBaseURLField,
+        A11yID.cloudTranscriptionModelField, A11yID.cloudTranscriptionAPIKeyField,
+        A11yID.cloudTranscriptionTestButton, A11yID.cloudTranscriptionLanguagePicker,
+        A11yID.cloudTranscriptionLocalFallbackNote,
+    ]
 
-    func testCloudControlsHaveTheirOwnSectionAndRecordOnlyDisablesIt() throws {
+    private static let localWhisperKitRows = [
+        A11yID.whisperKitModelPicker, A11yID.unloadModelsWhenIdleToggle,
+    ]
+
+    // MARK: - Dropdown and visible rows
+
+    func testDropdownLeadsTheTranscriptionSectionAndRecordOnlyDisablesIt() throws {
         let settings = makeSettings()
         settings.recordOnly = true
-        let body = try makeView(settings).inspect()
-        let cloud = try body.find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionSection)
-        XCTAssertNoThrow(try cloud.find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionToggle))
-        XCTAssertTrue(cloud.isDisabled())
-        let local = try body.find(viewWithAccessibilityIdentifier: A11yID.transcriptionSection)
-        XCTAssertThrowsError(try local.find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionToggle))
+        let section = try makeView(settings).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.transcriptionSection)
+        let picker = try section.find(viewWithAccessibilityIdentifier: A11yID.transcriptionMethodPicker)
+            .find(ViewType.Picker.self)
+        XCTAssertEqual(try picker.labelView().text().string(), "Transcribe with")
+        XCTAssertNoThrow(try picker.find(text: "Local"))
+        XCTAssertNoThrow(try picker.find(text: "Cloud"))
+        XCTAssertTrue(section.isDisabled())
     }
 
-    // MARK: - Toggle and consent alert
+    func testOnThisMacShowsOnlyTheLocalRows() throws {
+        let settings = makeSettings()
+        settings.transcriptionEngine = .whisperKit
+        let body = try makeView(settings).inspect()
 
-    func testFirstEnableAsksAndCancelLeavesCloudOff() throws {
+        for id in Self.localWhisperKitRows {
+            XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: id), id)
+        }
+        XCTAssertNoThrow(try body.find(button: "Load Model"), "model status row")
+        for id in Self.cloudRows {
+            XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: id), id)
+        }
+    }
+
+    func testCloudShowsOnlyTheCloudRows() throws {
+        let settings = makeSettings()
+        settings.transcriptionEngine = .whisperKit
+        settings.cloudTranscriptionEnabled = true
+        let section = try makeView(settings).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.transcriptionSection)
+
+        for id in Self.cloudRows {
+            XCTAssertNoThrow(try section.find(viewWithAccessibilityIdentifier: id), id)
+        }
+        for id in Self.localWhisperKitRows {
+            XCTAssertThrowsError(try section.find(viewWithAccessibilityIdentifier: id), id)
+        }
+        XCTAssertThrowsError(try section.find(button: "Load Model"), "no model status in Cloud")
+        XCTAssertThrowsError(
+            try section.find(ViewType.Picker.self) { try $0.labelView().text().string() == "Engine" },
+            "no engine picker in Cloud",
+        )
+    }
+
+    // MARK: - Consent alert
+
+    func testFirstPickOfCloudAsksAndCancelLeavesOnThisMac() throws {
         let settings = makeSettings()
         let view = makeView(settings)
 
-        try tapToggle(in: view)
+        try selectMethod(.cloud, in: view)
         XCTAssertFalse(settings.cloudTranscriptionEnabled, "nothing may switch on before the user confirms")
         let alert = try view.inspect().find(ViewType.Alert.self)
         try alert.actions().find(button: "Cancel").tap()
@@ -75,24 +123,108 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         XCTAssertFalse(settings.cloudTranscriptionEnabled)
         XCTAssertFalse(settings.cloudTranscriptionConsented)
         XCTAssertThrowsError(try view.inspect().find(ViewType.Alert.self), "the alert must close on Cancel")
+        let selected = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.transcriptionMethodPicker)
+            .find(ViewType.Picker.self)
+            .selectedValue(TranscriptionMethod.self)
+        XCTAssertEqual(selected, .onThisMac, "the dropdown must return to Local")
     }
 
-    func testConfirmSwitchesCloudOnAndIsRemembered() throws {
+    func testConfirmSwitchesToCloudAndIsRemembered() throws {
         let settings = makeSettings()
         let view = makeView(settings)
 
-        try tapToggle(in: view)
+        try selectMethod(.cloud, in: view)
         try view.inspect().find(ViewType.Alert.self).actions().find(button: "Send to Cloud").tap()
 
         XCTAssertTrue(settings.cloudTranscriptionEnabled)
         XCTAssertTrue(settings.cloudTranscriptionConsented)
         XCTAssertTrue(makeSettings().cloudTranscriptionConsented, "the confirmation must persist")
 
-        try tapToggle(in: view)
+        try selectMethod(.onThisMac, in: view)
         XCTAssertFalse(settings.cloudTranscriptionEnabled)
-        try tapToggle(in: view)
-        XCTAssertTrue(settings.cloudTranscriptionEnabled, "a later enable must not ask again")
+        try selectMethod(.cloud, in: view)
+        XCTAssertTrue(settings.cloudTranscriptionEnabled, "a later pick of Cloud must not ask again")
         XCTAssertThrowsError(try view.inspect().find(ViewType.Alert.self))
+    }
+
+    // MARK: - Run Locally fallback line
+
+    func testFallbackLineNamesTheLocalEngineAndModel() throws {
+        let settings = makeSettings()
+        settings.cloudTranscriptionEnabled = true
+        settings.transcriptionEngine = .whisperKit
+        settings.whisperKitModel = "openai_whisper-large-v3-v20240930_turbo"
+        let line = try makeView(settings).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionLocalFallbackNote)
+            .text()
+            .string()
+        XCTAssertEqual(line, "Run Locally uses WhisperKit \u{00B7} Large V3 Turbo")
+
+        settings.whisperKitModel = "openai_whisper-small"
+        XCTAssertEqual(TranscriptionSettingsView.localFallbackDescription(for: settings), "Run Locally uses WhisperKit \u{00B7} Small")
+
+        settings.whisperKitCustomModelEnabled = true
+        settings.whisperKitCustomRepo = "someone/whisper-fine-tunes"
+        settings.whisperKitCustomVariant = "openai_whisper-small"
+        XCTAssertEqual(
+            TranscriptionSettingsView.localFallbackDescription(for: settings),
+            "Run Locally uses WhisperKit \u{00B7} openai_whisper-small",
+            "a custom model is named by its variant, not the stock label",
+        )
+
+        settings.transcriptionEngine = .parakeet
+        XCTAssertEqual(TranscriptionSettingsView.localFallbackDescription(for: settings), "Run Locally uses Parakeet")
+    }
+
+    // MARK: - Cloud language
+
+    func testCloudLanguagePickerOffersTheWhisperListAndWritesBack() throws {
+        let settings = makeSettings()
+        settings.cloudTranscriptionEnabled = true
+        settings.whisperLanguage = "de"
+        let picker = try makeView(settings).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.cloudTranscriptionLanguagePicker)
+            .find(ViewType.Picker.self)
+        XCTAssertNoThrow(try picker.find(text: "Auto-detect"))
+        for language in PickerLanguages.whisperKit {
+            XCTAssertNoThrow(try picker.find(text: language.label), "missing \(language.label)")
+        }
+
+        try picker.select(value: "id")
+
+        XCTAssertEqual(settings.cloudTranscriptionLanguage, "id")
+        XCTAssertEqual(settings.whisperLanguage, "de", "the local language is untouched")
+    }
+
+    // MARK: - Vocabulary section
+
+    func testVocabularySectionShowsInBothMethodsWithItsHelpPerMethod() throws {
+        for cloud in [false, true] {
+            let settings = makeSettings()
+            settings.transcriptionEngine = .parakeet
+            settings.cloudTranscriptionEnabled = cloud
+            settings.customVocabularyEnabled = true // the file row shows only with the switch on
+            let section = try makeView(settings).inspect()
+                .find(viewWithAccessibilityIdentifier: A11yID.vocabularySection)
+            XCTAssertNoThrow(try section.find(viewWithAccessibilityIdentifier: A11yID.customVocabularyPathField))
+            XCTAssertNoThrow(try section.find(viewWithAccessibilityIdentifier: A11yID.terminologyRulesEditor))
+            XCTAssertEqual(
+                try section.find(ViewType.HStack.self) { stack in
+                    (try? stack.find(viewWithAccessibilityIdentifier: A11yID.customVocabularyPathField)) != nil
+                }.help().string(),
+                cloud ? TranscriptionSettingsView.cloudVocabularyHelpText
+                    : TranscriptionSettingsView.vocabularyHelpText(for: .parakeet),
+            )
+        }
+    }
+
+    func testRecordOnlyDisablesTheVocabularySection() throws {
+        let settings = makeSettings()
+        settings.recordOnly = true
+        XCTAssertTrue(
+            try makeView(settings).inspect().find(viewWithAccessibilityIdentifier: A11yID.vocabularySection).isDisabled(),
+        )
     }
 
     // MARK: - Fields and host note
@@ -163,6 +295,7 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         let settings = makeSettings()
         settings.transcriptionEngine = .parakeet
         settings.parakeetLanguage = ""
+        settings.cloudTranscriptionLanguage = ""
         settings.liveTranscriptionEnabled = true
         XCTAssertThrowsError(
             try makeView(settings).inspect().find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsCloudOffNote),
@@ -176,6 +309,12 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         XCTAssertEqual(note, "Live captions are off for this language while cloud transcription is on.")
 
         settings.parakeetLanguage = "en"
+        XCTAssertNoThrow(
+            try makeView(settings).inspect().find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsCloudOffNote),
+            "with cloud on, captions follow the cloud language, not the local one",
+        )
+
+        settings.cloudTranscriptionLanguage = "en"
         XCTAssertThrowsError(
             try makeView(settings).inspect().find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsCloudOffNote),
             "English captions stream without the local engine, so no note",
@@ -199,7 +338,7 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         let drafts = CloudEndpointDrafts()
         drafts.load(from: settings)
         let controls = CloudTranscriptionControls(
-            settings: settings, consent: CloudTranscriptionConsent(), connectionTest: test, drafts: drafts,
+            settings: settings, drafts: drafts, connectionTest: test, localFallback: "",
         )
 
         try controls.inspect()
@@ -217,12 +356,43 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         XCTAssertEqual(status, CloudConnectionTestResult.authFailed(status: 401).message)
     }
 
+    // MARK: - Cloud language setting
+
+    func testCloudLanguageStartsFromTheWhisperKitLanguageAndIsStored() {
+        defaults.set("id", forKey: "whisperLanguage")
+        let upgraded = makeSettings()
+        XCTAssertEqual(upgraded.cloudTranscriptionLanguage, "id")
+        XCTAssertEqual(defaults.string(forKey: "cloudTranscriptionLanguage"), "id")
+
+        upgraded.whisperLanguage = "fr"
+        XCTAssertEqual(makeSettings().cloudTranscriptionLanguage, "id", "once stored, it no longer follows WhisperKit's")
+    }
+
+    func testStoredCloudLanguageWinsIncludingAutoDetect() {
+        defaults.set("de", forKey: "whisperLanguage")
+        defaults.set("", forKey: "cloudTranscriptionLanguage")
+        XCTAssertNil(makeSettings().cloudTranscriptionLanguageOrNil)
+    }
+
+    func testCaptionLanguageFollowsTheCloudLanguageOnlyWhileCloudIsOn() {
+        let settings = makeSettings()
+        settings.transcriptionEngine = .parakeet
+        settings.parakeetLanguage = "en"
+        settings.cloudTranscriptionLanguage = "de"
+        XCTAssertEqual(settings.liveCaptionsLanguageOrNil, "en")
+        settings.cloudTranscriptionEnabled = true
+        XCTAssertEqual(settings.liveCaptionsLanguageOrNil, "de")
+        settings.cloudTranscriptionLanguage = ""
+        XCTAssertNil(settings.liveCaptionsLanguageOrNil)
+    }
+
     // MARK: - Configuration
 
-    func testConfigurationCarriesTheEngineLanguageAndVocabularyTerms() throws {
+    func testConfigurationCarriesTheCloudLanguageAndVocabularyTerms() throws {
         let settings = makeSettings()
         settings.transcriptionEngine = .whisperKit
-        settings.whisperLanguage = "id"
+        settings.whisperLanguage = "de"
+        settings.cloudTranscriptionLanguage = "id"
         let vocabulary = FileManager.default.temporaryDirectory.appendingPathComponent("vocab_\(UUID().uuidString).txt")
         try "Acme\nSpeaker A\n".write(to: vocabulary, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: vocabulary) }
@@ -232,7 +402,7 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         XCTAssertEqual(config.language, "id")
         XCTAssertEqual(config.vocabularyTerms, ["Acme", "Speaker A"])
 
-        settings.whisperLanguage = ""
+        settings.cloudTranscriptionLanguage = ""
         settings.clearCustomVocabularyFile()
         XCTAssertNil(settings.cloudTranscriptionConfiguration.language)
         XCTAssertEqual(settings.cloudTranscriptionConfiguration.vocabularyTerms, [])

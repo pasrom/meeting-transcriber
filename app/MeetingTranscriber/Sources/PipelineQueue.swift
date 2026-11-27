@@ -175,7 +175,7 @@ class PipelineQueue {
     private let transcriptOutputOptionsProvider: () -> TranscriptOutputOptions
 
     /// The target a newly admitted job is stamped with: the current
-    /// "Transcribe in the cloud" setting.
+    /// "Transcribe with" setting (Local or Cloud).
     private let transcriptionTargetProvider: () -> TranscriptionTarget
     let speakerMatcherFactory: () -> SpeakerMatcher
     let vadConfig: VADConfig?
