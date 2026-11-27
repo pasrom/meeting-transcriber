@@ -194,6 +194,11 @@ class PipelineQueue {
     /// one, tests opt in.
     let recordingRetention: RecordingRetention?
 
+    /// Converts a finished job's kept tracks to FLAC when the setting asks for
+    /// it; see `PipelineQueue+Retention.swift`. Shared across queue rebuilds
+    /// and with `recordingRetention`'s registry. nil (default) disables it.
+    let recordingCompaction: RecordingCompaction?
+
     /// Moves one artifact during the AI-title rename. Injectable so a test can
     /// make a move, or the move undoing it, fail; production moves the file.
     let moveArtifact: (URL, URL) throws -> Void
@@ -445,6 +450,7 @@ class PipelineQueue {
         self.notionExportConfigurationProvider = notionExportConfigurationProvider
         self.terminalJobStore = terminalJobStore
         recordingRetention = nil
+        recordingCompaction = nil
         moveArtifact = Self.liveMoveArtifact
         self.inFlightRuns = inFlightRuns ?? .shared
         naming = SpeakerNamingSession(
@@ -597,6 +603,7 @@ class PipelineQueue {
         inFlightRuns: InFlightRunRegistry? = nil,
         securityScope: SecurityScopeAccess = .live,
         recordingRetention: RecordingRetention? = nil,
+        recordingCompaction: RecordingCompaction? = nil,
         moveArtifact: @escaping (URL, URL) throws -> Void = PipelineQueue.liveMoveArtifact,
     ) {
         self.logDir = logDir
@@ -648,6 +655,7 @@ class PipelineQueue {
         self.notionExportConfigurationProvider = notionExportConfigurationProvider
         self.terminalJobStore = terminalJobStore
         self.recordingRetention = recordingRetention
+        self.recordingCompaction = recordingCompaction
         self.moveArtifact = moveArtifact
         self.inFlightRuns = inFlightRuns ?? .shared
         naming = SpeakerNamingSession(
@@ -930,6 +938,9 @@ class PipelineQueue {
             scheduleCompletedJobRemoval(id: id)
             if recordingRetention != nil {
                 Task { [weak self] in await self?.sweepRetainedRecordings() }
+            }
+            if let outputDir, recordingCompaction?.markFinished(jobID: id, root: outputDir) == true {
+                Task { [weak self] in await self?.compactRecordings() }
             }
             // A held export retries from its Markdown, and a notes retry from
             // the transcript, never from the audio sidecars, and either may be

@@ -40,6 +40,36 @@ extension PipelineQueue {
         await recordingRetention?.sweep(retentionSweepContext)
     }
 
+    /// Run a compaction pass with this queue's output folder, its scope and
+    /// its unfinished jobs. Returns once the run (or the one it joined) is done.
+    func compactRecordings() async {
+        guard let recordingCompaction, let outputDir else { return }
+        await recordingCompaction.run(.init(
+            excludedPaths: { [weak self] in self?.retentionExcludedPaths ?? [] },
+            repointJobAudio: { [weak self] jobID, from, to in self?.repointFinishedJobAudio(jobID: jobID, from: from, to: to) },
+            outputRoot: outputDir,
+            scopeRoot: scopedOutputDir,
+            securityScope: securityScope,
+        ))
+    }
+
+    /// Point a job of this queue that names `from` at `to`, the compressed
+    /// copy that replaced it, and persist that. Only a finished job can still
+    /// name a track the compactor converted (an unfinished one holds its
+    /// tracks), and it can stay in memory for a while (a held export or notes
+    /// retry); a later notes retry with an AI-title rename moves what the job
+    /// names, so the job has to name the files that exist.
+    func repointFinishedJobAudio(jobID: UUID, from: URL, to: URL) {
+        guard let job = jobs.first(where: { $0.id == jobID }) else { return }
+        let key = RecordingRetentionPolicy.pathKey(from)
+        func moved(_ url: URL?) -> URL? {
+            url.map { RecordingRetentionPolicy.pathKey($0) == key ? to : $0 }
+        }
+        let paths = RelocatedAudioPaths(mix: moved(job.mixPath), app: moved(job.appPath), mic: moved(job.micPath))
+        guard paths.mix != job.mixPath || paths.app != job.appPath || paths.mic != job.micPath else { return }
+        recordRelocatedAudio(jobID: jobID, paths)
+    }
+
     /// What a pass run on this queue's behalf needs: its output folder, its
     /// scope access and the tracks its unfinished jobs hold.
     private var retentionSweepContext: RecordingRetention.SweepContext {

@@ -47,6 +47,14 @@ final class PipelineController {
     let terminalJobStore: TerminalJobStore
     /// Shared across queue rebuilds; see `PipelineController+Retention.swift`.
     let recordingRetention: RecordingRetention
+    /// Shared across queue rebuilds, on `recordingRetention`'s registry; see
+    /// `PipelineController+Retention.swift`.
+    let recordingCompaction: RecordingCompaction
+    /// The launch probe and the run after it (`startRecordingCompaction`),
+    /// kept so a caller that needs that run over can wait for it, as the
+    /// queue keeps `lastRecordingRelocation`. It opens and closes the output
+    /// folder's scope once.
+    @ObservationIgnored private(set) var compactionLaunch: Task<Void, Never>?
 
     /// Where the queues this controller builds keep their data and how they
     /// reach the output folder, beyond the settings: the logs and snapshot, the
@@ -71,6 +79,11 @@ final class PipelineController {
         var recoverStagedRecordings: (@MainActor (PipelineQueue) -> Void)?
 
         var resolveOutputDir: @MainActor (OutputDirectoryResolver) -> URL = { $0.resolve() }
+        /// Finds out at launch whether FLAC can be written here; runs off the
+        /// main actor. A test passes a fixed answer.
+        var probeKeptRecordingCodec: @Sendable () -> KeptRecordingCodecStatus = { KeptRecordingCodecProbe.run() }
+        /// The file steps of the compactor this controller owns.
+        var compactionWorker = RecordingCompactionWorker()
         /// The queue the controller starts with; nil builds a bare one on this
         /// environment's folders. A test passes one wired to mocks, so the
         /// controller never holds a queue the test did not choose.
@@ -135,6 +148,9 @@ final class PipelineController {
         recordingRetention = Self.makeRecordingRetention(
             logDir: queueEnvironment.logDir, settings: settings, notifier: notifier,
         )
+        recordingCompaction = Self.makeRecordingCompaction(
+            retention: recordingRetention, settings: settings, worker: queueEnvironment.compactionWorker,
+        )
     }
 
     /// Wire the active-engine source. Called once from `AppState.init` after its
@@ -143,6 +159,7 @@ final class PipelineController {
         self.engineProvider = engineProvider
         observeOutputFolder()
         startRecordingRetention()
+        compactionLaunch = startRecordingCompaction()
     }
 
     // MARK: - Queue lifecycle
@@ -341,6 +358,7 @@ final class PipelineController {
             terminalJobStore: terminalJobStore,
             securityScope: queueEnvironment.securityScope,
             recordingRetention: recordingRetention,
+            recordingCompaction: recordingCompaction,
         )
     }
 

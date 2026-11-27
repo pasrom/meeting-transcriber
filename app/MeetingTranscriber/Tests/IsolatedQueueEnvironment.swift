@@ -18,6 +18,12 @@ enum IsolatedQueueEnvironment {
             recognitionStatsLog: logDir.appendingPathComponent("recognition_log.jsonl"),
             stageTimingLog: logDir.appendingPathComponent("stage_timing.jsonl"),
             recoverStagedRecordings: nil,
+            // A fixed answer: the real probe writes into the temp folder on
+            // every controller a test builds.
+            probeKeptRecordingCodec: { .available },
+            // No sweep: a controller whose settings keep the default output
+            // folder would list the real one at launch.
+            compactionWorker: RecordingCompactionWorker(steps: .live.with(\.sweep) { _, _, _ in 0 }),
             initialQueue: initialQueue,
         )
     }

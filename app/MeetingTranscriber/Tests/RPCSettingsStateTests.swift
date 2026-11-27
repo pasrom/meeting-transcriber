@@ -159,6 +159,9 @@
             XCTAssertTrue(s.output.includeFullTranscriptInProtocol)
             XCTAssertTrue(s.output.saveRawTranscriptSeparately)
             XCTAssertFalse(s.output.useAITitleForFilenames, "off by default: names keep their timestamp")
+            XCTAssertFalse(s.output.compressKeptRecordings)
+            settings.compressKeptRecordings = true
+            XCTAssertTrue(settings.rpcSettingsSnapshot().output.compressKeptRecordings)
         }
 
         func test_snapshot_output_resolvesCustomBookmark() throws {
@@ -277,7 +280,7 @@
                 "protocolGeneration.claudeBin",
                 "output.directory", "output.hasCustomDirectory", "output.hasCustomPrompt",
                 "output.includeFullTranscriptInProtocol", "output.saveRawTranscriptSeparately",
-                "output.useAITitleForFilenames",
+                "output.useAITitleForFilenames", "output.compressKeptRecordings",
                 "diagnostics.verboseDiagnostics", "diagnostics.debugRPCEnabled",
                 "updates.checkForUpdates", "updates.includePreReleases",
             ]

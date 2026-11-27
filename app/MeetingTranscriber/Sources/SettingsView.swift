@@ -33,6 +33,8 @@ struct SettingsView: View {
     /// out, which is what tests and the App Store build get.
     var legacyWhisperModels: LegacyWhisperModelsState?
     var captionWarmup: LiveCaptionsWarmup = .idle
+    /// What the launch probe found, for the FLAC toggle in Output.
+    var keptRecordingCodec: KeptRecordingCodecStatus = .unknown
 
     @State private var selection: SettingsTab = .general
 
@@ -97,7 +99,7 @@ struct SettingsView: View {
             )
 
         case .output:
-            OutputSettingsView(settings: settings)
+            OutputSettingsView(settings: settings, keptRecordingCodec: keptRecordingCodec)
 
         case .advanced:
             AdvancedSettingsView(settings: settings)

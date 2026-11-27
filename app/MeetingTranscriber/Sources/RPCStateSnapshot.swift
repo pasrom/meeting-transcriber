@@ -81,6 +81,25 @@
         /// mere visibility, is what makes the regression net non-vacuous: an
         /// un-pinned window also stays visible on deactivation.
         let windows: [WindowInfo]
+        /// The FLAC conversion of kept recordings (`RecordingCompaction`), so a
+        /// lane can wait for a run to finish instead of sleeping.
+        let recordingStorage: RecordingStorage
+
+        struct RecordingStorage: Codable {
+            /// What the launch probe found: `flac`, `none` or `unknown`.
+            let codec: String
+            /// The probe's reason when `codec` is `none`.
+            let codecUnavailableReason: String?
+            let compacting: Bool
+            /// Entries a run still owes the FLAC conversion.
+            let awaitingCompaction: Int
+            /// The last run's log line: counts and reason names, no paths.
+            let lastRun: String?
+
+            static let empty = Self(
+                codec: "unknown", codecUnavailableReason: nil, compacting: false, awaitingCompaction: 0, lastRun: nil,
+            )
+        }
 
         struct WindowInfo: Codable {
             /// The scene identifier (e.g. "speaker-naming", "settings").
@@ -465,11 +484,13 @@
                 let saveRawTranscriptSeparately: Bool
                 /// Whether a job's files are named after the AI meeting title instead of the timestamped slug.
                 let useAITitleForFilenames: Bool
+                /// Whether finished recordings are converted to FLAC.
+                let compressKeptRecordings: Bool
 
                 static let empty = Self(
                     directory: nil, hasCustomDirectory: false, hasCustomPrompt: false,
                     includeFullTranscriptInProtocol: false, saveRawTranscriptSeparately: false,
-                    useAITitleForFilenames: false,
+                    useAITitleForFilenames: false, compressKeptRecordings: false,
                 )
             }
 
@@ -513,7 +534,9 @@
             badge: BadgeKind = .inactive,
             updateStatus: UpdateStatus = .empty,
             windows: [WindowInfo] = [],
+            recordingStorage: RecordingStorage = .empty,
         ) {
+            self.recordingStorage = recordingStorage
             self.pipeline = pipeline
             self.speakerDB = speakerDB
             self.pendingNamingJobs = pendingNamingJobs

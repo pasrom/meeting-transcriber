@@ -59,6 +59,14 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
             lock.withLock { stopLog }
         }
 
+        /// Forget the calls so far, so a test counts only its own.
+        func forgetCalls() {
+            lock.withLock {
+                startLog = []
+                stopLog = []
+            }
+        }
+
         var access: SecurityScopeAccess {
             SecurityScopeAccess(
                 start: { [self] url in lock.withLock { startLog.append(url) }
@@ -71,7 +79,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
 
     private func makeController(
         _ recorder: Recorder, queue: PipelineQueue? = nil,
-    ) throws -> PipelineController {
+    ) async throws -> PipelineController {
         let staging = tmpDir.appendingPathComponent("staging", isDirectory: true)
         let logDir = tmpDir.appendingPathComponent("log", isDirectory: true)
         for dir in [staging, logDir] {
@@ -98,6 +106,11 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
             terminalJobStore: TerminalJobStore(path: logDir.appendingPathComponent("terminal_jobs.json")),
         )
         pc.activate { MockEngine() }
+        // The launch compaction run opens and closes the folder's scope (its
+        // sweep of leftover partials runs whatever the setting says); let it
+        // finish and leave its calls out of what a test counts.
+        await pc.compactionLaunch?.value
+        recorder.forgetCalls()
         return pc
     }
 
@@ -135,11 +148,11 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
 
     /// Through the production wiring: the queue opens its scope on the very URL
     /// object the resolver returned from the bookmark, not on one equal to it.
-    func testTheControllersQueueOpensTheScopeOnTheResolvedURLObject() throws {
+    func testTheControllersQueueOpensTheScopeOnTheResolvedURLObject() async throws {
         let chosen = try makeFolder("chosen")
         settings.setCustomOutputDir(chosen)
         let recorder = Recorder()
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
 
         pc.ensureQueue()
 
@@ -161,7 +174,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         let second = try makeFolder("second")
         settings.setCustomOutputDir(first)
         let recorder = Recorder()
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
         pc.ensureQueue()
         weak let oldQueue = pc.queue
         var replacedWith: PipelineQueue?
@@ -183,7 +196,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         let second = try makeFolder("second")
         settings.setCustomOutputDir(first)
         let recorder = Recorder()
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
         pc.ensureQueue()
         let busyQueue = pc.queue
         let jobID = busyQueue.insertJobForTesting(
@@ -218,7 +231,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         // Through the environment, so the controller never holds a queue the
         // test did not choose. An initial queue is foreign either way: only
         // `rebuild()` records one as built here.
-        let pc = try makeController(recorder, queue: injected)
+        let pc = try await makeController(recorder, queue: injected)
 
         settings.setCustomOutputDir(second)
         await settleWithoutRebuild()
@@ -237,7 +250,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         let second = try makeFolder("second")
         settings.setCustomOutputDir(first)
         let recorder = Recorder()
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
         pc.ensureQueue()
         XCTAssertEqual(recorder.recoveries, 1, "test premise: the first queue recovers the staging folder")
 
@@ -255,7 +268,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         let second = try makeFolder("second")
         settings.setCustomOutputDir(first)
         let recorder = Recorder()
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
         pc.ensureQueue()
         let notifier = RecordingNotifier()
         let watching = WatchingController(
@@ -305,7 +318,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         let second = try makeFolder("second")
         settings.setCustomOutputDir(first)
         let recorder = Recorder()
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
         pc.ensureQueue()
         let replaced = pc.queue
 
@@ -349,9 +362,9 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
     /// Not asserted on the file's bytes: `saveSnapshot` hands the write to a
     /// detached task, so a synchronous read in the same turn cannot see it and
     /// such an assertion would hold whether the snapshot was read or not.
-    func testBuildingAQueueReadsNoSnapshotAndRunsNoRecovery() throws {
+    func testBuildingAQueueReadsNoSnapshotAndRunsNoRecovery() async throws {
         let recorder = Recorder()
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
         // The audio has to exist, or the restore discards the job for missing
         // audio and an assertion on "no jobs" would hold whether the snapshot
         // was read or not.
@@ -382,7 +395,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         let second = try makeFolder("second")
         settings.setCustomOutputDir(first)
         let recorder = Recorder()
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
         pc.ensureQueue()
         let installed = pc.queue
 
@@ -411,7 +424,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         let second = try makeFolder("second")
         settings.setCustomOutputDir(first)
         let recorder = Recorder()
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
         pc.ensureQueue()
         let replaced = pc.queue
 
@@ -437,7 +450,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         let second = try makeFolder("second")
         settings.setCustomOutputDir(first)
         let recorder = Recorder()
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
         pc.ensureQueue()
         let replaced = pc.queue
 
@@ -462,13 +475,13 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
     /// already built carries the current state in memory, and only that one may
     /// be adopted from. Getting this backwards would silently retire crash
     /// recovery while every other test stayed green.
-    func testTheFirstQueueStillReadsTheSnapshot() throws {
+    func testTheFirstQueueStillReadsTheSnapshot() async throws {
         let first = try makeFolder("first")
         settings.setCustomOutputDir(first)
         let recorder = Recorder()
         // Built first: it creates the log folder the snapshot is written into.
         // `activate` alone builds no queue, `ensureQueue()` below does.
-        let pc = try makeController(recorder)
+        let pc = try await makeController(recorder)
 
         let mix = tmpDir.appendingPathComponent("interrupted.wav")
         try Data("audio".utf8).write(to: mix)

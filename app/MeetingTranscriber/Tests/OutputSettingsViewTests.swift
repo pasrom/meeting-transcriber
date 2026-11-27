@@ -142,6 +142,49 @@ final class OutputSettingsViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.openAIAPIKeyHeaderNameWarning))
     }
 
+    // MARK: - Recording storage
+
+    func testCompressToggleWritesTheSetting() throws {
+        let settings = AppSettings(defaults: makeIsolatedDefaults())
+        let body = try OutputSettingsView(settings: settings, keptRecordingCodec: .available).inspect()
+
+        let toggle = try body.find(viewWithAccessibilityIdentifier: A11yID.compressKeptRecordingsToggle)
+        XCTAssertFalse(toggle.isDisabled())
+        try toggle.find(ViewType.Toggle.self).tap()
+
+        XCTAssertTrue(settings.compressKeptRecordings)
+    }
+
+    func testCompressToggleIsDisabledWithAReasonWithoutFLAC() throws {
+        let settings = AppSettings(defaults: makeIsolatedDefaults())
+        let body = try OutputSettingsView(settings: settings, keptRecordingCodec: .unavailable(reason: "notNativeFLAC")).inspect()
+
+        XCTAssertTrue(try body.find(viewWithAccessibilityIdentifier: A11yID.compressKeptRecordingsToggle).isDisabled())
+        let reason = try body.find(viewWithAccessibilityIdentifier: A11yID.compressKeptRecordingsUnavailable).text().string()
+        XCTAssertTrue(reason.contains("notNativeFLAC"), reason)
+    }
+
+    /// Switched on before FLAC went away (an OS update): it can still be
+    /// switched off.
+    func testCompressToggleOnWithoutFLACCanBeSwitchedOff() throws {
+        let settings = AppSettings(defaults: makeIsolatedDefaults())
+        settings.compressKeptRecordings = true
+        let body = try OutputSettingsView(settings: settings, keptRecordingCodec: .unavailable(reason: "notNativeFLAC")).inspect()
+
+        let toggle = try body.find(viewWithAccessibilityIdentifier: A11yID.compressKeptRecordingsToggle)
+        XCTAssertFalse(toggle.isDisabled())
+        try toggle.find(ViewType.Toggle.self).tap()
+        XCTAssertFalse(settings.compressKeptRecordings)
+    }
+
+    func testTheProbeStillRunningLeavesTheToggleUsable() throws {
+        let settings = AppSettings(defaults: makeIsolatedDefaults())
+        let body = try OutputSettingsView(settings: settings).inspect()
+
+        XCTAssertFalse(try body.find(viewWithAccessibilityIdentifier: A11yID.compressKeptRecordingsToggle).isDisabled())
+        XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: A11yID.compressKeptRecordingsUnavailable))
+    }
+
     func testResetPromptIsDisabledWithoutACustomPrompt() throws {
         let settings = AppSettings(defaults: makeIsolatedDefaults())
         settings.protocolProvider = .openAICompatible

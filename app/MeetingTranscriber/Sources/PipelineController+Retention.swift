@@ -79,12 +79,31 @@ extension PipelineController {
         // Off, the pass would keep everything; skip the snapshot read and the
         // bookmark resolve it needs.
         guard recordingRetention.isActive, !recordingRetention.registry.entries.isEmpty else { return }
-        let held: Set<String>
-        do {
-            held = try PipelineQueue.heldTrackKeys(of: PipelineSnapshotStore.latestJobs(in: queue.logDir) ?? [])
-        } catch {
-            logger.warning("Retention pass skipped: the queue snapshot could not be read")
-            return
+        await withoutBuiltQueue("Retention pass", readingSnapshot: true) { reach in
+            await recordingRetention.sweep(.init(
+                excludedPaths: reach.excludedPaths, scopeRoot: reach.scopeRoot, securityScope: reach.securityScope,
+            ))
+        }
+    }
+
+    /// What a pass or a run started before a built queue is installed works
+    /// with: the output folder from `outputDirectory.current` and its scope,
+    /// held while `body` runs, and as held paths every track an unfinished
+    /// job in the snapshot names, besides the placeholder queue's own. An
+    /// unreadable snapshot skips `body` with a line naming `what`. Without
+    /// `readingSnapshot` (nothing a held path could protect) the snapshot is
+    /// not read.
+    private func withoutBuiltQueue(
+        _ what: String, readingSnapshot: Bool, _ body: @MainActor (PlaceholderReach) async -> Void,
+    ) async {
+        var held: Set<String> = []
+        if readingSnapshot {
+            do {
+                held = try PipelineQueue.heldTrackKeys(of: PipelineSnapshotStore.latestJobs(in: queue.logDir) ?? [])
+            } catch {
+                logger.warning("\(what, privacy: .public) skipped: the queue snapshot could not be read")
+                return
+            }
         }
         // Not `resolve()`: that reports an unreachable folder, which is news
         // where output is written, not on a pass at launch or on the hour.
@@ -93,17 +112,94 @@ extension PipelineController {
         let scoped = scope.start(root) ? root : nil
         defer { scoped.map(scope.stop) }
         let placeholder = queue
-        await recordingRetention.sweep(.init(
-            excludedPaths: { [weak placeholder] in held.union(placeholder?.retentionExcludedPaths ?? []) },
-            scopeRoot: scoped,
-            securityScope: scope,
+        await body(PlaceholderReach(
+            excludedPaths: { [weak placeholder, held] in held.union(placeholder?.retentionExcludedPaths ?? []) },
+            root: root, scopeRoot: scoped, securityScope: scope,
         ))
     }
 
+    /// See `withoutBuiltQueue`.
+    private struct PlaceholderReach {
+        let excludedPaths: () -> Set<String>
+        let root: URL
+        let scopeRoot: URL?
+        let securityScope: SecurityScopeAccess
+    }
+
     func startRecordingRetention() {
-        recordingRetention.heldPaths = { [weak self] in self?.queue.retentionExcludedPaths ?? [] }
+        // The compactor's entry in work counts as held: a pass that came due
+        // during the run would otherwise delete the WAV it is reading, or the
+        // copy it has just listed and named.
+        recordingRetention.heldPaths = { [weak self] in
+            guard let self else { return [] }
+            return queue.retentionExcludedPaths.union(recordingCompaction.inWorkPaths)
+        }
         observeRetentionSettings()
         scheduleRetentionSweeps()
+    }
+
+    // MARK: - Compaction
+
+    /// The compactor on the retention registry, reading the FLAC setting and
+    /// the settings retention acts on live.
+    static func makeRecordingCompaction(
+        retention: RecordingRetention, settings: AppSettings, worker: RecordingCompactionWorker,
+    ) -> RecordingCompaction {
+        RecordingCompaction(
+            registry: retention.registry,
+            isEnabled: { [weak settings] in settings?.compressKeptRecordings ?? false },
+            retentionSettings: { [weak retention] in
+                retention?.effectiveSettings ?? RecordingRetentionSettings(enabled: false, days: 0)
+            },
+            worker: worker,
+        )
+    }
+
+    /// Probe the codec off the main actor, then run once for the entries a
+    /// quit or a missing codec left marked. The run's sweep of leftover
+    /// partial copies happens whatever the probe found. The controller keeps
+    /// the task it returns as `compactionLaunch`.
+    func startRecordingCompaction() -> Task<Void, Never> {
+        recordingCompaction.heldPaths = { [weak self] in self?.queue.retentionExcludedPaths ?? [] }
+        let probe = queueEnvironment.probeKeptRecordingCodec
+        return Task { [weak self] in
+            let status = await Task.detached(priority: .utility) { probe() }.value
+            guard let self else { return }
+            recordingCompaction.codecStatus = status
+            switch status {
+            case let .unavailable(reason):
+                logger.warning("Kept recording codec: none (\(reason, privacy: .public))")
+
+            default:
+                logger.info("Kept recording codec: \(status.codecName, privacy: .public)")
+            }
+            await compactRecordings()
+        }
+    }
+
+    /// Run the compactor for the current queue, or, before a built queue is
+    /// installed, with what a retention pass at that point uses: the tracks
+    /// the snapshot's unfinished jobs name as held, and the output folder's
+    /// scope on `outputDirectory.current`, held until the run returns. An
+    /// unreadable snapshot skips the run. With nothing marked the run only
+    /// sweeps, and the snapshot is not read.
+    func compactRecordings() async {
+        guard queue.recordingCompaction == nil else {
+            await queue.compactRecordings()
+            return
+        }
+        let readingSnapshot = recordingCompaction.awaitingCount > 0
+        await withoutBuiltQueue("Compaction run", readingSnapshot: readingSnapshot) { reach in
+            await recordingCompaction.run(.init(
+                excludedPaths: reach.excludedPaths,
+                // No queue holds a finished job yet; the restore reads the
+                // snapshot, whose finished jobs are not run again.
+                repointJobAudio: { _, _, _ in },
+                outputRoot: reach.root,
+                scopeRoot: reach.scopeRoot,
+                securityScope: reach.securityScope,
+            ))
+        }
     }
 
     /// Start a pass once either retention setting has stopped changing for

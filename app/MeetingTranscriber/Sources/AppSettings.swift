@@ -697,6 +697,13 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(recordingRetentionEnabled, forKey: "recordingRetentionEnabled") }
     }
 
+    /// Convert the tracks of a finished recording in the output folder to
+    /// lossless FLAC after its job is done (`RecordingCompaction`). Off by
+    /// default. Capture, staging, record-only output and imports stay WAV.
+    var compressKeptRecordings: Bool {
+        didSet { defaults.set(compressKeptRecordings, forKey: "compressKeptRecordings") }
+    }
+
     /// Days a recording is kept after its recording date; 0 deletes it as soon
     /// as its outputs are written. Never negative.
     var recordingRetentionDays: Int {
@@ -1042,6 +1049,7 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         saveRawTranscriptSeparately = defaults.bool(forKey: "saveRawTranscriptSeparately", default: true)
         useAITitleForFilenames = defaults.bool(forKey: "useAITitleForFilenames", default: false)
         recordingRetentionEnabled = defaults.bool(forKey: "recordingRetentionEnabled", default: false)
+        compressKeptRecordings = defaults.bool(forKey: "compressKeptRecordings", default: false)
         recordingRetentionDays = max(0, defaults.object(forKey: "recordingRetentionDays") as? Int ?? 30)
         recordingStorageLimitEnabled = defaults.bool(forKey: "recordingStorageLimitEnabled", default: false)
         recordingStorageLimitGB = max(1, defaults.object(forKey: "recordingStorageLimitGB") as? Int ?? 10)

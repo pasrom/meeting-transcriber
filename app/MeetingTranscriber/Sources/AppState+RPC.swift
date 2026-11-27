@@ -127,6 +127,18 @@
                 badge: currentBadge,
                 updateStatus: updateStatusSnapshot(),
                 windows: windowsSnapshot(),
+                recordingStorage: recordingStorageSnapshot(),
+            )
+        }
+
+        private func recordingStorageSnapshot() -> RPCStateSnapshot.RecordingStorage {
+            let compaction = pipeline.recordingCompaction
+            return RPCStateSnapshot.RecordingStorage(
+                codec: compaction.codecStatus.codecName,
+                codecUnavailableReason: compaction.codecStatus.unavailableReason,
+                compacting: compaction.isRunning,
+                awaitingCompaction: compaction.awaitingCount,
+                lastRun: compaction.lastRunSummary,
             )
         }
 

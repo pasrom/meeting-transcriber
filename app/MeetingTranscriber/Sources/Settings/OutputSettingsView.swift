@@ -41,6 +41,12 @@ enum OutputSettingsLogic {
         return [selected] + available
     }
 
+    /// Why the FLAC toggle is disabled, or nil while it may be used. Only a
+    /// probe that found no FLAC disables it; one still running does not.
+    static func flacUnavailableReason(_ status: KeptRecordingCodecStatus) -> String? {
+        status.unavailableReason.map { "FLAC cannot be written on this Mac (\($0)), so recordings stay WAV." }
+    }
+
     /// The retention period as the Settings row shows it. Zero is spelled out,
     /// since "0 days" alone reads like "never".
     static func retentionDaysLabel(_ days: Int) -> String {
@@ -73,9 +79,18 @@ struct OutputSettingsView: View {
     /// The API key fields type into these, not into the Keychain.
     @StateObject private var apiKeyDrafts: ProtocolAPIKeyDrafts
 
-    // swiftlint:disable:next unneeded_escaping
-    init(settings: AppSettings, apiKeyDrafts: @autoclosure @escaping () -> ProtocolAPIKeyDrafts? = nil) {
+    /// What the launch probe found; the FLAC toggle is disabled, with the
+    /// reason, when this Mac cannot write FLAC.
+    let keptRecordingCodec: KeptRecordingCodecStatus
+
+    init(
+        settings: AppSettings,
+        keptRecordingCodec: KeptRecordingCodecStatus = .unknown,
+        // swiftlint:disable:next unneeded_escaping
+        apiKeyDrafts: @autoclosure @escaping () -> ProtocolAPIKeyDrafts? = nil,
+    ) {
         self.settings = settings
+        self.keptRecordingCodec = keptRecordingCodec
         _apiKeyDrafts = StateObject(wrappedValue: apiKeyDrafts() ?? ProtocolAPIKeyDrafts(settings: settings))
     }
 
@@ -113,7 +128,7 @@ struct OutputSettingsView: View {
             // Outside the record-only block as well: entries recorded before
             // record-only was switched on are still swept, and record-only
             // output itself is never recorded, so the setting cannot reach it.
-            recordingRetentionSection
+            recordingSections
 
             meetingNotesSection
             providerSection
@@ -183,6 +198,41 @@ struct OutputSettingsView: View {
         }
         .accessibilityIdentifier(A11yID.protocolProviderSection)
         .recordOnlyDisabled(settings.recordOnly)
+    }
+
+    /// Storage first: retention deletes what storage keeps.
+    @ViewBuilder
+    private var recordingSections: some View { // swiftlint:disable:this attributes
+        recordingStorageSection
+        recordingRetentionSection
+    }
+
+    private var recordingStorageSection: some View {
+        let unavailable = OutputSettingsLogic.flacUnavailableReason(keptRecordingCodec)
+        return Section("Recording Storage") {
+            Toggle("Store recordings as FLAC (lossless)", isOn: $settings.compressKeptRecordings)
+                .accessibilityIdentifier(A11yID.compressKeptRecordingsToggle)
+                // Still switchable off when it was on before FLAC went away.
+                .disabled(unavailable != nil && !settings.compressKeptRecordings)
+
+            if let reason = unavailable {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(A11yID.compressKeptRecordingsUnavailable)
+            }
+
+            Text(
+                "After a meeting is processed, its recording in the output folder's recordings folder is converted "
+                    + "to FLAC: _mix.flac, _app.flac and _mic.flac instead of the .wav files, smaller and with "
+                    + "exactly the same audio. Each file is checked against its WAV before the "
+                    + "WAV is removed. Recordings made before this was switched on, imported files and "
+                    + "record-only recordings stay as they are. Older versions of the app do not pair FLAC "
+                    + "tracks when they are imported again.",
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
     }
 
     private var recordingRetentionSection: some View {

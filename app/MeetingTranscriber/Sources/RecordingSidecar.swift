@@ -63,7 +63,7 @@ struct RecordingSidecar: Codable {
         triggerRaw.flatMap(Trigger.init(rawValue:))
     }
 
-    struct Files: Codable {
+    struct Files: Codable, Equatable {
         let mix: String
         let app: String?
         let mic: String?
@@ -234,6 +234,16 @@ struct RecordingSidecar: Codable {
             try? fm.removeItem(at: source)
         }
         return target
+    }
+
+    /// This sidecar with each file name in `files` passed through `rename`,
+    /// for a rewrite after the tracks changed container. Only the names
+    /// change; `files.mix` is always written, whether or not that file is
+    /// still there.
+    func withTrackNames(_ rename: (String) -> String) -> Self {
+        var copy = self
+        copy.files = Files(mix: rename(files.mix), app: files.app.map(rename), mic: files.mic.map(rename))
+        return copy
     }
 
     /// Decode the sidecar at `url`, or nil when missing/malformed.

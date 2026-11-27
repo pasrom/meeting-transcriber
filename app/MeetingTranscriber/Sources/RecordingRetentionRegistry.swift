@@ -39,10 +39,7 @@ final class RecordingRetentionRegistry {
     func register(jobID: UUID, paths: [URL], root: URL, recordedAt: Date) {
         guard !paths.isEmpty else { return }
         strip(Set(paths.map(RecordingRetentionPolicy.pathKey)), keeping: jobID)
-        let rootKey = RecordingRetentionPolicy.pathKey(root)
-        if let index = entries.firstIndex(where: { entry in
-            entry.jobID == jobID && RecordingRetentionPolicy.pathKey(entry.root) == rootKey
-        }) {
+        if let index = entryIndex(of: jobID, under: root) {
             let known = Set(entries[index].paths.map(RecordingRetentionPolicy.pathKey))
             entries[index].paths += paths.filter { !known.contains(RecordingRetentionPolicy.pathKey($0)) }
         } else {
@@ -75,6 +72,38 @@ final class RecordingRetentionRegistry {
             changed = true
         }
         if changed { save() }
+    }
+
+    /// Record that a compaction run owes the job's recording `kind`, on its
+    /// entry under `root` only: a run works under one output folder, and a
+    /// mark it cannot reach would stay for good. Returns whether the job has
+    /// an entry there.
+    @discardableResult
+    func markAwaiting(_ kind: CompactionKind, jobID: UUID, root: URL) -> Bool {
+        guard let index = entryIndex(of: jobID, under: root) else { return false }
+        if entries[index].awaiting.insert(kind).inserted { save() }
+        return true
+    }
+
+    /// Record that `kind` is done, or cannot be done, for the entry of `jobID`
+    /// under `root`. Only that entry: one under another root was not looked at.
+    /// Returns whether a mark was there to clear.
+    @discardableResult
+    func clearAwaiting(_ kind: CompactionKind, jobID: UUID, root: URL) -> Bool {
+        guard let index = entryIndex(of: jobID, under: root), entries[index].awaiting.contains(kind) else { return false }
+        entries[index].awaiting.remove(kind)
+        save()
+        return true
+    }
+
+    /// The entry of `jobID` under `root`: a job has one per output folder.
+    func entry(of jobID: UUID, under root: URL) -> RetainedRecording? {
+        entryIndex(of: jobID, under: root).map { entries[$0] }
+    }
+
+    private func entryIndex(of jobID: UUID, under root: URL) -> Int? {
+        let rootKey = RecordingRetentionPolicy.pathKey(root)
+        return entries.firstIndex { $0.jobID == jobID && RecordingRetentionPolicy.pathKey($0.root) == rootKey }
     }
 
     /// Follow files a rename moved, so the entry keeps naming where they are.

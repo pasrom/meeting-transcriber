@@ -47,6 +47,12 @@ final class AppSettingsRecordingRetentionTests: XCTestCase {
         XCTAssertEqual(makeSettings().recordingRetentionDays, 0)
     }
 
+    func testCompressDefaultsOffAndPersists() {
+        XCTAssertFalse(makeSettings().compressKeptRecordings)
+        makeSettings().compressKeptRecordings = true
+        XCTAssertTrue(makeSettings().compressKeptRecordings)
+    }
+
     func testBothPersistAcrossInstances() {
         let settings = makeSettings()
         settings.recordingRetentionEnabled = true
