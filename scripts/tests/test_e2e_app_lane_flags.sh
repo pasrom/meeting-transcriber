@@ -44,7 +44,9 @@ for args in \
     "--mic-device-change --crash-recovery" \
     "--two-meetings --crash-recovery" \
     "--reimport-latest --record-only" \
-    "--title-source --crash-recovery"; do
+    "--title-source --crash-recovery" \
+    "--flac --record-only" \
+    "--flac --two-meetings"; do
     # shellcheck disable=SC2086 # word splitting is the point
     st="$(parse_status $args)"
     [ "$st" = 2 ] && ok "refuses: $args" || bad "refuses: $args" "exit $st"
@@ -78,7 +80,8 @@ for args in \
     "--redeploy-only" \
     "--quit-flush --keep-recordings" \
     "--mic-stall" \
-    "--mic-stall-late"; do
+    "--mic-stall-late" \
+    "--no-build --flac"; do
     # shellcheck disable=SC2086 # word splitting is the point
     st="$(parse_status $args)"
     [ "$st" = 0 ] && ok "accepts: ${args:-<no flags>}" || bad "accepts: ${args:-<no flags>}" "exit $st"

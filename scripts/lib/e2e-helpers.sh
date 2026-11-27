@@ -2545,10 +2545,45 @@ retention_reads_as_on() {
 #   missing  the recording was not there when the job finished
 #   deleted  it was there, and gone `grace_s` later
 #   kept     it was there both times
+#
+# `mix` is the WAV name; its FLAC twin counts as the same recording, since
+# with "Store recordings as FLAC" on the app converts the tracks right after
+# done, within the grace period.
 retention_default_verdict() {
     local enabled="$1" mix="$2" grace_s="$3"
     if retention_reads_as_on "$enabled"; then echo skip; return 0; fi
-    if [ ! -f "$mix" ]; then echo missing; return 0; fi
+    if ! kept_file_exists "$mix"; then echo missing; return 0; fi
     sleep "$grace_s"
-    if [ -f "$mix" ]; then echo kept; else echo deleted; fi
+    if kept_file_exists "$mix"; then echo kept; else echo deleted; fi
+}
+
+# kept_file_exists <path-to-track.wav>: true when the track is there as the
+# WAV the recorder wrote or as the FLAC the app may have converted it to
+# after the job (`<stem>_mix.flac` beside `<stem>_mix.wav`).
+kept_file_exists() {
+    [ -f "$1" ] || [ -f "${1%.wav}.flac" ]
+}
+
+# kept_track <dir> <stem-or-glob> <mix|app|mic>: the path of that track of a
+# kept recording directly in <dir>, as `.wav`, else as `.flac`: the order the
+# app's own readers take them in. A glob stem (`'*'`) takes the first match.
+# Prints nothing and returns 1 when neither exists. Not for staging, which
+# only ever holds WAV.
+kept_track() {
+    local dir="$1" stem="$2" track="$3" ext found
+    for ext in wav flac; do
+        found="$(find "$dir" -maxdepth 1 -type f -name "${stem}_${track}.${ext}" 2>/dev/null | head -1)"
+        if [ -n "$found" ]; then
+            echo "$found"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# is_native_flac <file>: true when the file starts with the FLAC stream
+# marker. A FLAC stream inside a CAF file decodes through the same Apple API
+# that wrote it, so only the first bytes tell the two apart.
+is_native_flac() {
+    [ "$(head -c 4 "$1" 2>/dev/null)" = "fLaC" ]
 }

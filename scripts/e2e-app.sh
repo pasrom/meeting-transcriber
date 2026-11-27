@@ -48,6 +48,7 @@ MIC_STALL=""             # stall | stall-after-delivery: withhold the mic's buff
 UPGRADE=false            # start the build on the data v0.8.1 leaves behind, in an isolated home (see run_upgrade)
 PROTOCOL_LANE=false      # generate the protocol through a local OpenAI-compatible stub and assert request + file (see run_protocol_lane)
 PROTOCOL_REPAIR=false    # only finish what a killed --protocol run left on the host, then exit (see _pp_repair)
+FLAC=false               # one meeting with "Store recordings as FLAC" on for this launch; assert the conversion (see run_flac_meeting)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -77,13 +78,14 @@ while [ $# -gt 0 ]; do
         --upgrade)          UPGRADE=true ;;
         --protocol)         PROTOCOL_LANE=true ;;
         --protocol-repair)  PROTOCOL_REPAIR=true ;;
+        --flac)             FLAC=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                   [--reimport-recorded | --reimport-latest] [--keep-recordings]
                   [--naming-escape] [--naming-switch] [--echo-bleed] [--echo-cancel]
                   [--naming-confirm] [--quit-flush] [--upgrade] [--protocol]
-                  [--fixture path/to.wav]
+                  [--flac] [--fixture path/to.wav]
 
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app           Leave the dev app running on exit. Default: quit it.
@@ -306,6 +308,13 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        always() step after the lane. Outside CI a running dev
                        app is quit only with --quit-foreign-app. Runs nothing
                        else; incompatible with the lane flags.
+  --flac               The default meeting with "Store recordings as FLAC" on for
+                       this launch only (a launch argument; nothing stored). Waits
+                       for the converter on /state, then asserts the three tracks
+                       are native FLAC with no WAV left, no partial copy, the
+                       retention registry listing the FLAC names, the FLAC app
+                       track carrying the fixture, and the FLAC pair importing
+                       again as one job that finishes.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
   --quit-foreign-app   Outside CI the driver refuses to start while a dev app it did
                        not launch is running (someone may be using it). Pass this
@@ -519,6 +528,7 @@ fi
 _add_lane "$UPGRADE" --upgrade
 _add_lane "$PROTOCOL_LANE" --protocol
 _add_lane "$PROTOCOL_REPAIR" --protocol-repair
+_add_lane "$FLAC" --flac
 case "$_LANES" in
     *" "*" "*)
         echo "Error: one lane per run; got$_LANES" >&2
@@ -2095,6 +2105,12 @@ if [ "${GITHUB_ACTIONS:-}" = "true" ] \
     _RETENTION_LAUNCH_ARGS=(--args -recordingRetentionDays "<integer>0</integer>")
     log "CI: recording retention period 0 days for this run (switch left as the host has it)"
 fi
+# --flac turns the conversion on the same way, for this launch only.
+if [ "$FLAC" = true ]; then
+    [ ${#_RETENTION_LAUNCH_ARGS[@]} -gt 0 ] || _RETENTION_LAUNCH_ARGS=(--args)
+    _RETENTION_LAUNCH_ARGS+=(-compressKeptRecordings YES)
+    log "[flac] Store recordings as FLAC on for this launch"
+fi
 
 log "Launching $DEV_BUNDLE_DEPLOY"
 if [ -n "$MIC_STALL" ]; then
@@ -2869,6 +2885,79 @@ run_mic_only() {
     assert_app_alive
 
     log "$label: PASS"
+}
+
+# --flac: the default meeting with "Store recordings as FLAC" on for this
+# launch only (a launch argument, nothing stored). After the job is done the
+# app converts the kept tracks in the background, so the lane waits for the
+# converter on /state instead of sleeping, then asserts: every track of the
+# stem is native FLAC (`fLaC`, not FLAC inside a CAF, which decodes the same
+# way) and no WAV of the stem is left; no hidden partial copy is left; the
+# retention registry lists exactly the FLAC tracks and the sidecar, so
+# retention can still delete them; the FLAC app track carries the fixture
+# (`mt-cli wav-verdict`); and the FLAC pair imports again as one job that
+# finishes. The retention-default check of run_one_meeting accepts the FLAC
+# twin of the mix, since the conversion lands within its grace period.
+_FLAC_COMPACTION_TIMEOUT_S=180
+run_flac_meeting() {
+    local label="[flac]"
+    run_one_meeting "$label"
+    local transcript_path stem
+    transcript_path="$(jq -r '.transcriptPath // empty' <<<"$LAST_MEETING_JOB")"
+    stem="$(basename "$transcript_path" .txt)"
+
+    # The codec first: without FLAC nothing is converted, and waiting for the
+    # converter would end in a timeout that names the wrong cause.
+    poll_rpc /state --each assert_app_alive 30 1 rpc_is '.recordingStorage.codec != "unknown"' \
+        || fail "$(rpc_why $? /state "$label: the launch probe did not answer within 30s")"
+    rpc_is '.recordingStorage.codec == "flac"' \
+        || fail "$label: the launch probe found no FLAC on this Mac: codec $(rpc_field '.recordingStorage.codec'), reason $(rpc_field '.recordingStorage.codecUnavailableReason // "none"')"
+    poll_rpc /state --each assert_app_alive "$_FLAC_COMPACTION_TIMEOUT_S" 1 rpc_is \
+        '.recordingStorage.compacting == false and .recordingStorage.awaitingCompaction == 0' \
+        || fail "$(rpc_why $? /state "$label: the converter did not finish within ${_FLAC_COMPACTION_TIMEOUT_S}s")"
+    log "$label: $(rpc_field '.recordingStorage.lastRun // "no run logged"')"
+
+    local track path
+    for track in mix app mic; do
+        path="$(kept_track "$RECORDINGS_DIR" "$stem" "$track")" || fail "$label: no $track track of $stem in $RECORDINGS_DIR"
+        [ "${path##*.}" = flac ] || fail "$label: the $track track is still $(basename "$path"); expected it converted to FLAC"
+        is_native_flac "$path" || fail "$label: $(basename "$path") does not start with fLaC (FLAC inside another container?)"
+    done
+    log "$label: all three tracks of $stem are native FLAC, no WAV left"
+    local partials
+    partials="$(find "$RECORDINGS_DIR" -maxdepth 1 -name ".${stem}_*.partial.flac" 2>/dev/null)"
+    [ -z "$partials" ] || fail "$label: a partial copy was left behind: $partials"
+
+    local registry listed expected
+    registry="$_APP_SUPPORT_DIR/ipc/retained_recordings.json"
+    [ -f "$registry" ] || fail "$label: no retention registry at $registry"
+    listed="$(jq -r --arg stem "$stem" '[.[] | .paths[] | split("/") | last | select(startswith($stem + "_"))] | sort | join(" ")' "$registry")"
+    expected="${stem}_app.flac ${stem}_mic.flac ${stem}_mix.flac ${stem}_recording.json"
+    [ "$listed" = "$expected" ] || fail "$label: the registry lists '$listed' for $stem, expected '$expected'"
+    log "$label: the registry lists the FLAC tracks and the sidecar"
+
+    local app_flac mic_flac verdict
+    app_flac="$RECORDINGS_DIR/${stem}_app.flac"
+    mic_flac="$RECORDINGS_DIR/${stem}_mic.flac"
+    if verdict="$("$MTCLI" wav-verdict "$app_flac" --threshold-dbfs=$WAV_VERDICT_THRESHOLD_DBFS --min-active-seconds="$WAV_VERDICT_FIXTURE_MIN_ACTIVE_S")"; then
+        log "$label: FLAC app track: $verdict"
+    else
+        fail "$label: the FLAC app track is silent or short: $verdict"
+    fi
+
+    local enq ids job
+    enq="$(rpc_post /v1/jobs "$(jq -nc --arg a "$app_flac" --arg m "$mic_flac" '{paths: [$a, $m]}')")"
+    ids="$(jq -r '.jobIDs | length' <<<"$enq" 2>/dev/null || echo 0)"
+    [ "$ids" = "1" ] || fail "$label: POST /v1/jobs returned $ids job(s) for the FLAC pair, expected 1 (response: $enq)"
+    job="$(jq -r '.jobIDs[0]' <<<"$enq")"
+    poll_rpc "/v1/jobs/$job" --each assert_app_alive --judge-deadline-read "$PIPELINE_TIMEOUT_S" 3 \
+        rpc_is "$_JOB_TERMINAL or .state == \"speakerNamingPending\"" \
+        || fail "$(rpc_why $? "/v1/jobs/$job" "$label: the re-import ($job) did not settle within ${PIPELINE_TIMEOUT_S}s")"
+    if rpc_is '.state == "speakerNamingPending"'; then
+        _naming_skip "$job" || fail "$label: could not skip naming for the re-import ($job)"
+    fi
+    _await_job_done "$label" "the re-import of the FLAC pair" "$job" 3 fail
+    log "$label: the FLAC pair imported again as one job and finished"
 }
 
 # Record-only counterpart: trigger one meeting, wait for sidecar+WAV to
@@ -4196,8 +4285,9 @@ run_mic_stall() {
     # no audio (or only its first seconds in the late variant). In the
     # isolated home the only recording is this one.
     local app_wav mic_wav mic_s verdict
-    app_wav="$(find "$RECORDINGS_DIR" -name "*_app.wav" -type f 2>/dev/null | head -1)"
-    mic_wav="$(find "$RECORDINGS_DIR" -name "*_mic.wav" -type f 2>/dev/null | head -1)"
+    # As WAV or, with "Store recordings as FLAC" on, as the FLAC copy.
+    app_wav="$(kept_track "$RECORDINGS_DIR" '*' app || true)"
+    mic_wav="$(kept_track "$RECORDINGS_DIR" '*' mic || true)"
     [ -n "$app_wav" ] || fail "$label: no app track under $RECORDINGS_DIR"
     if verdict="$("$MTCLI" wav-verdict "$app_wav" --threshold-dbfs=$WAV_VERDICT_THRESHOLD_DBFS --min-active-seconds="$WAV_VERDICT_FIXTURE_MIN_ACTIVE_S")"; then
         log "$label: app track $(basename "$app_wav"): $verdict"
@@ -5634,6 +5724,8 @@ elif [ "$UPGRADE" = true ]; then
     run_upgrade
 elif [ "$PROTOCOL_LANE" = true ]; then
     run_protocol_lane
+elif [ "$FLAC" = true ]; then
+    run_flac_meeting
 elif [ "$TWO_MEETINGS" = true ]; then
     # Meeting 1 with a usable window title, meeting 2 without one: the two
     # halves of the title source (see run_title_source).
