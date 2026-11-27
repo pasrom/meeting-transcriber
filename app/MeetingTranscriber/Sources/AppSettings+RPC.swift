@@ -102,6 +102,7 @@
                 includeFullTranscriptInProtocol: includeFullTranscriptInProtocol,
                 saveRawTranscriptSeparately: saveRawTranscriptSeparately,
                 useAITitleForFilenames: useAITitleForFilenames,
+                compressKeptRecordings: compressKeptRecordings,
             )
         }
 

@@ -31,6 +31,12 @@ struct RetainedRecording: Codable, Equatable, Sendable {
     /// (export set to replace the local Markdown). The page is the output
     /// then, and a missing `outputPath` does not mean the user deleted it.
     var outputExported = false
+    /// Work a compaction run still owes this recording (`RecordingCompaction`),
+    /// set when its job finished while a setting asked for it and cleared per
+    /// kind once that work is done or cannot be done. Only marked entries are
+    /// picked up by the automatic runs, so recordings from before the setting
+    /// was on are left to an explicit action.
+    var awaiting: Set<CompactionKind> = []
 
     init(jobID: UUID, paths: [URL], root: URL, recordedAt: Date, eligibleAt: Date? = nil, outputPath: URL? = nil) {
         self.jobID = jobID
@@ -42,11 +48,14 @@ struct RetainedRecording: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case jobID, paths, root, recordedAt, eligibleAt, outputPath, outputExported
+        case jobID, paths, root, recordedAt, eligibleAt, outputPath, outputExported, awaiting
     }
 
-    /// `outputExported` decodes as absent-means-false, so an entry written
-    /// before it existed still reads.
+    /// `outputExported` decodes as absent-means-false and `awaiting` as
+    /// absent-means-empty, so an entry written before either existed still
+    /// reads. `awaiting` is read as names and a name this build does not know
+    /// is dropped, so a kind a newer build added cannot make the whole entry,
+    /// and with it the registry file, unreadable.
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         jobID = try container.decode(UUID.self, forKey: .jobID)
@@ -56,7 +65,40 @@ struct RetainedRecording: Codable, Equatable, Sendable {
         eligibleAt = try container.decodeIfPresent(Date.self, forKey: .eligibleAt)
         outputPath = try container.decodeIfPresent(URL.self, forKey: .outputPath)
         outputExported = try container.decodeIfPresent(Bool.self, forKey: .outputExported) ?? false
+        let names = (try? container.decodeIfPresent([String].self, forKey: .awaiting))
+        awaiting = Set((names ?? []).compactMap(CompactionKind.init(rawValue:)))
     }
+
+    /// `awaiting` is written only when it holds something, so an entry with
+    /// nothing pending reads the same to an older build as before.
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(jobID, forKey: .jobID)
+        try container.encode(paths, forKey: .paths)
+        try container.encode(root, forKey: .root)
+        try container.encode(recordedAt, forKey: .recordedAt)
+        try container.encodeIfPresent(eligibleAt, forKey: .eligibleAt)
+        try container.encodeIfPresent(outputPath, forKey: .outputPath)
+        try container.encode(outputExported, forKey: .outputExported)
+        if !awaiting.isEmpty {
+            try container.encode(awaiting.map(\.rawValue).sorted(), forKey: .awaiting)
+        }
+    }
+}
+
+/// A kind of work `RecordingCompaction` does on a finished recording, each
+/// asked for by its own setting and marked and cleared on its own.
+enum CompactionKind: String, Codable, CaseIterable, Sendable {
+    // SwiftFormat strips a raw value equal to the case name and SwiftLint asks
+    // for one on a camel-cased case; resolved as on `DualTrackViability`.
+    // swiftlint:disable raw_value_for_camel_cased_codable_enum
+
+    /// Convert the WAV tracks to lossless FLAC (`AppSettings.compressKeptRecordings`).
+    case flac
+    /// Remove a combined recording the two tracks rebuild exactly. Defined so
+    /// the stored shape needs no second migration; nothing sets it yet.
+    case mixDrop
+    // swiftlint:enable raw_value_for_camel_cased_codable_enum
 }
 
 /// The two retention settings, read together on every pass.

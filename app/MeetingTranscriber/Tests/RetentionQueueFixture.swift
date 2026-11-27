@@ -39,6 +39,8 @@ final class RetentionQueueFixture {
         parksForNaming: Bool = false,
         notion: NotionExportConfiguration? = nil,
         moveArtifact: @escaping (URL, URL) throws -> Void = PipelineQueue.liveMoveArtifact,
+        compaction: RecordingCompaction? = nil,
+        securityScope: SecurityScopeAccess = .live,
     ) -> PipelineQueue {
         let factory: () -> MockProtocolGen? = provider.map { provider in { provider.generator } } ?? { protocolGen }
         let engine = MockEngine()
@@ -61,22 +63,36 @@ final class RetentionQueueFixture {
             diarizeEnabled: true,
             notionExportConfigurationProvider: notion.map { configuration in { .ready(configuration) } },
             inFlightRuns: InFlightRunRegistry(),
+            securityScope: securityScope,
             recordingRetention: retention,
+            recordingCompaction: compaction,
             moveArtifact: moveArtifact,
         )
     }
 
     /// A dual-source recording sitting in staging, as the recorder leaves it.
-    func makeRecordedJob(in dir: URL? = nil) throws -> PipelineJob {
+    /// `pcm16` writes 16-bit tracks of different content, as the recorder
+    /// does, which the FLAC conversion takes; otherwise one float WAV copied
+    /// three times.
+    func makeRecordedJob(in dir: URL? = nil, pcm16: Bool = false) throws -> PipelineJob {
         let dir = dir ?? staging
         let stem = "20270115_120000_\(UUID().uuidString.prefix(6))"
-        let source = try createTestAudioFile(in: dir)
         let mix = dir.appendingPathComponent("\(stem)\(RecordingFileSuffix.mix)")
         let app = dir.appendingPathComponent("\(stem)\(RecordingFileSuffix.app)")
         let mic = dir.appendingPathComponent("\(stem)\(RecordingFileSuffix.mic)")
-        try FileManager.default.moveItem(at: source, to: mix)
-        try FileManager.default.copyItem(at: mix, to: app)
-        try FileManager.default.copyItem(at: mix, to: mic)
+        if pcm16 {
+            for (index, url) in [mix, app, mic].enumerated() {
+                let samples = (0 ..< 3 * AudioConstants.targetSampleRate).map { frame in
+                    Float(Int16(clamping: Int(6000 * sin(Double(frame) * 0.01 * Double(index + 1))))) / 32768
+                }
+                try AudioMixer.saveWAV(samples: samples, sampleRate: AudioConstants.targetSampleRate, url: url)
+            }
+        } else {
+            let source = try createTestAudioFile(in: dir)
+            try FileManager.default.moveItem(at: source, to: mix)
+            try FileManager.default.copyItem(at: mix, to: app)
+            try FileManager.default.copyItem(at: mix, to: mic)
+        }
         var job = PipelineJob(
             meetingTitle: "Weekly Sync", appName: "Teams",
             mixPath: mix, appPath: app, micPath: mic, micDelay: 0,

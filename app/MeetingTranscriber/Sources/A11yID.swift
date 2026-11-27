@@ -128,6 +128,8 @@ enum A11yID {
     static let recordingStorageLimitToggle = "recordingStorageLimitToggle"
     static let recordingStorageLimitStepper = "recordingStorageLimitStepper"
     static let recordingStorageStatus = "recordingStorageStatus"
+    static let compressKeptRecordingsToggle = "compressKeptRecordingsToggle"
+    static let compressKeptRecordingsUnavailable = "compressKeptRecordingsUnavailable"
     static let vadSection = "vadSection"
     static let staleNamingTimeoutPicker = "staleNamingTimeoutPicker"
     static let echoCancellationToggle = "echoCancellationToggle"
