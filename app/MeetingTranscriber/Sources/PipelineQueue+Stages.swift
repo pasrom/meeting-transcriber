@@ -120,7 +120,7 @@ extension PipelineQueue {
             participants: job.participants,
             // Anchor the basename on the meeting start; reimport/orphan jobs
             // have no recorded start, so fall back to the enqueue time.
-            slug: namingSlug(title: job.meetingTitle, jobID: job.id, startTime: job.artifactStartTime),
+            slug: job.artifactStem,
         )
     }
 

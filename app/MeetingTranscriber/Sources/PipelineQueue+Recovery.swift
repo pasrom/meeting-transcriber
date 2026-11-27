@@ -134,6 +134,9 @@ extension PipelineQueue {
 
         discardFinishedJobs(from: &loaded)
 
+        // Before the discard rule, which would otherwise drop a job whose
+        // relocation finished after its last snapshot write.
+        repointRelocatedAudio(&loaded, interruptedIn: interruptedStates)
         discardJobsWithMissingAudio(&loaded, interruptedIn: interruptedStates)
 
         // Drop what another queue is still running. This is where issue #558
@@ -299,6 +302,65 @@ extension PipelineQueue {
         return true
     }
 
+    /// Point restored jobs at audio their relocation already moved
+    /// (`RelocatedAudioRepoint`), and do what stage 3 will not do for them:
+    /// move the recording sidecar still beside the staging mix (stage 3 takes
+    /// it only from a job naming that mix) and register the repointed files
+    /// and that sidecar (stage 3 registers only what its own run moves). Why,
+    /// and what is left out: "The snapshot can lag the move" in
+    /// `docs/architecture/pipeline.md`. The restore's snapshot write persists
+    /// the new paths.
+    private func repointRelocatedAudio(_ loaded: inout [PipelineJob], interruptedIn: [UUID: JobState]) {
+        guard let outputDir else { return }
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        let fm = FileManager.default
+        // A job another queue still runs is dropped further down, and that
+        // queue's run owns its files and its entry.
+        for index in loaded.indices where !inFlightRuns.isInFlight(loaded[index]) {
+            let job = loaded[index]
+            guard let paths = RelocatedAudioRepoint.plan(
+                for: job, stagingDir: stagingDir, recordingsDir: recordingsDir,
+                exists: { fm.fileExists(atPath: $0.path) },
+            ) else { continue }
+            loaded[index].recordRelocatedAudio(paths)
+            let before = [job.mixPath, job.appPath, job.micPath]
+            var registered = zip(before, [paths.mix, paths.app, paths.mic])
+                .compactMap { old, new in new != old ? new : nil }
+            if let stagingMix = job.mixPath, let relocatedMix = paths.mix, relocatedMix != stagingMix,
+               let sidecar = takeRecordingSidecar(of: job, from: stagingMix, besideRelocated: relocatedMix) {
+                registered.append(sidecar)
+            }
+            // Not `registerRelocatedAudio`: it looks the job up in `jobs`,
+            // which the restore has not filled yet.
+            recordingRetention?.registry.register(
+                jobID: job.id, paths: registered, root: outputDir, recordedAt: job.artifactStartTime,
+            )
+            logger.info("[\(job.shortID, privacy: .public)] repointed_relocated_audio")
+            eventLog.append(
+                jobID: job.id, event: "repointed_relocated_audio", from: interruptedIn[job.id], to: job.state,
+            )
+        }
+    }
+
+    /// The recording sidecar of a repointed mix, under the stem the mix was
+    /// found under, or nil when there is none there. One still beside the
+    /// staging mix is moved first; one already there is taken as it is (a
+    /// kill after stage 3 moved it but before stage 3 registered anything).
+    private func takeRecordingSidecar(of job: PipelineJob, from stagingMix: URL, besideRelocated mix: URL) -> URL? {
+        guard let relocated = RecordingSidecar.recordingSidecarURL(besideMix: mix),
+              let staged = RecordingSidecar.recordingSidecarURL(besideMix: stagingMix) else { return nil }
+        let fm = FileManager.default
+        if fm.fileExists(atPath: staged.path),
+           RecordingSidecar.moveRecordingSidecar(
+               from: staged, toDirectory: relocated.deletingLastPathComponent(),
+               stem: String(relocated.lastPathComponent.dropLast(RecordingSidecar.recordingFilenameSuffix.count)),
+           ) == nil {
+            // No path: the file name carries the meeting title.
+            logger.warning("[\(job.shortID, privacy: .public)] repoint_sidecar_not_moved")
+        }
+        return fm.fileExists(atPath: relocated.path) ? relocated : nil
+    }
+
     /// Discard jobs whose audio file no longer exists, EXCEPT
     /// `.speakerNamingPending` — those have their own slug-based `_16k.wav`
     /// sidecar and don't need the original mix.wav. Paired imports with nil
@@ -351,11 +413,15 @@ extension PipelineQueue {
     /// alone they stay for good, and for a dual-source hour that is hundreds of
     /// MB per job.
     ///
-    /// **Only the `.done` rule feeds this.** The missing-audio rule now fires on
-    /// three populations only: snapshots written before a job carried its
-    /// relocated paths, files the user really did delete, and relocations that
-    /// failed. The first of those can still be a late re-diarization or late
-    /// re-confirm running on a queue that `rebuild()` swapped out, reading the
+    /// **Only the `.done` rule feeds this.** The missing-audio rule fires on few
+    /// populations, after `repointRelocatedAudio` took the jobs whose audio
+    /// stage 3 moved: snapshots written before a job carried its relocated
+    /// paths, files the user really did delete, relocations that failed, and
+    /// relocated audio the repoint cannot find (under an output folder the
+    /// setting has moved away from, or under a stem an AI-title rename changed
+    /// before its snapshot write landed). The first of those can still be a
+    /// late re-diarization or late re-confirm running on a queue that
+    /// `rebuild()` swapped out, reading the
     /// very sidecars this would delete, and the registry cannot separate them
     /// because only `processNext` ever claims a run. So that rule keeps its
     /// hands off, at the price of leaving those legacy jobs' sidecars behind.
