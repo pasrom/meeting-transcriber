@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Bindable var settings: AppSettings
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
+    var gigaAMEngine: GigaAMEngine = .init()
     var updateChecker: UpdateChecker?
     /// Backs the Launch at Login toggle. Nil hides the row, which is what tests get.
     var loginItem: LoginItemController?
@@ -80,6 +81,7 @@ struct SettingsView: View {
                 settings: settings,
                 whisperKitEngine: whisperKitEngine,
                 parakeetEngine: parakeetEngine,
+                gigaAMEngine: gigaAMEngine,
                 captionWarmup: captionWarmup,
                 legacyModels: legacyWhisperModels,
             )

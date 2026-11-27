@@ -318,6 +318,7 @@ struct MeetingTranscriberApp: App {
                 settings: appState.settings,
                 whisperKitEngine: appState.engines.whisperKit,
                 parakeetEngine: appState.engines.parakeetEngine,
+                gigaAMEngine: appState.engines.gigaAMEngine,
                 updateChecker: appState.updateChecker,
                 loginItem: loginItem,
                 notificationVisibility: appState.permissions.notificationVisibility,

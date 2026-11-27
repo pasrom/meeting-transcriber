@@ -170,6 +170,59 @@ final class LaunchModelDownloadTests: XCTestCase {
         XCTAssertNotNil(engines.whisperKit.loadFailureReason)
     }
 
+    func testLaunchWithIdleUnloadingDownloadsMissingGigaAMWithoutLoadingIt() async throws {
+        for onDisk in [false, true] {
+            let settings = try makeIsolatedSettings()
+            settings.unloadModelsWhenIdle = true
+            settings.transcriptionEngine = .gigaAM
+            let engines = EngineController(settings: settings)
+            var downloads = 0
+            var loads = 0
+            engines.gigaAMEngine.installModelDownloadForTesting(isInstalled: { onDisk }, install: { downloads += 1 })
+            engines.gigaAMEngine.installModelLoadForTesting {
+                loads += 1
+                return { _ in [] }
+            }
+
+            await engines.preloadActiveModel()
+
+            XCTAssertEqual(downloads, onDisk ? 0 : 1)
+            XCTAssertEqual(loads, 0)
+            XCTAssertEqual(engines.gigaAMEngine.modelState, .unloaded)
+        }
+    }
+
+    func testGigaAMJobJoinsTheDownloadThenLoadsTheModel() async throws {
+        let settings = try makeIsolatedSettings()
+        settings.unloadModelsWhenIdle = true
+        settings.transcriptionEngine = .gigaAM
+        let engines = EngineController(settings: settings)
+        let gate = MainActorGate()
+        var installed = false
+        var downloads = 0
+        engines.gigaAMEngine.installModelDownloadForTesting(isInstalled: { installed }, install: {
+            downloads += 1
+            await gate.wait()
+            installed = true
+        })
+        engines.gigaAMEngine.installModelLoadForTesting {
+            XCTAssertTrue(installed)
+            return { _ in [.init(text: "▁Тест.", firstFrame: 0, endFrame: 1)] }
+        }
+
+        let launch = Task { await engines.preloadActiveModel() }
+        await waitFor(gate.hasWaiter)
+        let job = Task {
+            gate.open()
+            let samples = [Float](repeating: 0, count: engines.gigaAMEngine.minimumAudioFrames)
+            return try await engines.gigaAMEngine.transcribeSamples(samples)
+        }
+        await launch.value
+        let text = try await job.value
+        XCTAssertEqual(text, "Тест.")
+        XCTAssertEqual(downloads, 1)
+    }
+
     func testAJobDuringTheParakeetLaunchDownloadLoadsOnlyAfterIt() async throws {
         let settings = try makeIsolatedSettings()
         settings.transcriptionEngine = .parakeet
