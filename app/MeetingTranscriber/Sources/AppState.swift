@@ -264,6 +264,7 @@ final class AppState {
             liveEnabled: { [settings] in settings.liveTranscriptionEnabled },
             engineSupportsLive: { [settings] in settings.transcriptionEngine.supportsLiveTranscription },
             engineLanguage: { [settings] in settings.activeEngineLanguageOrNil },
+            cloudTranscriptionEnabled: { [settings] in settings.cloudTranscriptionEnabled },
             verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
             echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },
             makeController: liveControllerFactory, warmupQueue: warmupQueue,
@@ -463,18 +464,10 @@ final class AppState {
     }
 
     /// True when the caption-bar overlay should be visible: captions are
-    /// available per the shared gate (master toggle on, and either the engine
-    /// implements `transcribeSamples` or a language-driven streaming backend
-    /// is selected) AND an actual recording is in progress AND the overlay
-    /// toggle is on. Overlay visibility is UI-only; the pipeline still runs.
+    /// available (`LiveTranscriptionCoordinator.overlayHasCaptions`) AND a
+    /// recording is in progress AND the overlay toggle is on. UI-only.
     var shouldShowLiveCaptions: Bool {
-        LiveCaptionsGate.overlayVisible(
-            liveEnabled: settings.liveTranscriptionEnabled,
-            engineLanguage: settings.activeEngineLanguageOrNil,
-            engineSupportsLive: settings.transcriptionEngine.supportsLiveTranscription,
-            isRecording: watching.isRecording,
-            overlayEnabled: settings.liveCaptionsOverlayEnabled,
-        )
+        liveTranscription.overlayHasCaptions && watching.isRecording && settings.liveCaptionsOverlayEnabled
     }
 
     var currentBadge: BadgeKind {

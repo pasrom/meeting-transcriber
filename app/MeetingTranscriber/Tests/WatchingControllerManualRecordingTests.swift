@@ -57,6 +57,30 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         XCTAssertTrue(controller.isManualRecording)
     }
 
+    /// The caption bar's per-recording flag is cleared when the stop starts
+    /// the flush, not inside the flush task: a quick restart's attach could
+    /// otherwise run first and have its flag cleared by the late flush.
+    func testStoppingARecordingClearsItsCaptionFlagBeforeTheFlushRuns() async {
+        var flagAtFlush = "no flush"
+        var controller: WatchingController?
+        let flush: @MainActor () -> Void = {
+            flagAtFlush = String(describing: controller?.liveTranscription.recordingHasCaptions)
+        }
+        controller = makeWatchingController(
+            logDir: tmpDir, noMic: false, permissionHealth: .allHealthy, captionFlushOverride: flush,
+        )
+        guard let controller else { return }
+        controller.startMicrophoneRecording()
+        await waitFor(controller.watchLoop?.state == .recording, timeout: .seconds(2))
+        XCTAssertEqual(controller.watchLoop?.state, .recording, "test premise: the recording started")
+        await controller.liveTranscription.attachSinks(to: DualSourceRecorder())
+        XCTAssertNotNil(controller.liveTranscription.recordingHasCaptions, "test premise: the attach set the flag")
+
+        await controller.stopManualRecording()
+
+        XCTAssertEqual(flagAtFlush, "nil", "the flush must start with the flag already cleared")
+    }
+
     // MARK: - What the user is told
 
     /// A start reports itself. These two live here rather than at the

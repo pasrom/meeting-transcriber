@@ -21,12 +21,12 @@ final class NemotronAsrManagerTests: XCTestCase {
         let codes = Set((PickerLanguages.whisperKit + PickerLanguages.parakeet).map(\.code)).subtracting(["", "en"])
         XCTAssertEqual(codes, Set(expected.keys), "a picker language has no expected caption route")
         for (code, key) in expected {
-            let strategy = LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: code, engineSupportsLive: true)
+            let strategy = LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: code, engineSupportsLive: true, cloudTranscriptionEnabled: false)
             XCTAssertEqual(strategy, key == nil ? .reTranscribe : .nemotronStreaming, code)
             XCTAssertEqual(NemotronAsrManager.resolvedLanguageCode(code, promptDictionary: prompts), key, code)
         }
         XCTAssertEqual(
-            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "en", engineSupportsLive: true),
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "en", engineSupportsLive: true, cloudTranscriptionEnabled: false),
             .englishStreaming,
         )
         XCTAssertEqual(prompts["es"], 3)

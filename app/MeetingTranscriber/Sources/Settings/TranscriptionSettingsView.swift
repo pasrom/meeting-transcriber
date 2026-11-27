@@ -280,18 +280,13 @@ struct TranscriptionSettingsView: View {
             }
 
             if settings.liveTranscriptionEnabled { CaptionWarmupStatus(warmup: captionWarmup) }
+            captionsOffForCloudNote
+
             captionOverlayToggle
             captionSizePicker
 
-            Text(captionBackendFootnote)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text(liveTranscriptionFootnote)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Self.footnote(captionBackendFootnote)
+            Self.footnote(liveTranscriptionFootnote)
         }
         .accessibilityIdentifier(A11yID.liveTranscriptionSection)
         .recordOnlyDisabled(settings.recordOnly)
@@ -322,13 +317,41 @@ struct TranscriptionSettingsView: View {
         .accessibilityIdentifier(A11yID.liveCaptionsSizePicker)
     }
 
-    /// The backend live captions would use if enabled, from the one routing rule.
+    /// The backend live captions would use if enabled, from the one routing
+    /// rule, cloud included: `.none` is what cloud leaves for a language with
+    /// no streaming model, and the footnote says so instead of naming the
+    /// re-transcribe route that is off.
     static func captionStrategy(for settings: AppSettings) -> LiveCaptionsGate.Strategy {
         LiveCaptionsGate.strategy(
             liveEnabled: true,
             engineLanguage: settings.activeEngineLanguageOrNil,
             engineSupportsLive: settings.transcriptionEngine.supportsLiveTranscription,
+            cloudTranscriptionEnabled: settings.cloudTranscriptionEnabled,
         )
+    }
+
+    private static func footnote(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private var captionsOffForCloudNote: some View {
+        if captionsOffForCloud {
+            Self.footnote("Live captions are off for this language while cloud transcription is on.")
+                .accessibilityIdentifier(A11yID.liveCaptionsCloudOffNote)
+        }
+    }
+
+    /// Live captions are on, but cloud transcription keeps them off for the
+    /// current language (they would need the local engine).
+    private var captionsOffForCloud: Bool {
+        settings.liveTranscriptionEnabled && settings.cloudTranscriptionEnabled
+            && LiveCaptionsGate.offForCloud(
+                engineLanguage: settings.activeEngineLanguageOrNil,
+                engineSupportsLive: settings.transcriptionEngine.supportsLiveTranscription,
+            )
     }
 
     /// True when enabling captions would trigger the first-use Nemotron download:
@@ -395,8 +418,13 @@ struct TranscriptionSettingsView: View {
             "Caption backend follows your transcription language. It uses the low-latency "
                 + "Nemotron multilingual streaming model (~0.6-0.7 GB, downloads on first use)."
 
-        // `.none` cannot be reached with a language set: both engines support re-transcribe.
-        case .reTranscribe, .none:
+        // Only cloud transcription leaves `.none`: both engines support re-transcribe.
+        case .none:
+            "Caption backend follows your transcription language. With cloud transcription on, "
+                + "captions need a language with a low-latency streaming model, such as English; "
+                + "auto-detect and other languages have none."
+
+        case .reTranscribe:
             if languageIsSet {
                 "Caption backend follows your transcription language. This language has no "
                     + "low-latency streaming model, so captions use the standard re-transcribe engine."

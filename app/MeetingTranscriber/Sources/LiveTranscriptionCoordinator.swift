@@ -19,7 +19,8 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveTra
 /// `beginPrewarm(engineProvider:isRecording:)` (called from `AppState.init` after
 /// stored-property init, where the `[weak self]` closures are valid) rather than captured at construction — so the coordinator
 /// never holds an AppState back-reference. `liveEnabled` / `engineSupportsLive` /
-/// `engineLanguage` / `verboseDiagnostics` / `echoCancellationEnabled` are settings-backed closures.
+/// `engineLanguage` / `cloudTranscriptionEnabled` / `verboseDiagnostics` / `echoCancellationEnabled` are
+/// settings-backed closures.
 ///
 /// `@Observable` for `captionsUseEngine`, which the engine lifetime observer
 /// reads, and `warmup`, which Settings and the menu show. It also uses `withObservationTracking` internally to watch the
@@ -28,6 +29,18 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveTra
 @Observable
 final class LiveTranscriptionCoordinator {
     private var controller: LiveTranscriptionController?
+    /// The settings `controller` was built for; a recording attaches it only while they still hold.
+    private var controllerBuiltFor: CaptionConfiguration?
+
+    private struct CaptionConfiguration: Equatable {
+        let strategy: LiveCaptionsGate.Strategy
+        let language: String?
+        let cloud: Bool
+    }
+
+    private var currentCaptionConfiguration: CaptionConfiguration {
+        CaptionConfiguration(strategy: captionStrategy, language: engineLanguage(), cloud: cloudTranscriptionEnabled())
+    }
 
     /// Where the current controller's model warm-up stands; `.idle` without one.
     private(set) var warmup: LiveCaptionsWarmup = .idle
@@ -56,10 +69,18 @@ final class LiveTranscriptionCoordinator {
     /// orphaned controller the coordinator no longer owns.
     private(set) var attachInFlight = false
 
+    /// Whether the current recording got caption sinks, set at its start and
+    /// cleared at its stop (`recordingEnded`); nil between recordings. A settings change during a
+    /// recording is deferred to the next idle flush, so the overlay follows
+    /// this rather than the settings: a mid-recording cloud toggle would
+    /// otherwise hide captions still running, or show a bar nothing fills.
+    private(set) var recordingHasCaptions: Bool? // swiftlint:disable:this discouraged_optional_boolean
+
     private let captions: LiveCaptionsState
     private let liveEnabled: () -> Bool
     private let engineSupportsLive: () -> Bool
     private let engineLanguage: () -> String?
+    private let cloudTranscriptionEnabled: () -> Bool
     private let verboseDiagnostics: () -> Bool
     private let echoCancellationEnabled: () -> Bool
     private let makeController: ControllerFactory
@@ -91,6 +112,7 @@ final class LiveTranscriptionCoordinator {
         liveEnabled: @escaping () -> Bool,
         engineSupportsLive: @escaping () -> Bool,
         engineLanguage: @escaping () -> String? = { nil },
+        cloudTranscriptionEnabled: @escaping () -> Bool = { false },
         verboseDiagnostics: @escaping () -> Bool,
         echoCancellationEnabled: @escaping () -> Bool = { false },
         makeController: @escaping ControllerFactory = LiveTranscriptionCoordinator.makeDefaultController,
@@ -100,6 +122,7 @@ final class LiveTranscriptionCoordinator {
         self.liveEnabled = liveEnabled
         self.engineSupportsLive = engineSupportsLive
         self.engineLanguage = engineLanguage
+        self.cloudTranscriptionEnabled = cloudTranscriptionEnabled
         self.verboseDiagnostics = verboseDiagnostics
         self.echoCancellationEnabled = echoCancellationEnabled
         self.makeController = makeController
@@ -130,14 +153,27 @@ final class LiveTranscriptionCoordinator {
         return controller
     }
 
-    /// Whether live captions are eligible to run at all, per the shared gate.
-    /// The language-driven streaming backends (German/English) bypass the
-    /// engine-support requirement because their sessions are engine-independent.
-    private var captionsEligible: Bool {
-        LiveCaptionsGate.captionsAvailable(
+    /// What the caption bar shows for: the current recording's attach result
+    /// once there is one, else the live settings gate. The master toggle still
+    /// hides the bar at once, as it did before.
+    var overlayHasCaptions: Bool {
+        guard let recordingHasCaptions else { return captionStrategy != .none }
+        return recordingHasCaptions && liveEnabled()
+    }
+
+    /// Called synchronously at stop, not from the flush task, which a quick
+    /// restart's `attachSinks` can run ahead of.
+    func recordingEnded() {
+        recordingHasCaptions = nil
+    }
+
+    /// What the current settings would run, per the shared gate.
+    private var captionStrategy: LiveCaptionsGate.Strategy {
+        LiveCaptionsGate.strategy(
             liveEnabled: liveEnabled(),
             engineLanguage: engineLanguage(),
             engineSupportsLive: engineSupportsLive(),
+            cloudTranscriptionEnabled: cloudTranscriptionEnabled(),
         )
     }
 
@@ -175,7 +211,18 @@ final class LiveTranscriptionCoordinator {
         // async `prepare()`), so sinks attach and captions light up when the load
         // finishes. If it was never warmed, this recording gets no captions and
         // they come online at the next idle prewarm.
-        guard captionsEligible, let controller else { return }
+        guard let controller else {
+            recordingHasCaptions = false
+            return
+        }
+        // A call split skips the idle flush, so the warmed controller may have
+        // been built for other caption settings.
+        guard controllerBuiltFor == currentCaptionConfiguration else {
+            needsRewarmWhenIdle = true
+            recordingHasCaptions = false
+            return
+        }
+        recordingHasCaptions = true
         attachInFlight = true
         defer { attachInFlight = false }
         await controller.prepareForNextRecording()
@@ -218,17 +265,18 @@ final class LiveTranscriptionCoordinator {
         withObservationTracking {
             // Touch the underlying settings via the gate closures so the change
             // tracker observes `liveTranscriptionEnabled` + `transcriptionEngine`
-            // + the active engine's language.
+            // + the active engine's language + `cloudTranscriptionEnabled`.
             _ = liveEnabled()
             _ = engineSupportsLive()
             _ = engineLanguage()
+            _ = cloudTranscriptionEnabled()
         } onChange: { [weak self] in
             Task { @MainActor in self?.handleSettingsChange() }
         }
     }
 
-    /// React to a toggle / engine / language change. While idle, drop the cached
-    /// controller and rebuild against the new settings immediately. While a
+    /// React to a toggle / engine / language / cloud change. While idle, drop the
+    /// cached controller and rebuild against the new settings immediately. While a
     /// recording is in progress, DEFER: keep the current meeting's warm
     /// controller (so no CoreML recompile lands mid-recording and the overlay
     /// stays live on the current engine), re-arm the observer, and apply the
@@ -268,7 +316,7 @@ final class LiveTranscriptionCoordinator {
     }
 
     private func prewarmIfEligible() {
-        guard captionsEligible else { return }
+        guard captionStrategy != .none else { return }
         _ = ensureController()
     }
 
@@ -280,18 +328,17 @@ final class LiveTranscriptionCoordinator {
     /// when the active engine doesn't conform to `StreamingTranscribingEngine`.
     /// The re-transcribe path still requires a streaming engine: it returns nil
     /// otherwise, the static equivalent of the `supportsLiveTranscription` gate
-    /// (callers already check `captionsEligible`, so that nil only happens on a
+    /// (callers already check the strategy, so that nil only happens on a
     /// regression).
     private func ensureController() -> LiveTranscriptionController? {
         if let existing = controller { return existing }
         guard let engine = engineProvider?() else { return nil }
-        let streamingEngine = engine as? any StreamingTranscribingEngine
+        let cloud = cloudTranscriptionEnabled()
+        // Cloud on: no local engine, so neither re-transcribe, the language probe,
+        // nor a failed streaming load's fallback reloads the model EngineController frees.
+        let streamingEngine = cloud ? nil : engine as? any StreamingTranscribingEngine
         let language = engineLanguage()
-        let strategy = LiveCaptionsGate.strategy(
-            liveEnabled: liveEnabled(),
-            engineLanguage: language,
-            engineSupportsLive: engineSupportsLive(),
-        )
+        let strategy = captionStrategy
         guard strategy != .none else { return nil }
         // Re-transcribe needs a streaming engine; the streaming backends don't.
         guard strategy != .reTranscribe || streamingEngine != nil else { return nil }
@@ -299,6 +346,7 @@ final class LiveTranscriptionCoordinator {
         controller.modelDownloads = modelDownloads
         controller.echoCancellationEnabled = echoCancellationEnabled
         self.controller = controller
+        controllerBuiltFor = CaptionConfiguration(strategy: strategy, language: language, cloud: cloud)
         let started = Date()
         warmup = .preparing(since: started)
         logger.notice("Live caption warm-up started (language: \(language ?? "auto", privacy: .public))")

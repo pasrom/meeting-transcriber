@@ -64,6 +64,28 @@ final class TranscriptionSettingsCaptionFootnoteTests: XCTestCase {
         XCTAssertNoThrow(try view.inspect().find(text: footnote))
     }
 
+    /// Cloud on with auto-detect: the off note and the footnote must agree that
+    /// captions are off, not name the local re-transcribe route.
+    func testCloudAutoDetectFootnoteSaysCaptionsNeedAStreamingLanguage() throws {
+        let settings = makeSettings()
+        settings.transcriptionEngine = .whisperKit
+        settings.cloudTranscriptionEnabled = true
+        settings.whisperLanguage = ""
+        settings.liveTranscriptionEnabled = true
+        let view = TranscriptionSettingsView(
+            settings: settings,
+            whisperKitEngine: WhisperKitEngine(),
+            parakeetEngine: ParakeetEngine(),
+        )
+
+        XCTAssertEqual(TranscriptionSettingsView.captionStrategy(for: settings), .none)
+        let footnote = TranscriptionSettingsView.captionBackendFootnote(
+            strategy: .none, languageIsSet: false, detectsLanguage: false,
+        )
+        XCTAssertTrue(footnote.contains("captions need a language with a low-latency streaming model"), footnote)
+        XCTAssertNoThrow(try view.inspect().find(text: footnote))
+    }
+
     /// The footnote is a plain String, so Markdown emphasis would show its asterisks.
     func testLiveTranscriptionFootnoteUsesPlainLoggingText() throws {
         let view = TranscriptionSettingsView(

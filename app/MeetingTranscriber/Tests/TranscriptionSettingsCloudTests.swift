@@ -157,6 +157,31 @@ final class TranscriptionSettingsCloudTests: XCTestCase {
         XCTAssertEqual(settings.cloudTranscriptionModel, "whisper-large-v3")
     }
 
+    // MARK: - Live captions note
+
+    func testLiveCaptionsNoteShowsOnlyWhenCloudTurnsCaptionsOff() throws {
+        let settings = makeSettings()
+        settings.transcriptionEngine = .parakeet
+        settings.parakeetLanguage = ""
+        settings.liveTranscriptionEnabled = true
+        XCTAssertThrowsError(
+            try makeView(settings).inspect().find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsCloudOffNote),
+            "no note while cloud is off",
+        )
+
+        settings.cloudTranscriptionEnabled = true
+        let section = try makeView(settings).inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.liveTranscriptionSection)
+        let note = try section.find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsCloudOffNote).text().string()
+        XCTAssertEqual(note, "Live captions are off for this language while cloud transcription is on.")
+
+        settings.parakeetLanguage = "en"
+        XCTAssertThrowsError(
+            try makeView(settings).inspect().find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsCloudOffNote),
+            "English captions stream without the local engine, so no note",
+        )
+    }
+
     // MARK: - Test Connection
 
     func testTestConnectionButtonRunsTheTestAndShowsItsResult() async throws {

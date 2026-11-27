@@ -138,6 +138,30 @@ final class LiveTranscriptionGatingTests: XCTestCase {
             "turning the overlay back on must show the captions bar again",
         )
     }
+
+    /// A mid-recording cloud switch is applied at the next idle flush, so the
+    /// recording keeps its captions and the bar must stay up; the gate alone
+    /// would hide it for auto-detect.
+    func testACloudSwitchDuringARecordingKeepsItsCaptionsBar() async throws {
+        settings.transcriptionEngine = .parakeet
+        settings.parakeetLanguage = ""
+        settings.liveTranscriptionEnabled = true
+        settings.liveCaptionsOverlayEnabled = true
+        let state = try makeState()
+        let (loop, _) = makeTestWatchLoop()
+        state.watching.watchLoop = loop
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
+        defer { loop.stop() }
+        await state.liveTranscription.attachSinks(to: DualSourceRecorder())
+        XCTAssertTrue(state.shouldShowLiveCaptions, "test premise: the recording has captions")
+
+        settings.cloudTranscriptionEnabled = true
+
+        XCTAssertTrue(state.shouldShowLiveCaptions, "captions still running were hidden")
+
+        settings.liveTranscriptionEnabled = false
+        XCTAssertFalse(state.shouldShowLiveCaptions, "turning live captions off must still hide the bar at once")
+    }
 }
 
 /// A live-caption controller factory whose controllers load no model, for an
