@@ -393,44 +393,94 @@ enum AudioMixer {
         return rmsDecibels(samples: samples)
     }
 
+    /// Frames one read of `readSamplesFromAudioFile` asks for.
+    private static let readChunkFrames = 65536
+
     /// Read mono Float32 samples from an already-opened AVAudioFile.
+    ///
+    /// Reads in chunks until the file's last frame (`readAllFrames`), because
+    /// one `AVAudioFile.read(into:)` sized to the whole file can return short
+    /// without an error. Measured on macOS 27.2.1 for a mono 32-bit float WAV
+    /// or CAF longer than 65,536 frames: it stops at a multiple of 1,024 and
+    /// drops up to 1,023 frames of the end (100,000 frames read as 99,328).
+    /// Stereo float, 16-bit and shorter files read whole there. The app's own
+    /// recordings and intermediates are 16-bit; an imported mono float file
+    /// is what was cut short. A file that ends before its stated length is
+    /// still loaded short, with a warning.
     private static func readSamplesFromAudioFile(_ file: AVAudioFile) throws -> [Float] {
         let format = file.processingFormat
         guard file.length > 0 else { return [] }
+        // Still the bound on what is loaded whole, as when this was one read.
         guard canAllocateSinglePCMBuffer(frameCount: file.length, format: format) else {
             throw AudioMixerError.bufferCreationFailed
         }
-        let frameCount = AVAudioFrameCount(file.length)
-
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+        let total = Int(file.length)
+        guard let chunk = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(min(total, readChunkFrames)),
+        ) else {
             throw AudioMixerError.bufferCreationFailed
-        }
-        try file.read(into: buffer)
-
-        guard let floatData = buffer.floatChannelData else {
-            throw AudioMixerError.noFloatData
         }
 
         let channelCount = Int(format.channelCount)
-        let sampleCount = Int(buffer.frameLength)
-
-        if channelCount == 1 {
-            return Array(UnsafeBufferPointer(start: floatData[0], count: sampleCount))
-        }
-
-        // Stereo → mono (average channels)
-        var mono = [Float](repeating: 0, count: sampleCount)
-        for ch in 0 ..< channelCount {
-            let channelPtr = floatData[ch]
-            for i in 0 ..< sampleCount {
-                mono[i] += channelPtr[i]
-            }
-        }
         let scale = 1.0 / Float(channelCount)
-        for i in 0 ..< sampleCount {
-            mono[i] *= scale
+        var mono: [Float] = []
+        mono.reserveCapacity(total)
+        let read = try readAllFrames(total: total) { maxFrames in
+            try file.read(into: chunk, frameCount: AVAudioFrameCount(min(maxFrames, Int(chunk.frameCapacity))))
+            guard let floatData = chunk.floatChannelData else {
+                throw AudioMixerError.noFloatData
+            }
+            let count = Int(chunk.frameLength)
+            if channelCount == 1 {
+                mono.append(contentsOf: UnsafeBufferPointer(start: floatData[0], count: count))
+                return count
+            }
+            // Stereo → mono (average channels): one channel at a time, then
+            // scaled, as before the reads were chunked.
+            let start = mono.count
+            mono.append(contentsOf: repeatElement(0, count: count))
+            mono.withUnsafeMutableBufferPointer { out in
+                for ch in 0 ..< channelCount {
+                    let channelPtr = floatData[ch]
+                    for i in 0 ..< count {
+                        out[start + i] += channelPtr[i]
+                    }
+                }
+                for i in start ..< start + count {
+                    out[i] *= scale
+                }
+            }
+            return count
+        }
+        if read < total {
+            logger.warning("audio_read_short read=\(read, privacy: .public) length=\(total, privacy: .public)")
         }
         return mono
+    }
+
+    /// Call `readChunk` until `total` frames are read or it returns zero.
+    /// `readChunk` is handed the number of frames still missing, may read
+    /// fewer, and returns how many it read. Returns the frames read.
+    ///
+    /// A read at the end of the file throws `eofErr` rather than returning
+    /// zero frames (seen for WAV, FLAC and AAC). The loop only gets there when
+    /// a file decodes to fewer frames than its `length` says, which a single
+    /// read used to answer with a short buffer, so once frames were read that
+    /// error ends the loop instead of failing the whole load.
+    static func readAllFrames(total: Int, readChunk: (_ maxFrames: Int) throws -> Int) throws -> Int {
+        var position = 0
+        while position < total {
+            let read: Int
+            do {
+                read = try readChunk(total - position)
+            } catch let error as NSError where position > 0
+                && error.domain == NSOSStatusErrorDomain && error.code == Int(eofErr) {
+                break
+            }
+            guard read > 0 else { break }
+            position += min(read, total - position)
+        }
+        return position
     }
 
     /// `AVAudioPCMBuffer` ultimately multiplies these values as unsigned 32 bit
