@@ -227,26 +227,74 @@ struct WavVerdictCommand: ParsableCommand {
 
     /// Load an audio file as mono Float32 samples via AVAudioFile, averaging any
     /// channels down to mono. Thin I/O layer — the verdict logic stays pure.
+    /// Reads in chunks to the last frame (`readAllFrames`): one `read(into:)`
+    /// sized to the whole file returns short without an error for a mono
+    /// 32-bit float file longer than 65,536 frames (measured on macOS 27.2.1,
+    /// up to 1,023 frames of the end missing), and a verdict on a cut-short
+    /// read judges part of the file. A file that ends before its stated
+    /// length is still read short, with a warning on stderr.
     static func loadSamples(path: String) throws -> (samples: [Float], sampleRate: Double) {
         let file = try AVAudioFile(forReading: URL(fileURLWithPath: path))
         let format = file.processingFormat
-        let frameCount = AVAudioFrameCount(file.length)
-        guard frameCount > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+        let total = Int(file.length)
+        guard total > 0, let chunk = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(min(total, readChunkFrames)),
+        ) else {
             return ([], format.sampleRate)
         }
-        try file.read(into: buffer)
-        guard let channelData = buffer.floatChannelData else { return ([], format.sampleRate) }
         let channels = Int(format.channelCount)
-        let frames = Int(buffer.frameLength)
-        var mono = [Float](repeating: 0, count: frames)
-        for frame in 0 ..< frames {
-            var sum: Float = 0
-            for channel in 0 ..< channels {
-                sum += channelData[channel][frame]
+        var mono: [Float] = []
+        mono.reserveCapacity(total)
+        let read = try readAllFrames(total: total) { maxFrames in
+            try file.read(into: chunk, frameCount: AVAudioFrameCount(min(maxFrames, Int(chunk.frameCapacity))))
+            guard let channelData = chunk.floatChannelData else {
+                // As before the reads were chunked: no samples, rather than a
+                // verdict on the part read so far.
+                mono = []
+                return 0
             }
-            mono[frame] = sum / Float(channels)
+            let frames = Int(chunk.frameLength)
+            for frame in 0 ..< frames {
+                var sum: Float = 0
+                for channel in 0 ..< channels {
+                    sum += channelData[channel][frame]
+                }
+                mono.append(sum / Float(channels))
+            }
+            return frames
+        }
+        if read < total {
+            FileHandle.standardError.write(Data("warning: read \(read) of \(total) frames\n".utf8))
         }
         return (mono, format.sampleRate)
+    }
+
+    /// Frames one read of `loadSamples` asks for, as in the app's loader.
+    private static let readChunkFrames = 65536
+
+    /// Call `readChunk` until `total` frames are read or it returns zero.
+    /// `readChunk` is handed the number of frames still missing, may read
+    /// fewer, and returns how many it read. Returns the frames read.
+    ///
+    /// A read at the end of the file throws `eofErr` rather than returning
+    /// zero frames (seen for WAV, FLAC and AAC). The loop only gets there when
+    /// a file decodes to fewer frames than its `length` says, which a single
+    /// read used to answer with a short buffer, so once frames were read that
+    /// error ends the loop instead of failing the whole load.
+    static func readAllFrames(total: Int, readChunk: (_ maxFrames: Int) throws -> Int) throws -> Int {
+        var position = 0
+        while position < total {
+            let read: Int
+            do {
+                read = try readChunk(total - position)
+            } catch let error as NSError where position > 0
+                && error.domain == NSOSStatusErrorDomain && error.code == Int(eofErr) {
+                break
+            }
+            guard read > 0 else { break }
+            position += min(read, total - position)
+        }
+        return position
     }
 }
 
