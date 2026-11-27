@@ -192,6 +192,13 @@ struct PipelineJob: Identifiable, Codable {
         meetingStartTime ?? enqueuedAt
     }
 
+    /// The stem a run writes this job's transcript, protocol and relocated
+    /// audio under. Built only from fields every snapshot holds, so a restore
+    /// computes the same stem the interrupted run used.
+    var artifactStem: String {
+        SpeakerNamingStore.slug(title: meetingTitle, jobID: id, startTime: artifactStartTime)
+    }
+
     var state: JobState
     var error: String?
     var warnings: [String]
