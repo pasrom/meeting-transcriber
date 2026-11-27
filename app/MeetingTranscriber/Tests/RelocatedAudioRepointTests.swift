@@ -58,6 +58,23 @@ final class RelocatedAudioRepointTests: XCTestCase {
         XCTAssertEqual(paths.mic, stagedMic, "a track still in staging is moved by the run itself")
     }
 
+    /// A finished recording's tracks can be compressed after `.done` while the
+    /// snapshot still names staging: the restore finds them as FLAC, and takes
+    /// the WAV where a track has both spellings (a conversion cut short).
+    func testACompressedTrackIsRepointedAndTheWAVWinsOverIt() throws {
+        let job = try makeJob()
+        let compressedMix = relocated(job, "_mix.flac")
+        let compressedApp = relocated(job, "_app.flac")
+        let wavApp = relocated(job, RecordingFileSuffix.app)
+        let compressedMic = relocated(job, "_mic.flac")
+
+        let paths = try XCTUnwrap(plan(job, existing: [compressedMix, compressedApp, wavApp, compressedMic]))
+
+        XCTAssertEqual(paths.mix, compressedMix)
+        XCTAssertEqual(paths.app, wavApp)
+        XCTAssertEqual(paths.mic, compressedMic)
+    }
+
     func testAStagingTrackThatStillExistsIsLeftAlone() throws {
         let job = try makeJob()
         let staged = try [XCTUnwrap(job.mixPath), XCTUnwrap(job.appPath), XCTUnwrap(job.micPath)]

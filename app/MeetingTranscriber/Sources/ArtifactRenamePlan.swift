@@ -22,11 +22,13 @@ enum ArtifactRenamePlan {
         let recordings: URL
     }
 
-    /// Every file a job can own under `stem`, in both output directories.
+    /// Every file a job can own under `stem`, in both output directories. The
+    /// tracks in both kept containers: a finished recording's tracks may have
+    /// been compressed (`RecordingCompaction`), and a recording cut short
+    /// mid-conversion holds both.
     static func artifactURLs(stem: String, in dirs: Directories) -> [URL] {
-        let recordingSuffixes = [
-            RecordingFileSuffix.mix, RecordingFileSuffix.app, RecordingFileSuffix.mic,
-        ] + SpeakerNamingStore.sidecarSuffixes + [SpeakerNamingStore.namingJSONSuffix, RecordingSidecar.recordingFilenameSuffix]
+        let recordingSuffixes = RecordingFileSuffix.all + RecordingFileSuffix.compressed
+            + SpeakerNamingStore.sidecarSuffixes + [SpeakerNamingStore.namingJSONSuffix, RecordingSidecar.recordingFilenameSuffix]
         return ["\(stem).md", "\(stem).txt"].map { dirs.protocols.appendingPathComponent($0) }
             + recordingSuffixes.map { dirs.recordings.appendingPathComponent("\(stem)\($0)") }
     }

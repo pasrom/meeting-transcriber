@@ -452,7 +452,9 @@ final class PipelineController {
     func enqueueFiles(_ urls: [URL], autoSkipNaming: Bool = false) -> [UUID] {
         ensureQueue()
 
-        let resolution = PairedRecordingResolver.resolve(urls: urls)
+        // Every kept container: a recording the app compressed after its job
+        // finished still pairs into one dual-source job.
+        let resolution = PairedRecordingResolver.resolve(urls: urls, extensions: RecordingFileSuffix.keptExtensions)
         var ids: [UUID] = []
 
         for group in resolution.paired {

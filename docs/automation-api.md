@@ -142,6 +142,13 @@ curl -sS -X POST "$BASE/v1/transcribe?include=transcript" \
 Enqueue one or more files without blocking. Returns the created job IDs so a
 client can poll each one.
 
+Files of one recording are grouped into one dual-source job, so they return one
+job ID: `<stem>_app` with `<stem>_mic`, or `<stem>_mix`, in the same folder, as
+`.wav` or as `.flac` (the container the app can keep a finished recording's
+tracks in), in any mix of the two. Where both spellings of one track are
+given, the `.wav` is used. A lone `_app` or `_mic` is a job of its own, like
+any other file.
+
 Request body:
 
 ```json

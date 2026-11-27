@@ -171,6 +171,37 @@ final class RecordingSidecarTests: XCTestCase {
         XCTAssertEqual(decoded.files.mix, "future_mix.wav")
     }
 
+    /// A rename moves the names onto the new stem and keeps each one's
+    /// container: a recording compressed partway names one FLAC and two WAVs.
+    func testARenameKeepsEachTracksContainer() throws {
+        let dir = try makeTempDirectory(prefix: "rs-rename")
+        let source = dir.appendingPathComponent("old" + RecordingSidecar.recordingFilenameSuffix)
+        try RecordingSidecar(
+            title: "Standup", appName: "Teams", startedAt: Date(), stoppedAt: Date(),
+            participants: [], micDelaySeconds: 0.1, trigger: .auto,
+            mixFilename: "old_mix.flac", appFilename: "old_app.wav", micFilename: "old_mic.flac",
+        ).write(to: source)
+
+        let moved = try XCTUnwrap(RecordingSidecar.moveRecordingSidecar(from: source, toDirectory: dir, stem: "new"))
+
+        let files = try XCTUnwrap(RecordingSidecar.read(from: moved)).files
+        XCTAssertEqual([files.mix, files.app, files.mic], ["new_mix.flac", "new_app.wav", "new_mic.flac"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    func testTheSidecarOfACompressedMixIsFoundByItsStem() {
+        let mix = URL(fileURLWithPath: "/out/recordings/call_mix.flac")
+        XCTAssertEqual(
+            RecordingSidecar.recordingSidecarURL(besideMix: mix, extensions: RecordingFileSuffix.keptExtensions)?.lastPathComponent,
+            "call_recording.json",
+        )
+        XCTAssertNil(RecordingSidecar.recordingSidecarURL(besideMix: mix), "the staging form stays WAV-only")
+        XCTAssertNil(RecordingSidecar.recordingSidecarURL(
+            besideMix: URL(fileURLWithPath: "/out/recordings/call_app.flac"),
+            extensions: RecordingFileSuffix.keptExtensions,
+        ))
+    }
+
     /// The sidecar records meeting title + participants; it must be owner-only
     /// (0600), not world-readable, matching the audio it sits next to.
     func test_write_setsOwnerOnlyPermissions() throws {

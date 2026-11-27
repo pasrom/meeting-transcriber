@@ -163,6 +163,51 @@ final class PairedRecordingResolverTests: XCTestCase {
         }
     }
 
+    // MARK: - Compressed tracks
+
+    private let kept = RecordingFileSuffix.keptExtensions
+
+    func testAFLACPairIsOneGroupForAnImport() {
+        let result = PairedRecordingResolver.resolve(
+            urls: [url("standup_app.flac"), url("standup_mic.flac"), url("standup_recording.json")], extensions: kept,
+        )
+
+        XCTAssertEqual(result.paired.count, 1)
+        XCTAssertEqual(result.paired.first?.app?.lastPathComponent, "standup_app.flac")
+        XCTAssertEqual(result.paired.first?.mic?.lastPathComponent, "standup_mic.flac")
+        XCTAssertNil(result.paired.first?.mix)
+        XCTAssertEqual(result.singletons.map(\.lastPathComponent), ["standup_recording.json"])
+    }
+
+    /// A recording whose conversion stopped after one track holds one of each.
+    func testAMixedContainerPairIsOneGroup() {
+        let result = PairedRecordingResolver.resolve(urls: [url("standup_app.flac"), url("standup_mic.wav")], extensions: kept)
+
+        XCTAssertEqual(result.paired.map(\.stem), ["standup"])
+        XCTAssertEqual(result.paired.first?.app?.lastPathComponent, "standup_app.flac")
+        XCTAssertEqual(result.paired.first?.mic?.lastPathComponent, "standup_mic.wav")
+        XCTAssertEqual(result.singletons, [])
+    }
+
+    func testWAVWinsWhenBothSpellingsExist() {
+        for urls in [
+            [url("standup_app.flac"), url("standup_app.wav"), url("standup_mic.wav")],
+            [url("standup_app.wav"), url("standup_app.flac"), url("standup_mic.wav")],
+        ] {
+            let result = PairedRecordingResolver.resolve(urls: urls, extensions: kept)
+            XCTAssertEqual(result.paired.first?.app?.lastPathComponent, "standup_app.wav", "\(urls.map(\.lastPathComponent))")
+        }
+    }
+
+    /// The staging scan calls the default, which must not take a compressed
+    /// mix for a finished recording.
+    func testTheDefaultResolveIgnoresACompressedMix() {
+        let result = PairedRecordingResolver.resolve(urls: [url("meeting_mix.flac")])
+
+        XCTAssertEqual(result.paired, [])
+        XCTAssertEqual(result.singletons.map(\.lastPathComponent), ["meeting_mix.flac"])
+    }
+
     func testGroupOrderFollowsFirstURLIndex() {
         // Mix at index 0 → pair "early" is enqueued first;
         // singleton at index 1; pair "late" (mix at index 2) is enqueued second.

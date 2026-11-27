@@ -100,6 +100,27 @@ final class ArtifactRenamePlanTests: XCTestCase {
         }
     }
 
+    /// Tracks compressed after the job finished are the same recording: a
+    /// rename carries them, and a leftover one keeps its stem taken.
+    func testCompressedTracksAreCarriedAndBlockAStem() {
+        let old = "20261014_1800_google_chrome_ab12cd34"
+        let tracks: Set = [
+            "/out/recordings/\(old)_mix.flac", "/out/recordings/\(old)_app.flac", "/out/recordings/\(old)_mic.flac",
+        ]
+        let moves = ArtifactRenamePlan.moves(from: old, to: "weekly_sync", in: dirs, exists: exists(tracks))
+        XCTAssertEqual(Set(moves.map(\.from.path)), tracks)
+        XCTAssertEqual(
+            Set(moves.map(\.to.lastPathComponent)), ["weekly_sync_mix.flac", "weekly_sync_app.flac", "weekly_sync_mic.flac"],
+        )
+
+        for suffix in ["_mix.flac", "_app.flac", "_mic.flac"] {
+            XCTAssertEqual(
+                stem("weekly_sync", existing: ["/out/recordings/weekly_sync\(suffix)"]), "weekly_sync_ab12cd34",
+                "a leftover weekly_sync\(suffix) must make the plain title slug unavailable",
+            )
+        }
+    }
+
     func testMovesSkipArtifactsThatDoNotExist() {
         let old = "weekly_sync"
         let moves = ArtifactRenamePlan.moves(

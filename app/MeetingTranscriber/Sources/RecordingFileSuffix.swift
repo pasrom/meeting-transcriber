@@ -69,9 +69,53 @@ enum RecordingFileSuffix {
         return nil
     }
 
+    /// The stem and the track of a WAV track file name. WAV only on purpose:
+    /// staging only ever holds WAV, and the scans that read it (orphan
+    /// recovery, record-only) must not take a compressed file for a track.
+    /// Readers of the output folder use `keptTrack(of:extensions:)`.
     static func stripSuffix(from filename: String) -> (stem: String, suffix: String)? {
         for suffix in all where filename.hasSuffix(suffix) {
             return (String(filename.dropLast(suffix.count)), suffix)
+        }
+        return nil
+    }
+
+    /// The container every track is recorded and staged in.
+    static let wavExtension = "wav"
+
+    /// The lossless container a finished recording's tracks may be converted
+    /// to in the output folder (`RecordingCompaction`). Never written to staging.
+    static let compressedExtension = "flac"
+
+    /// The containers a track kept in the output folder can be in, WAV first.
+    /// A reader that must find a kept track tries them in this order.
+    static let keptExtensions = [wavExtension, compressedExtension]
+
+    /// `suffix` (one of `all`) in the container `fileExtension`:
+    /// `_mix.wav` becomes `_mix.flac`.
+    static func kept(_ suffix: String, extension fileExtension: String) -> String {
+        String(suffix.dropLast(wavExtension.count)) + fileExtension
+    }
+
+    /// The three track suffixes in the compressed container.
+    static let compressed: [String] = all.map { kept($0, extension: compressedExtension) }
+
+    /// The stem, the track and the container of a kept track's file name, for
+    /// a name ending in one of `all` in one of `extensions`. The track comes
+    /// back as its WAV suffix (`mix`, `app` or `mic`), so a caller tells the
+    /// tracks apart without caring which container holds them. A hidden
+    /// partial copy (`.<stem>_mix.partial.flac`) is no track: it does not end
+    /// in a track suffix.
+    static func keptTrack(
+        of filename: String, extensions: [String] = keptExtensions,
+    ) -> (stem: String, suffix: String, fileExtension: String)? {
+        for suffix in all {
+            for fileExtension in extensions {
+                let spelling = kept(suffix, extension: fileExtension)
+                if filename.hasSuffix(spelling) {
+                    return (String(filename.dropLast(spelling.count)), suffix, fileExtension)
+                }
+            }
         }
         return nil
     }
