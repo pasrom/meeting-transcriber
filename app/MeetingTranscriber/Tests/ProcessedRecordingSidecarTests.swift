@@ -107,6 +107,27 @@ final class ProcessedRecordingSidecarTests: XCTestCase {
         XCTAssertEqual(job.participants, ["Speaker A"])
     }
 
+    /// Tracks the app compressed after the job finished import as they did as
+    /// WAV: one dual-source job, with the recorded offset from the sidecar.
+    func testAReimportOfACompressedPairIsOneDualJobWithTheSidecarOffset() throws {
+        let controller = try makeController()
+        let names = ["call_mix.flac", "call_app.flac", "call_mic.flac"]
+        let urls = touch(Array(names.dropFirst()))
+        try RecordingSidecar(
+            title: "Weekly Sync", appName: "Teams", startedAt: Date(), stoppedAt: Date(),
+            participants: [], micDelaySeconds: 0.25, trigger: .auto,
+            mixFilename: names[0], appFilename: names[1], micFilename: names[2],
+        ).write(to: tmpDir.appendingPathComponent("call" + RecordingSidecar.recordingFilenameSuffix))
+
+        let ids = controller.enqueueExistingFilesReturningIDs(urls)
+
+        XCTAssertEqual(ids.count, 1, "two compressed tracks of one recording are one job")
+        let job = try XCTUnwrap(controller.queue.jobs.first)
+        XCTAssertEqual(job.appPath?.lastPathComponent, "call_app.flac")
+        XCTAssertEqual(job.micPath?.lastPathComponent, "call_mic.flac")
+        XCTAssertEqual(job.micDelay, 0.25)
+    }
+
     /// A folder holding both reads the record-only sidecar: it is what an
     /// external consumer was handed, so it is the one that describes the files.
     func testAReimportPrefersTheRecordOnlySidecar() throws {

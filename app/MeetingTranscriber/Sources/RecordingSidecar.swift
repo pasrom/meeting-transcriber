@@ -179,11 +179,16 @@ struct RecordingSidecar: Codable {
     }
 
     /// The recording sidecar of the recording whose mix is `mix`, a file named
-    /// `<stem>_mix.wav`: `<stem>_recording.json` beside it. Nil for any other name.
-    static func recordingSidecarURL(besideMix mix: URL) -> URL? {
-        guard let (stem, suffix) = RecordingFileSuffix.stripSuffix(from: mix.lastPathComponent),
-              suffix == RecordingFileSuffix.mix else { return nil }
-        return mix.deletingLastPathComponent().appendingPathComponent(stem + recordingFilenameSuffix)
+    /// `<stem>_mix.<ext>` for one of `extensions`: `<stem>_recording.json`
+    /// beside it. Nil for any other name. WAV only by default, which is what
+    /// the staging paths need; a mix kept in the output folder passes
+    /// `RecordingFileSuffix.keptExtensions`.
+    static func recordingSidecarURL(
+        besideMix mix: URL, extensions: [String] = [RecordingFileSuffix.wavExtension],
+    ) -> URL? {
+        guard let track = RecordingFileSuffix.keptTrack(of: mix.lastPathComponent, extensions: extensions),
+              track.suffix == RecordingFileSuffix.mix else { return nil }
+        return mix.deletingLastPathComponent().appendingPathComponent(track.stem + recordingFilenameSuffix)
     }
 
     /// The mic delay in the recording sidecar beside `mix`, for orphan
@@ -199,15 +204,21 @@ struct RecordingSidecar: Codable {
     /// Rewrite the recording sidecar at `source` as
     /// `<directory>/<stem>_recording.json`, its file names following the
     /// tracks onto `stem`, and remove `source` when that is another file.
+    /// Each name keeps its own container: a rename of a recording whose
+    /// tracks were compressed names the `.flac` files it carried.
     /// Returns the file written. Nil when `source` holds no sidecar this build
     /// can read or the write failed; `source` stays then.
     @discardableResult
     static func moveRecordingSidecar(from source: URL, toDirectory directory: URL, stem: String) -> URL? {
         guard var sidecar = read(from: source) else { return nil }
+        func renamed(_ old: String, _ suffix: String) -> String {
+            let fileExtension = RecordingFileSuffix.keptTrack(of: old)?.fileExtension ?? RecordingFileSuffix.wavExtension
+            return stem + RecordingFileSuffix.kept(suffix, extension: fileExtension)
+        }
         sidecar.files = Files(
-            mix: stem + RecordingFileSuffix.mix,
-            app: sidecar.files.app.map { _ in stem + RecordingFileSuffix.app },
-            mic: sidecar.files.mic.map { _ in stem + RecordingFileSuffix.mic },
+            mix: renamed(sidecar.files.mix, RecordingFileSuffix.mix),
+            app: sidecar.files.app.map { renamed($0, RecordingFileSuffix.app) },
+            mic: sidecar.files.mic.map { renamed($0, RecordingFileSuffix.mic) },
         )
         let target = directory.appendingPathComponent(stem + recordingFilenameSuffix)
         let fm = FileManager.default

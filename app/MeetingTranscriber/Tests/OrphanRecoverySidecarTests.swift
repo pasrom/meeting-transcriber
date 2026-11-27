@@ -82,4 +82,17 @@ final class OrphanRecoverySidecarTests: XCTestCase {
         XCTAssertEqual(delays[without.lastPathComponent], 0)
         XCTAssertEqual(delays[foreign.lastPathComponent], 0, "a sidecar that names another mix is not this recording's")
     }
+
+    /// The scan reads staging, which never holds a compressed track; one that
+    /// is there anyway (copied in by hand) is not taken for a finished
+    /// recording waiting for its job.
+    func testTheStagingScanDoesNotAdoptACompressedMix() async throws {
+        for suffix in RecordingFileSuffix.compressed {
+            try Data(repeating: 0xFF, count: 100).write(to: recordings.appendingPathComponent("20260311_090000" + suffix))
+        }
+
+        let delays = await recoveredDelays()
+
+        XCTAssertEqual(delays, [:])
+    }
 }

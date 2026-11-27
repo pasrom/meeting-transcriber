@@ -7,7 +7,8 @@ enum RelocatedAudioRepoint {
     /// The job's paths with every repointable slot pointed at the output
     /// folder, or nil when no slot needs it.
     ///
-    /// A slot is pointed at `<recordingsDir>/<stem><suffix>` only when its path
+    /// A slot is pointed at `<recordingsDir>/<stem><suffix>` (as `.wav`, else
+    /// as the compressed `.flac` the compactor makes after `.done`) only when its path
     /// is in `stagingDir` (a file the app made, never an import or a file
     /// already in the output folder), that path is gone, and the file there
     /// exists. The stem is the one stage 3 moves the job's audio under: the
@@ -44,9 +45,14 @@ enum RelocatedAudioRepoint {
                   !exists(path),
                   AudioPersistencePolicy.action(source: path, stagingDir: stagingDir, destinationDir: recordingsDir) == .move
             else { return path }
-            guard let destination = stems.lazy
-                .map({ recordingsDir.appendingPathComponent($0 + suffix) })
-                .first(where: exists) else { return path }
+            // In every kept container, WAV first: a finished recording's
+            // tracks can have been compressed before this restore ran.
+            let candidates = stems.lazy.flatMap { stem in
+                RecordingFileSuffix.keptExtensions.lazy.map { fileExtension in
+                    recordingsDir.appendingPathComponent(stem + RecordingFileSuffix.kept(suffix, extension: fileExtension))
+                }
+            }
+            guard let destination = candidates.first(where: exists) else { return path }
             changed = true
             return destination
         }

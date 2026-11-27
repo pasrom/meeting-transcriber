@@ -347,7 +347,7 @@ extension PipelineQueue {
     /// staging mix is moved first; one already there is taken as it is (a
     /// kill after stage 3 moved it but before stage 3 registered anything).
     private func takeRecordingSidecar(of job: PipelineJob, from stagingMix: URL, besideRelocated mix: URL) -> URL? {
-        guard let relocated = RecordingSidecar.recordingSidecarURL(besideMix: mix),
+        guard let relocated = RecordingSidecar.recordingSidecarURL(besideMix: mix, extensions: RecordingFileSuffix.keptExtensions),
               let staged = RecordingSidecar.recordingSidecarURL(besideMix: stagingMix) else { return nil }
         let fm = FileManager.default
         if fm.fileExists(atPath: staged.path),

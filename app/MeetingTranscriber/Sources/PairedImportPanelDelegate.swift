@@ -42,7 +42,8 @@ enum PairedImportSummary {
     static func text(forSelectedURLs urls: [URL]) -> String {
         // Non-empty so the `NSTextField` keeps its baseline height between selections.
         guard !urls.isEmpty else { return " " }
-        let resolution = PairedRecordingResolver.resolve(urls: urls)
+        // The same containers the import itself pairs (`PipelineController.enqueueFiles`).
+        let resolution = PairedRecordingResolver.resolve(urls: urls, extensions: RecordingFileSuffix.keptExtensions)
         let pairedCount = resolution.paired.count
         let singletonCount = resolution.singletons.count
         let total = pairedCount + singletonCount
