@@ -106,6 +106,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `SettingsView.swift` | Settings window — `NavigationSplitView` shell (sidebar of tabs) hosting seven topic-grouped sub-views in `Sources/Settings/` |
 | `Settings/GeneralSettingsView.swift` | Startup (Launch at login, Start watching when the app opens = `AppSettings.autoWatch`) · Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp/Slack) · Detection (Poll Interval, Grace Period) |
 | `Settings/AudioSettingsView.swift` | Microphone (device, start muted, mute mic shortcut) · VAD (enabled + threshold) · Echo · Per-Channel Indicator |
+| `Settings/LiveTranscriptFileSettings.swift` | Transcription settings rows for the live transcript file: the toggle, its plain-text footnote and the folder button |
 | `Settings/MicMuteHotkeyRow.swift` | Settings row that captures the shortcut toggling mic mute during a recording |
 | `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Vocabulary section · Live transcription (PoC) toggle |
 | `Settings/LegacyWhisperModelsSection.swift` | Transcription settings' Storage section: lets the user move WhisperKit model variants an earlier build left in `Documents` to the Trash |

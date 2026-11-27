@@ -133,6 +133,8 @@ enum A11yID {
     static let liveTranscriptionSection = "liveTranscriptionSection"
     static let liveCaptionsOverlayToggle = "liveCaptionsOverlayToggle"
     static let liveCaptionsSizePicker = "liveCaptionsSizePicker"
+    static let liveTranscriptFileToggle = "liveTranscriptFileToggle"
+    static let liveTranscriptFolderButton = "liveTranscriptFolderButton"
     static let liveCaptionsWarmupStatus = "liveCaptionsWarmupStatus"
     static let liveCaptionsWarmupElapsed = "liveCaptionsWarmupElapsed"
     static let channelIndicatorSection = "channelIndicatorSection"

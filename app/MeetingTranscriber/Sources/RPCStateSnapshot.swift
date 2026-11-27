@@ -376,13 +376,14 @@
                 let liveCaptionsOverlayEnabled: Bool
                 /// `LiveCaptionsSize` raw value ("small" | "medium" | "large").
                 let liveCaptionsSize: String
+                let liveTranscriptFileEnabled: Bool
                 let asymmetricSilenceWarningSeconds: Double
 
                 static let empty = Self(
                     endGraceSeconds: 0, noMic: false, recordOnly: false,
                     micDeviceUID: "", micName: "", perChannelIndicatorEnabled: false,
                     liveTranscriptionEnabled: false, liveCaptionsOverlayEnabled: false,
-                    liveCaptionsSize: "", asymmetricSilenceWarningSeconds: 0,
+                    liveCaptionsSize: "", liveTranscriptFileEnabled: false, asymmetricSilenceWarningSeconds: 0,
                 )
             }
 
