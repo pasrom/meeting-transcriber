@@ -102,6 +102,7 @@ flowchart TD
 - **Record-only mode** — Skip the entire post-recording pipeline and drop dual-source recordings + a metadata sidecar into the output folder, for external/fleet processing (e.g. a separate GPU host)
 - **Local automation API** (Homebrew build): drive the pipeline headlessly over localhost HTTP. POST an audio file, get a diarized transcript back. See [`docs/automation-api.md`](docs/automation-api.md)
 - **Stream Deck and hotkey control** (Homebrew build): start/stop watching from a Stream Deck key, Shortcut, Raycast or any launcher. See [`docs/stream-deck.md`](docs/stream-deck.md)
+- **Live transcript file**: optionally writes the live captions of a recording to a JSON Lines file as they appear, so a local agent such as Claude Code can follow the meeting and act on spoken requests. Off by default. See [`docs/live-transcript.md`](docs/live-transcript.md)
 - **Mic mute in the recording**: mute and unmute your microphone track from the menu bar or an optional global shortcut, or have recordings start muted. Only the recording is silenced; people on the call still hear you
 - **Notion export**: optionally exports generated meeting notes to a Notion database in the background; re-export after speaker renaming replaces the page's content in place, and a failed export can be retried without re-running transcription or meeting notes generation
 - **Distribution** — Install via Homebrew Cask or build from source
