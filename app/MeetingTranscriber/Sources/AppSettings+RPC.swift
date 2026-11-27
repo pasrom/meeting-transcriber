@@ -50,6 +50,7 @@
                 liveTranscriptionEnabled: liveTranscriptionEnabled,
                 liveCaptionsOverlayEnabled: liveCaptionsOverlayEnabled,
                 liveCaptionsSize: liveCaptionsSize.rawValue,
+                liveTranscriptFileEnabled: liveTranscriptFileEnabled,
                 asymmetricSilenceWarningSeconds: asymmetricSilenceWarningSeconds,
             )
         }

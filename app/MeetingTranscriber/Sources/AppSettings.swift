@@ -337,9 +337,9 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(liveTranscriptionEnabled, forKey: "liveTranscriptionEnabled") }
     }
 
-    /// Spike: when on, each recording with live captions also writes its finalized
-    /// lines to a JSON Lines file under `AppPaths.liveTranscriptsDir`, for a local
-    /// agent to follow. No Settings row yet. Default: off.
+    /// When on, each recording with live captions also writes its finalized lines
+    /// to a JSON Lines file under `AppPaths.liveTranscriptsDir`, for a local agent
+    /// to follow. Settings → Transcription, under live captions. Default: off.
     var liveTranscriptFileEnabled: Bool {
         didSet { defaults.set(liveTranscriptFileEnabled, forKey: "liveTranscriptFileEnabled") }
     }

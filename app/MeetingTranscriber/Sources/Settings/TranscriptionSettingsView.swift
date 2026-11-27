@@ -232,7 +232,7 @@ struct TranscriptionSettingsView: View {
     /// Hoisted out of `body` into a named property so the section's nesting
     /// doesn't grow the `body` type-check past the 300 ms hard limit on CI.
     private var liveTranscriptionSection: some View {
-        Section("Live transcription (PoC)") {
+        Section("Live transcription (PoC)") { // swiftlint:disable:this closure_body_length
             // The toggle stays enabled even for engines without the
             // re-transcribe hook, because the language-driven streaming
             // backends route captions through an engine-independent session.
@@ -261,7 +261,7 @@ struct TranscriptionSettingsView: View {
             if settings.liveTranscriptionEnabled { CaptionWarmupStatus(warmup: captionWarmup) }
             captionOverlayToggle
             captionSizePicker
-
+            LiveTranscriptFileSettings(settings: settings)
             Text(captionBackendFootnote)
                 .font(.caption)
                 .foregroundStyle(.secondary)

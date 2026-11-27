@@ -51,6 +51,7 @@
             XCTAssertTrue(s.recording.perChannelIndicatorEnabled)
             XCTAssertTrue(s.recording.liveCaptionsOverlayEnabled)
             XCTAssertEqual(s.recording.liveCaptionsSize, "medium")
+            XCTAssertFalse(s.recording.liveTranscriptFileEnabled)
             XCTAssertEqual(s.recording.asymmetricSilenceWarningSeconds, 90.0)
             XCTAssertEqual(s.transcription.engine, "whisperKit")
             XCTAssertEqual(s.transcription.whisperLanguage, "de")
@@ -73,6 +74,7 @@
             settings.liveTranscriptionEnabled = true
             settings.liveCaptionsOverlayEnabled = false
             settings.liveCaptionsSize = .small
+            settings.liveTranscriptFileEnabled = true
             settings.noMic = true
             settings.endGrace = 42
             settings.micName = "Bob"
@@ -93,6 +95,7 @@
             XCTAssertTrue(s.recording.liveTranscriptionEnabled)
             XCTAssertFalse(s.recording.liveCaptionsOverlayEnabled)
             XCTAssertEqual(s.recording.liveCaptionsSize, "small")
+            XCTAssertTrue(s.recording.liveTranscriptFileEnabled)
             XCTAssertTrue(s.recording.noMic)
             XCTAssertEqual(s.recording.endGraceSeconds, 42)
             XCTAssertEqual(s.recording.micName, "Bob")
@@ -257,6 +260,7 @@
                 "recording.micDeviceUID", "recording.micName",
                 "recording.perChannelIndicatorEnabled", "recording.liveTranscriptionEnabled",
                 "recording.liveCaptionsOverlayEnabled", "recording.liveCaptionsSize",
+                "recording.liveTranscriptFileEnabled",
                 "recording.asymmetricSilenceWarningSeconds",
                 "transcription.engine", "transcription.whisperKitModel",
                 "transcription.whisperLanguage", "transcription.parakeetLanguage",
