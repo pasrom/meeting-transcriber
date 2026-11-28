@@ -497,3 +497,30 @@ jobs:
       - name: Cleanup keychain
         if: always() && steps.dev-id.outputs.keychain-path != ''
         run: security delete-keychain "${{ steps.dev-id.outputs.keychain-path }}" 2>/dev/null || true
+
+  # The build takes its version from the tag, so a release succeeds with a
+  # stale VERSION on main. VERSION is bumped by hand once the release is
+  # confirmed shipped, and Actions may not open pull requests here, so this
+  # files an issue as the reminder. A job of its own so that `issues: write`
+  # never reaches the signing secrets in `build`. `!cancelled()` rather than
+  # plain `needs`: a failed App Store leg publishes nothing and must not
+  # suppress the reminder, so the script checks the release and the Cask
+  # itself.
+  version-bump-reminder:
+    needs: build
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Open an issue to bump VERSION if main is behind the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: ./scripts/ci/version-bump-reminder.sh "$GITHUB_REF_NAME"
