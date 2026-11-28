@@ -200,7 +200,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **Chromium helper selection** | Yes (`ChromiumHelperFilter` reads argv via `KERN_PROCARGS2`) | Not measured: if the sandbox refuses the sysctl for other processes, every argv reads empty and the tap keeps all helpers (the issue #791 stall); the refusal is logged with its errno |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker + app-scoped bookmarks |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
-| **Tests** | ~4,500 | ~4,100 (CLI + RPC tests excluded via `#if !APPSTORE`) |
+| **Tests** | ~5,400 | ~4,900 (CLI + RPC tests excluded via `#if !APPSTORE`) |
 
 - CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` and `DebugRPCServer.swift` (each entire file `#if !APPSTORE`)
 - `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically

@@ -28,7 +28,7 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
                          │                  │  DebugRPCServer          │
                          │                  │  127.0.0.1:9876          │
                          │                  │  /state /healthz /metrics│
-                         │                  │  /screenshot             │
+                         │                  │  /screenshot /log        │
                          │                  │  /action/openSettings    │
                          │                  │  /action/closeSettings   │
                          │                  │  /v1/* (automation API)  │
@@ -290,6 +290,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `LiveCaptionsGate.swift` | Pure decision logic for live captions routing: master toggle + explicit engine language (`en` → English EOU streaming, a language in `LiveCaptionLanguages` → Nemotron streaming, auto-detect or any other language → re-transcribe or none) — shared by `AppState`, coordinator, and controller. Overlay visibility is a separate UI AND (`overlayVisible`); it is not a strategy input |
 | `LiveCaptionLanguages.swift` | The language tags the Nemotron tokenizer was trained on, which decide live-caption coverage (prompt-dictionary keys are spellings and do not count). The region is dropped where the tokenizer has one dialect, because the pickers produce bare codes, and kept where it has several (`pt-BR`, `en-GB`) |
 | `EouStreamingCaptionSession.swift` | English low-latency streaming caption session via FluidAudio Parakeet EOU, backed by `UtteranceRingBuffer` |
+| `VoiceChangeDetector.swift` | Ends a caption line where its speaker changes rather than at a word count or a pause: confirms a new enrolled voice over three consecutive 1.5 s windows (0.5 s hop) via `LiveSpeakerMatcher.probe(audio:)`, so a line split no longer leaves the end of one speaker and the start of the next under one name |
 | `NemotronStreamingCaptionSession.swift` | Multilingual (non-English) low-latency streaming caption session via FluidAudio Nemotron |
 | `NemotronAsrManager.swift` | Production seam wrapping FluidAudio's Nemotron model + Silero VAD for `NemotronStreamingCaptionSession` |
 | `UtteranceRingBuffer.swift` | Rolling 16 kHz sample buffer addressable by absolute ms timestamp (feeds streaming caption sessions) |
@@ -895,7 +896,7 @@ AppSettings (UserDefaults)
 | LiveCaptionsGate.strategy | Pure static function — call directly with any input combination, no controller needed |
 | AppNotifying | `notifier` parameter in `AppState.init` (`SilentNotifier` default, `RecordingNotifier` in tests) |
 | BadgeKind.compute | Pure static function — call directly with any input combination, no WatchLoop needed |
-| DebugRPCServer | Out-of-process inspection via HTTP. Debug endpoints: `GET /state /healthz /metrics /screenshot`, `POST /action/openSettings /action/closeSettings`. Versioned automation API under `/v1` (`POST /v1/transcribe`, `POST /v1/jobs`, `GET /v1/jobs/<id>`, `GET`/`POST /v1/jobs/<id>/naming`, `POST /v1/jobs/<id>/naming/skip`, `POST /v1/jobs/<id>/notes/retry`, `POST /v1/jobs/notes/retry`, `POST /v1/jobs/notes/generate`, `GET`/`POST /v1/watch`, `GET`/`POST /v1/record`); see `docs/automation-api.md`. `#if !APPSTORE`; started by the Settings toggle or the env flag. `boundPort` exposes OS-assigned port for in-process integration tests. `tools/mt-cli/` is the matching inspection CLI. `scripts/test_rpc.sh` is a live smoketest (build + launch + drive + assert). |
+| DebugRPCServer | Out-of-process inspection via HTTP. Debug endpoints: `GET /state /healthz /metrics /screenshot /log`, `POST /action/openSettings /action/closeSettings`. Versioned automation API under `/v1` (`POST /v1/transcribe`, `POST /v1/jobs`, `GET /v1/jobs/<id>`, `GET`/`POST /v1/jobs/<id>/naming`, `POST /v1/jobs/<id>/naming/skip`, `POST /v1/jobs/<id>/notes/retry`, `POST /v1/jobs/notes/retry`, `POST /v1/jobs/notes/generate`, `GET`/`POST /v1/watch`, `GET`/`POST /v1/record`); see `docs/automation-api.md`. `#if !APPSTORE`; started by the Settings toggle or the env flag. `boundPort` exposes OS-assigned port for in-process integration tests. `tools/mt-cli/` is the matching inspection CLI. `scripts/test_rpc.sh` is a live smoketest (build + launch + drive + assert). |
 
 ---
 
@@ -935,7 +936,7 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 | **General** | Startup · Mode · Apps to Watch · Detection | `settings` | — |
 | **Audio** | Microphone (device, start muted, mute mic shortcut) · VAD · Echo · Per-Channel Indicator | `settings` | `audioDevices` |
 | **Transcription** | Engine + per-engine options + status + idle-model retention + Storage (leftover WhisperKit models in `Documents`) | `settings`, three engines | — |
-| **Speakers** | Diarization · Speaker Identity · Known Voices · Recognition Stats · Experimental: Diarization Tuning | `settings`, `recognitionStatsLog`, `enrollmentDiarizerFactory` | `knownVoicesSheet` |
+| **Speakers** | Diarization · Speaker Naming · Speaker Identity · Known Voices · Recognition Stats · Experimental: Diarization Tuning | `settings`, `recognitionStatsLog`, `enrollmentDiarizerFactory` | `knownVoicesSheet` |
 | **Output** | Output Folder · Notion · Recording Retention · Meeting Notes (language, prompt, output toggles) · AI Provider · Connection Settings (endpoint, key, Advanced) | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
 | **Advanced** | Permissions · Diagnostics | — | `micPermission`, `screenRecordingOK`, `accessibilityOK` |
 | **About** | Build identity · Dependencies · Updates | `settings`, `updateChecker?` | — |
