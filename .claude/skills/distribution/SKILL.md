@@ -35,6 +35,12 @@ legitimately runs ahead (0.8.0-rc1 must survive a 0.7.1 hotfix), and `sort -V` a
 orders `0.8.0-rc1` *after* `0.8.0`, which would strand users at exactly the RC-to-stable
 step the rule is for.
 
+The build takes its version from the tag, so `VERSION` on main is not touched by a release
+and is bumped by hand once the release is confirmed shipped (`chore: bump VERSION to X.Y.Z`,
+the one commit allowed straight onto main). After a stable tag, the `version-bump-reminder`
+job checks that the release carries its DMG and the stable cask reads the new version, and
+then opens a "Bump VERSION to X.Y.Z" issue when `VERSION` on main is older.
+
 **Stable tag gate:** A GitHub Tag Ruleset (`Stable tag protection`) rejects any
 `git push` of a tag matching `v*` *without* a `-` suffix unless the tagged SHA
 has green status checks for every context listed in
