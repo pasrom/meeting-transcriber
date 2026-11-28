@@ -137,6 +137,27 @@ final class AppTrackSilenceTests: XCTestCase {
         XCTAssertTrue(proven.isEmpty)
     }
 
+    /// The far end in the last frames of a long segment is still heard. One
+    /// read of a mono float app track returns that span short and would lose
+    /// exactly those frames, which reads as silence and admits the speaker.
+    /// Can only fail where such reads come back short, which
+    /// `AudioFrameReadTests.testSingleReadsOfAMonoFloatFileStillReturnShort`
+    /// checks.
+    func testFarEndAudioAtTheEndOfALongSegmentIsHeard() throws {
+        // Segment of 100,000 frames from frame 32,000, loud in its last 100.
+        var samples = [Float](repeating: 0, count: 10 * rate)
+        for i in 131_900 ..< 132_000 {
+            samples[i] = i.isMultiple(of: 2) ? 0.3 : -0.3
+        }
+        let track = tmp.appendingPathComponent("float-track.wav")
+        try writeMonoFloat32WAV(samples, to: track, sampleRate: rate)
+
+        let proven = AppTrackSilence.micSpeakersProvenClean(
+            segments: [segment(2, 8.25, mic)], appTrackURL: track,
+        )
+        XCTAssertTrue(proven.isEmpty, "the far end played at the end of the segment")
+    }
+
     func testZeroLengthSegmentsProveNothingAndDoNotDivideByZero() throws {
         let track = try appTrack(seconds: 30, loud: [])
         let proven = AppTrackSilence.micSpeakersProvenClean(

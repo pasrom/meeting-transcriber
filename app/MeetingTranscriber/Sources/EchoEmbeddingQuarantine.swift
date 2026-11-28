@@ -107,19 +107,17 @@ enum AppTrackSilence {
         of file: AVAudioFile, from start: TimeInterval, to end: TimeInterval, rate: Double,
     ) -> Double {
         let first = AVAudioFramePosition(start * rate)
-        let count = AVAudioFrameCount(max(0, (end - start) * rate))
-        guard first >= 0, first < file.length, count > 0,
-              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: count)
-        else { return 0 }
+        let count = Int(max(0, (end - start) * rate))
+        guard first >= 0, first < file.length, count > 0 else { return 0 }
         file.framePosition = first
-        guard (try? file.read(into: buffer, frameCount: count)) != nil,
-              let channel = buffer.floatChannelData?[0], buffer.frameLength > 0
-        else { return 0 }
         var acc = 0.0
-        for i in 0 ..< Int(buffer.frameLength) {
-            acc += Double(channel[i]) * Double(channel[i])
+        let read = try? AudioMixer.readFrames(from: file, count: count) { channels, frames in
+            for i in 0 ..< frames {
+                acc += Double(channels[0][i]) * Double(channels[0][i])
+            }
         }
-        let value = (acc / Double(buffer.frameLength)).squareRoot()
+        guard let read, read > 0 else { return 0 }
+        let value = (acc / Double(read)).squareRoot()
         return value > 0 ? 20 * log10(value) : -.infinity
     }
 }
