@@ -40,59 +40,98 @@ final class KeptRecordingCompressorTests: XCTestCase {
     }
 
     /// Read in a loop to the last frame (a single read of a long file can
-    /// return short).
+    /// return short). Interleaved: a frame is one sample per channel in a row.
     private static func int16Samples(of url: URL) throws -> [Int16] {
         let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatInt16, interleaved: true)
+        let channels = Int(file.processingFormat.channelCount)
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 65536))
         var samples: [Int16] = []
         while file.framePosition < file.length {
             try file.read(into: buffer)
             guard buffer.frameLength > 0 else { break }
             let data = try XCTUnwrap(buffer.int16ChannelData)
-            samples += UnsafeBufferPointer(start: data[0], count: Int(buffer.frameLength))
+            samples += UnsafeBufferPointer(start: data[0], count: Int(buffer.frameLength) * channels)
         }
-        XCTAssertEqual(samples.count, Int(file.length), "the file reports \(file.length) frames")
+        XCTAssertEqual(samples.count, Int(file.length) * channels, "the file reports \(file.length) frames")
         return samples
     }
 
-    /// A three-second 24-bit mono WAV of noise over the full 24-bit range,
-    /// with the sample at `changed` replaced when given.
-    private func write24BitWAV(_ name: String, changed: Int? = nil) throws -> URL {
+    /// An integer WAV of `bits` bits and `channels` channels, three seconds
+    /// unless given. `sample(frame, channel)` gives each sample as the
+    /// writer's buffers hold it: a 16-bit value up to 16 bits (of which an
+    /// 8-bit file keeps the high byte), the top 24 of 32 bits above.
+    private func writeIntWAV(
+        _ name: String, bits: Int, channels: Int = 1, seconds: Int = 3, sample: (Int, Int) -> Int32,
+    ) throws -> URL {
         let url = tmpDir.appendingPathComponent(name)
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: AudioConstants.targetSampleRate,
-            AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 24,
+            AVNumberOfChannelsKey: channels, AVLinearPCMBitDepthKey: bits,
             AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
         ]
+        let common: AVAudioCommonFormat = bits > 16 ? .pcmFormatInt32 : .pcmFormatInt16
         // Scoped, so the writer has closed the file when this returns.
         do {
-            let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatInt32, interleaved: false)
-            let frames = AVAudioFrameCount(3 * AudioConstants.targetSampleRate)
+            let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: common, interleaved: false)
+            let frames = AVAudioFrameCount(seconds * AudioConstants.targetSampleRate)
             let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames))
             buffer.frameLength = frames
-            let data = try XCTUnwrap(buffer.int32ChannelData)[0]
-            var seed: UInt32 = 11
-            for index in 0 ..< Int(frames) {
-                seed = seed &* 1_664_525 &+ 1_013_904_223
-                // The top 24 bits carry the sample; the low byte is zero.
-                data[index] = Int32(bitPattern: seed & 0xFFFF_FF00)
+            let int32 = buffer.int32ChannelData
+            let int16 = try int32 == nil ? XCTUnwrap(buffer.int16ChannelData) : nil
+            for channel in 0 ..< channels {
+                for frame in 0 ..< Int(frames) {
+                    let value = sample(frame, channel)
+                    if let int32 {
+                        int32[channel][frame] = value
+                    } else if let int16 {
+                        int16[channel][frame] = Int16(truncatingIfNeeded: value)
+                    }
+                }
             }
-            if let changed { data[changed] = data[changed] &+ 0x100 }
             try file.write(from: buffer)
         }
         return url
     }
 
-    /// The bits per sample in a native FLAC file's STREAMINFO block: after
-    /// the `fLaC` marker comes the first metadata block's 4-byte header, then
-    /// STREAMINFO, whose bytes 10 to 13 hold 20 bits of sample rate, 3 of
-    /// channels minus one and 5 of bits per sample minus one.
-    private static func flacBitsPerSample(of url: URL) throws -> Int {
+    /// Noise over the full Int32 range, a different run per `seed`: each
+    /// index goes through a full integer mixer (MurmurHash3's finaliser), so
+    /// neighbouring samples and other seeds are unrelated.
+    private static func noise(seed: UInt32) -> (Int) -> Int32 {
+        { index in
+            var value = UInt32(truncatingIfNeeded: index) &* 0x9E37_79B9 ^ seed
+            value ^= value >> 16
+            value &*= 0x85EB_CA6B
+            value ^= value >> 13
+            value &*= 0xC2B2_AE35
+            value ^= value >> 16
+            return Int32(bitPattern: value)
+        }
+    }
+
+    /// A three-second 24-bit mono WAV of noise over the full 24-bit range,
+    /// with the sample at `changed` one step higher when given.
+    private func write24BitWAV(_ name: String, changed: Int? = nil) throws -> URL {
+        let noise = Self.noise(seed: 11)
+        return try writeIntWAV(name, bits: 24) { frame, _ in
+            // The top 24 bits carry the sample; the low byte is zero.
+            let value = noise(frame) & ~0xFF
+            return frame == changed ? value &+ 0x100 : value
+        }
+    }
+
+    /// The channel count and bits per sample in a native FLAC file's
+    /// STREAMINFO block: after the `fLaC` marker comes the first metadata
+    /// block's 4-byte header, then STREAMINFO, whose bytes 10 to 13 hold 20
+    /// bits of sample rate, 3 of channels minus one and 5 of bits per sample
+    /// minus one.
+    private static func flacStreamInfo(of url: URL) throws -> (channels: Int, bitsPerSample: Int) {
         let bytes = try [UInt8](XCTUnwrap(FileHandle(forReadingFrom: url).read(upToCount: 42)))
         XCTAssertEqual(Data(bytes.prefix(4)), Data("fLaC".utf8))
         XCTAssertEqual(bytes[4] & 0x7F, 0, "the first metadata block is STREAMINFO")
         let field = 8 + 10
-        return Int((bytes[field + 2] & 0x01) << 4 | bytes[field + 3] >> 4) + 1
+        let channels = Int(bytes[field + 2] >> 1 & 0x07) + 1
+        let bits = Int((bytes[field + 2] & 0x01) << 4 | bytes[field + 3] >> 4) + 1
+        return (channels, bits)
     }
 
     private func names() throws -> [String] {
@@ -142,7 +181,7 @@ final class KeptRecordingCompressorTests: XCTestCase {
 
         try KeptRecordingCompressor().prepare(source: wav, partial: partial)
 
-        XCTAssertEqual(try Self.flacBitsPerSample(of: partial), 16)
+        XCTAssertEqual(try Self.flacStreamInfo(of: partial).bitsPerSample, 16)
     }
 
     /// A 24-bit track keeps its 24 bits, and its samples, through the copy.
@@ -152,8 +191,63 @@ final class KeptRecordingCompressorTests: XCTestCase {
 
         try KeptRecordingCompressor().prepare(source: wav, partial: partial)
 
-        XCTAssertEqual(try Self.flacBitsPerSample(of: partial), 24)
-        XCTAssertNoThrow(try KeptRecordingCompressor().verify(partial, matches: wav))
+        // The round trip is the verify inside `prepare`, which throws on any
+        // sample that differs.
+        XCTAssertEqual(try Self.flacStreamInfo(of: partial).bitsPerSample, 24)
+    }
+
+    /// An 8-bit track goes through the 16-bit path, read and written as
+    /// 16-bit samples, so the FLAC is not widened to 24 bits, and every
+    /// sample comes back. The sample comparison reads both files itself
+    /// rather than resting on the verify alone.
+    func testAn8BitTrackIsWrittenAsAtMost16BitFLACAndRoundTrips() throws {
+        let noise = Self.noise(seed: 3)
+        // Only the high byte survives an 8-bit file; the extremes come first.
+        let wav = try writeIntWAV("meeting_mix.wav", bits: 8) { frame, _ in
+            switch frame {
+            case 0: Int32(Int16.min)
+            case 1: Int32(Int16.max & ~0xFF)
+            default: noise(frame) >> 16 & ~0xFF
+            }
+        }
+        XCTAssertEqual(try AVAudioFile(forReading: wav).fileFormat.settings[AVLinearPCMBitDepthKey] as? Int, 8, "test premise: an 8-bit WAV")
+        let partial = try partial(for: wav)
+
+        try KeptRecordingCompressor().prepare(source: wav, partial: partial)
+
+        let info = try Self.flacStreamInfo(of: partial)
+        XCTAssertEqual(info.channels, 1)
+        // 16 today; an encoder that honoured the 8-bit hint would be no worse.
+        XCTAssertLessThanOrEqual(info.bitsPerSample, 16)
+        let original = try Self.int16Samples(of: wav)
+        // Not XCTAssertEqual: its failure message prints both arrays whole.
+        XCTAssertTrue(try Self.int16Samples(of: partial) == original, "the FLAC decodes to other samples")
+    }
+
+    /// A stereo 16-bit track keeps both channels, each with its own samples.
+    func testAStereo16BitTrackIsWrittenAsStereo16BitFLACAndRoundTrips() throws {
+        let left = Self.noise(seed: 5), right = Self.noise(seed: 9)
+        let wav = try writeIntWAV("meeting_mix.wav", bits: 16, channels: 2) { frame, channel in
+            switch (frame, channel) {
+            case (0, 0): Int32(Int16.min)
+            case (0, 1): Int32(Int16.max)
+            case (_, 0): left(frame) >> 16
+            default: right(frame) >> 16
+            }
+        }
+        let partial = try partial(for: wav)
+
+        try KeptRecordingCompressor().prepare(source: wav, partial: partial)
+
+        let info = try Self.flacStreamInfo(of: partial)
+        XCTAssertEqual(info.channels, 2)
+        XCTAssertEqual(info.bitsPerSample, 16)
+        // Read independently of the verify, so a verify that compared one
+        // channel only would not hide a lost one here.
+        let original = try Self.int16Samples(of: wav)
+        XCTAssertNotEqual(original[2], original[3], "test premise: the channels differ")
+        // Not XCTAssertEqual: its failure message prints both arrays whole.
+        XCTAssertTrue(try Self.int16Samples(of: partial) == original, "the FLAC decodes to other samples")
     }
 
     /// The verify catches a copy of other samples for a 24-bit track too,
@@ -307,16 +401,24 @@ final class KeptRecordingCompressorTests: XCTestCase {
     }
 
     /// The copy is changed between the write and the verify; the verify must
-    /// catch it.
-    func testAMismatchLeavesNoCopyAndTheSource() throws {
-        let wav = try writeWAV("meeting_mix.wav")
+    /// catch it, down to one step in one sample at 16 bits, the depth the
+    /// recorder writes.
+    func testAOneStepMismatchIn16BitSamplesLeavesNoCopyAndTheSource() throws {
+        let noise = Self.noise(seed: 13)
+        // Longer than one verify chunk, with the step in the second one;
+        // spread over the Int16 range, the step taken down where up would
+        // overflow.
+        let stepped = 80000
+        XCTAssertGreaterThan(stepped, Int(KeptRecordingCompressor().chunkFrames), "test premise: past the first chunk")
+        let wav = try writeIntWAV("meeting_mix.wav", bits: 16, seconds: 6) { frame, _ in noise(frame) >> 16 }
+        let other = try writeIntWAV("other.wav", bits: 16, seconds: 6) { frame, _ in
+            let value = noise(frame) >> 16
+            guard frame == stepped else { return value }
+            return value < Int32(Int16.max) ? value + 1 : value - 1
+        }
         var compressor = KeptRecordingCompressor()
         compressor.afterWrite = { partial in
-            // Replace the copy with a valid FLAC of other samples.
-            let other = partial.deletingLastPathComponent().appendingPathComponent("other.wav")
-            var samples = Self.syntheticSamples()
-            samples[100_000] = 0.5
-            try AudioMixer.saveWAV(samples: samples, sampleRate: AudioConstants.targetSampleRate, url: other)
+            // Replace the copy with a valid FLAC of the stepped samples.
             try FileManager.default.removeItem(at: partial)
             try KeptRecordingCompressor().prepare(source: other, partial: partial)
             try FileManager.default.removeItem(at: other)
