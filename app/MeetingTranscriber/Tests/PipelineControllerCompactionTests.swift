@@ -1,4 +1,5 @@
 @testable import MeetingTranscriber
+import os
 import XCTest
 
 /// How `PipelineController` wires the compactor: the queues it builds share
@@ -52,21 +53,27 @@ final class PipelineControllerCompactionTests: XCTestCase {
 
     /// A finished, eligible recording in the output folder, 16-bit, listed
     /// and marked as owed the conversion.
-    private func registerMarkedRecording(in controller: PipelineController) throws -> URL {
+    private func registerMarkedRecording(
+        in controller: PipelineController,
+        stem: String = "20260101_0900_sync_ab12cd34",
+        recordedAt: Date = Date(timeIntervalSince1970: 1_767_258_000),
+        eligibleAt: Date = Date(),
+        marked: Bool = true,
+    ) throws -> URL {
         let root = settings.effectiveOutputDir
         let recordings = root.appendingPathComponent("recordings", isDirectory: true)
         try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
-        let mix = recordings.appendingPathComponent("20260101_0900_sync_ab12cd34_mix.wav")
+        let mix = recordings.appendingPathComponent("\(stem)_mix.wav")
         let samples = (0 ..< AudioConstants.targetSampleRate).map { Float(Int16(clamping: $0 % 4000)) / 32768 }
         try AudioMixer.saveWAV(samples: samples, sampleRate: AudioConstants.targetSampleRate, url: mix)
-        let protocolFile = root.appendingPathComponent("protocols/20260101_0900_sync_ab12cd34.md")
+        let protocolFile = root.appendingPathComponent("protocols/\(stem).md")
         try FileManager.default.createDirectory(at: protocolFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("# Protocol".utf8).write(to: protocolFile)
         let jobID = UUID()
         let registry = controller.recordingRetention.registry
-        registry.register(jobID: jobID, paths: [mix], root: root, recordedAt: Date(timeIntervalSince1970: 1_767_258_000))
-        registry.markEligible(jobID: jobID, output: protocolFile, at: Date())
-        registry.markAwaiting(.flac, jobID: jobID, root: root)
+        registry.register(jobID: jobID, paths: [mix], root: root, recordedAt: recordedAt)
+        registry.markEligible(jobID: jobID, output: protocolFile, at: eligibleAt)
+        if marked { registry.markAwaiting(.flac, jobID: jobID, root: root) }
         return mix
     }
 
@@ -156,5 +163,74 @@ final class PipelineControllerCompactionTests: XCTestCase {
         let flac = try XCTUnwrap(KeptRecordingCompressor.compressedURL(for: mix))
         XCTAssertFalse(CompactionDisk.exists(flac), "a recording come due is not converted first")
         XCTAssertTrue(CompactionDisk.exists(mix))
+    }
+
+    /// A storage-limit pass that lands after the compactor has listed and
+    /// named a track's FLAC but before it unlinks the WAV keeps both copies:
+    /// the compactor's entry in work is held for the size pass too. Entry A
+    /// is older than entry C on purpose: were A deletable, the pass would
+    /// pick it first and, with C alone not enough, take its WAV and its FLAC.
+    func testASizePassBetweenTheCommitAndTheUnlinkKeepsBothCopies() async throws {
+        settings.compressKeptRecordings = true
+        settings.recordingRetentionEnabled = false
+        settings.recordingStorageLimitEnabled = true
+        settings.recordingStorageLimitGB = 1
+        let syncing = OSAllocatedUnfairLock(initialState: false)
+        let release = DispatchSemaphore(value: 0)
+        // A failed assert before the release must not park the compactor
+        // for the tests that share this process.
+        defer { release.signal() }
+        let steps = RecordingCompactionWorker.Steps.live.with(\.syncFolder) { folder in
+            let first = syncing.withLock { state -> Bool in
+                defer { state = true }
+                return !state
+            }
+            if first { release.wait() }
+            KeptRecordingCompressor.syncFolder(folder)
+        }
+        let controller = try makeController(steps: steps, activate: false)
+        let twoDaysAgo = Date().addingTimeInterval(-48 * 3600)
+        let mix = try registerMarkedRecording(in: controller, eligibleAt: twoDaysAgo)
+        let flac = try XCTUnwrap(KeptRecordingCompressor.compressedURL(for: mix))
+        let large = try registerMarkedRecording(
+            in: controller, stem: "20260102_0900_large_cd34ab12",
+            recordedAt: Date(timeIntervalSince1970: 1_767_344_400), eligibleAt: twoDaysAgo, marked: false,
+        )
+        let handle = try FileHandle(forWritingTo: large)
+        try handle.truncate(atOffset: 1_000_000_001)
+        try handle.close()
+
+        // The launch pass warns (the large recording alone is over), and
+        // the launch run commits the FLAC and stops in the folder sync.
+        controller.activate { MockEngine() }
+        await waitFor(syncing.withLock { $0 } && settings.recordingStorageAlarm.load() != nil, timeout: .seconds(10))
+        let warning = try XCTUnwrap(settings.recordingStorageAlarm.load())
+        settings.recordingStorageAlarm.save(RecordingStorageWarning(
+            since: warning.since.addingTimeInterval(-25 * 3600), limitBytes: warning.limitBytes, root: warning.root,
+        ))
+        XCTAssertTrue(CompactionDisk.exists(mix) && CompactionDisk.exists(flac), "test premise: both copies on disk")
+        let listed = Set(controller.recordingRetention.registry.entries.flatMap(\.paths).map(\.lastPathComponent))
+        XCTAssertTrue(
+            listed.isSuperset(of: [mix.lastPathComponent, flac.lastPathComponent]), "test premise: both copies listed",
+        )
+
+        await controller.sweepRetainedRecordings()
+
+        XCTAssertFalse(CompactionDisk.exists(large), "control: the pass reached its delete step")
+        XCTAssertTrue(CompactionDisk.exists(mix), "a size pass deleted the WAV in the middle of its commit")
+        XCTAssertTrue(CompactionDisk.exists(flac), "a size pass deleted the copy the compactor just named")
+        XCTAssertNil(settings.recordingStorageAlarm.load(), "under the limit once the large recording is gone")
+
+        release.signal()
+        await waitFor(
+            !controller.recordingCompaction.isRunning && controller.recordingCompaction.awaitingCount == 0,
+            timeout: .seconds(10),
+        )
+        XCTAssertTrue(KeptRecordingCompressor.isNativeFLAC(flac))
+        XCTAssertFalse(CompactionDisk.exists(mix))
+        let names = CompactionDisk.recordingNames(in: mix.deletingLastPathComponent())
+        XCTAssertEqual(names, [flac.lastPathComponent], "only the FLAC is left, no partial")
+        let listedAfter = controller.recordingRetention.registry.entries.flatMap(\.paths).map(\.lastPathComponent)
+        XCTAssertEqual(listedAfter, [flac.lastPathComponent])
     }
 }
