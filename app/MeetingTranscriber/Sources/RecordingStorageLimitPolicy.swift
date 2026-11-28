@@ -49,6 +49,8 @@ enum RecordingStorageLimitPolicy {
     /// One recording the age rules would let go of, with what its files weigh.
     struct Candidate: Equatable {
         let jobID: UUID
+        /// With `jobID`, which entry it is: one job can have one per root.
+        let root: URL
         let recordedAt: Date
         /// When its outputs were saved, so it became deletable.
         let eligibleAt: Date

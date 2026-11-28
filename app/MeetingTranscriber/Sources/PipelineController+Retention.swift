@@ -134,6 +134,15 @@ extension PipelineController {
             guard let self else { return [] }
             return queue.retentionExcludedPaths.union(recordingCompaction.inWorkPaths)
         }
+        // Whether a run will remove a track's WAV beside its FLAC, so the
+        // storage limit counts the pair once. The folder the next run would
+        // use is read once per call, not per entry.
+        recordingRetention.pairResolves = { [weak self] in
+            guard let self else { return { _ in false } }
+            let compaction = recordingCompaction
+            let idleRoot = compactionOutputRoot
+            return { compaction.pairResolves($0, idleRoot: idleRoot) }
+        }
         observeRetentionSettings()
         scheduleRetentionSweeps()
     }
@@ -175,6 +184,14 @@ extension PipelineController {
             }
             await compactRecordings()
         }
+    }
+
+    /// The output folder `compactRecordings` runs the compactor under: the
+    /// built queue's (`PipelineQueue.compactRecordings`), or before one is
+    /// installed `outputDirectory.current`, as `withoutBuiltQueue` reads it.
+    /// Nil for a built queue without an output folder, which runs nothing.
+    var compactionOutputRoot: URL? {
+        queue.recordingCompaction == nil ? outputDirectory.current : queue.outputDir
     }
 
     /// Run the compactor for the current queue, or, before a built queue is

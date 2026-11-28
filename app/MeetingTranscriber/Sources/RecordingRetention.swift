@@ -102,6 +102,15 @@ final class RecordingRetention {
     /// in the one that replaced it.
     var heldPaths: () -> Set<String> = { [] }
 
+    /// Whether a compaction run is expected to remove the WAV of a track an
+    /// entry lists beside its FLAC, set by the controller from
+    /// `RecordingCompaction.pairResolves`. For such an entry the size pass
+    /// counts the pair once, as the FLAC; otherwise both files count. Called
+    /// once per measure and once per deleted recording, and the predicate it
+    /// returns once per entry, so the output folder it compares with is
+    /// resolved once per call rather than per entry.
+    var pairResolves: () -> (RetainedRecording) -> Bool = { { _ in false } }
+
     private func inUse(_ context: SweepContext) -> Set<String> {
         context.excludedPaths().union(heldPaths())
     }
@@ -393,7 +402,8 @@ final class RecordingRetention {
             Storage limit pass: \(String(describing: step), privacy: .public), total \(total, privacy: .public) \
             of \(limit.limitBytes, privacy: .public) bytes, deletable \(candidates.count, privacy: .public), \
             picked \(picked.count, privacy: .public), deleted files \(result.files, privacy: .public), \
-            freed \(result.bytes, privacy: .public) bytes, warning \(self.alarm.load() != nil, privacy: .public)
+            counted total down by \(result.bytes, privacy: .public) bytes (up when negative), \
+            warning \(self.alarm.load() != nil, privacy: .public)
             """,
         )
     }
@@ -405,7 +415,7 @@ final class RecordingRetention {
         alarm.save(RecordingStorageWarning(since: instant, limitBytes: limitBytes, root: root))
     }
 
-    /// The bytes every reachable listed file takes, and the recordings the
+    /// The bytes every reachable listed file takes and the recordings the
     /// age rule would let go of with a period of 0 days.
     private func measure(
         _ context: SweepContext, now instant: Date,
@@ -413,6 +423,7 @@ final class RecordingRetention {
         let environment = RecordingRetentionPolicy.Environment.live(
             excludedPaths: inUse(context), scopedRoot: context.scopeRoot,
         )
+        let resolves = pairResolves()
         var total: Int64 = 0
         var candidates: [RecordingStorageLimitPolicy.Candidate] = []
         var gone: [RetainedRecording] = []
@@ -420,16 +431,16 @@ final class RecordingRetention {
             if let scoped = context.scopeRoot,
                RecordingRetentionPolicy.pathKey(scoped) != RecordingRetentionPolicy.pathKey(entry.root) { continue }
             guard environment.fileExists(entry.root) else { continue }
-            total += entry.paths
-                .filter { RecordingRetentionPolicy.isInRecordingsFolder($0, of: entry.root, in: environment) }
-                .filter(environment.fileExists)
-                .reduce(0) { $0 + fileSize($1) }
+            let bytes = countedBytes(of: entry, in: environment, pairResolves: resolves)
+            total += bytes
             switch RecordingRetentionPolicy.decide(entry, now: instant, settings: Self.anyAge, environment: environment) {
             case let .delete(urls):
-                // `decide` deletes only an entry with `eligibleAt` set.
+                // `decide` deletes only an entry with `eligibleAt` set. It
+                // lists every file `countedBytes` counts, so `bytes` is what
+                // deleting them frees.
                 candidates.append(.init(
-                    jobID: entry.jobID, recordedAt: entry.recordedAt, eligibleAt: entry.eligibleAt ?? instant, urls: urls,
-                    bytes: urls.reduce(0) { $0 + fileSize($1) },
+                    jobID: entry.jobID, root: entry.root, recordedAt: entry.recordedAt,
+                    eligibleAt: entry.eligibleAt ?? instant, urls: urls, bytes: bytes,
                 ))
 
             case .drop(.filesGone):
@@ -442,12 +453,39 @@ final class RecordingRetention {
         return (total, candidates, gone)
     }
 
+    /// The bytes `entry`'s listed files take on disk in its recordings
+    /// folder, as the size pass counts them: for an entry `pairResolves`
+    /// accepts, a WAV whose FLAC is listed and on disk beside it counts
+    /// nothing. Deleting the entry still removes both.
+    private func countedBytes(
+        of entry: RetainedRecording, in environment: RecordingRetentionPolicy.Environment,
+        pairResolves: (RetainedRecording) -> Bool,
+    ) -> Int64 {
+        var counted = entry.paths
+            .filter { RecordingRetentionPolicy.isInRecordingsFolder($0, of: entry.root, in: environment) }
+            .filter(environment.fileExists)
+        if pairResolves(entry) {
+            let keys = Set(counted.map(RecordingRetentionPolicy.pathKey))
+            counted = counted.filter { url in
+                guard let flac = KeptRecordingCompressor.compressedURL(for: url) else { return true }
+                return !keys.contains(RecordingRetentionPolicy.pathKey(flac))
+            }
+        }
+        return counted.reduce(0) { $0 + fileSize($1) }
+    }
+
     /// The age rule's checks with no period: due as soon as it is safe.
     private static let anyAge = RecordingRetentionSettings(enabled: true, days: 0)
 
     /// Delete `picked`, rechecking each file as the age pass does, and stop
     /// once the live limit is met, so raising it mid-pass applies at once.
-    /// Returns the files deleted and the bytes freed.
+    /// Returns the files deleted and the bytes freed, as `measure` counts
+    /// them: per recording, its counted bytes before less what its entry, as
+    /// it is now, counts after. So what another writer did meanwhile (a
+    /// rename, the compactor writing a FLAC) counts as it stands, and a
+    /// delete that failed or was cut off while the FLAC went leaves a WAV
+    /// that counted nothing before and counts in full now: what is freed can
+    /// be negative.
     private func delete(
         _ picked: [RecordingStorageLimitPolicy.Candidate], _ context: SweepContext, totalBytes: Int64,
     ) async -> (files: Int, bytes: Int64) {
@@ -471,12 +509,16 @@ final class RecordingRetention {
                       RecordingRetentionPolicy.isDue(entry, now: now(), settings: Self.anyAge),
                       !RecordingRetentionPolicy.isInUse(entry, excludedPaths: inUse(context))
                 else { break }
-                let size = fileSize(url)
-                let deleted = await deleter.delete([url])
-                gone += deleted
-                if !deleted.isEmpty { freed += size }
+                gone += await deleter.delete([url])
             }
             registry.forget(gone, of: candidate.jobID)
+            let environment = RecordingRetentionPolicy.Environment.live(
+                excludedPaths: inUse(context), scopedRoot: context.scopeRoot,
+            )
+            let after = registry.entry(of: candidate.jobID, under: candidate.root).map { entry in
+                countedBytes(of: entry, in: environment, pairResolves: pairResolves())
+            } ?? 0
+            freed += candidate.bytes - after
             deletedFiles += gone.count
         }
         return (deletedFiles, freed)

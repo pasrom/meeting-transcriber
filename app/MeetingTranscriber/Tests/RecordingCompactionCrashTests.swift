@@ -102,6 +102,85 @@ final class RecordingCompactionCrashTests: XCTestCase {
         }
     }
 
+    private func size(of name: String) throws -> Int64 {
+        let path = fixture.recordingsDir.appendingPathComponent(name).path
+        return try Int64(XCTUnwrap(FileManager.default.attributesOfItem(atPath: path)[.size] as? Int))
+    }
+
+    /// At every crash point the storage limit counts the recording as it is
+    /// on disk: a listed name not created yet or already unlinked counts
+    /// nothing, the hidden partial never counts, and, with the compactor
+    /// active and the entry still marked, a track whose WAV and FLAC are both
+    /// listed and on disk counts once, as the FLAC. Past the grace period it
+    /// then deletes every visible file of the recording and, on the pass
+    /// after, drops the entry.
+    func testEveryCrashPointIsCountedAsItIsOnDiskAndFullyDeletedByTheSizeLimit() async throws {
+        var checkedLastRename = false
+        for snapshot in try await captureCrashStates() {
+            try snapshot.restore()
+            let names = visible(CompactionDisk.recordingNames(in: fixture.recordingsDir))
+            let listed = CompactionDisk.listedNames(at: fixture.registryFile)
+            XCTAssertEqual(
+                CompactionDisk.entries(at: fixture.registryFile).first?.awaiting, [.flac], "\(snapshot.name): test premise",
+            )
+            let counted = names.filter { name in
+                let flac = String(name.dropLast(3)) + "flac"
+                return !(name.hasSuffix(".wav") && listed.contains(name) && listed.contains(flac) && names.contains(flac))
+            }
+            var expected = try counted.reduce(Int64(0)) { try $0 + size(of: $1) }
+            if snapshot.name.hasPrefix("after rename"), snapshot.name.hasSuffix("_mic.wav") {
+                // Every track has its FLAC now; only the mic's WAV is still
+                // there, and it does not count: three FLACs and the sidecar.
+                let explicit = try names.filter { $0.hasSuffix(".flac") || $0.hasSuffix(RecordingSidecar.recordingFilenameSuffix) }
+                    .reduce(Int64(0)) { try $0 + size(of: $1) }
+                XCTAssertEqual(names.count { $0.hasSuffix(".flac") }, 3, "test premise")
+                XCTAssertEqual(names.count { $0.hasSuffix(".wav") }, 1, "test premise")
+                XCTAssertEqual(expected, explicit, "the derived total disagrees with the explicit one")
+                expected = explicit
+                checkedLastRename = true
+            }
+            var clock = Date().addingTimeInterval(1)
+            var reached: [Int64] = []
+            let alarm = RecordingStorageAlarm.inMemory()
+            let retention = RecordingRetention(
+                registry: RecordingRetentionRegistry(path: fixture.registryFile),
+                settings: { RecordingRetentionSettings(enabled: false, days: 0) },
+                now: { clock },
+                storageLimit: { RecordingStorageLimitSettings(enabled: true, limitBytes: 0) },
+                alarm: alarm,
+                onLimitReached: { total, _ in reached.append(total) },
+                report: { _ in },
+            )
+            // The compactor a relaunch builds, with the setting on and FLAC
+            // found, under this fixture's output folder.
+            let compaction = RecordingCompaction(
+                registry: retention.registry, isEnabled: { true },
+                retentionSettings: { RecordingRetentionSettings(enabled: false, days: 0) },
+            )
+            compaction.codecStatus = .available
+            let output = fixture.output
+            retention.pairResolves = { { compaction.pairResolves($0, idleRoot: output) } }
+            let context = RecordingRetention.SweepContext(excludedPaths: { [] }, scopeRoot: nil, securityScope: .live)
+
+            await retention.sweep(context)
+            XCTAssertEqual(reached, [expected], "\(snapshot.name): counted total")
+            XCTAssertEqual(
+                visible(CompactionDisk.recordingNames(in: fixture.recordingsDir)), names, "\(snapshot.name): the grace period",
+            )
+
+            clock = clock.addingTimeInterval(RecordingStorageLimitPolicy.gracePeriod)
+            await retention.sweep(context)
+            let left = CompactionDisk.recordingNames(in: fixture.recordingsDir)
+            XCTAssertEqual(visible(left), [], "\(snapshot.name): the size limit left part of the recording")
+            XCTAssertTrue(left.allSatisfy(RecordingCompaction.isPartialCopy), "\(snapshot.name): left \(left)")
+            XCTAssertNil(alarm.load(), "\(snapshot.name): nothing counted is left")
+
+            await retention.sweep(context)
+            XCTAssertTrue(retention.registry.entries.isEmpty, "\(snapshot.name): the emptied entry stays listed")
+        }
+        XCTAssertTrue(checkedLastRename, "test premise: the snapshot after the last rename was taken")
+    }
+
     /// From every crash point, the next run ends with exactly the FLAC tracks
     /// and the sidecar, all listed, no WAV, no partial, and the mark gone.
     func testASecondRunFinishesWhatACrashLeft() async throws {

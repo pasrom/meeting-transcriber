@@ -80,6 +80,9 @@ final class RecordingCompaction {
     @ObservationIgnored private var running: Task<Void, Never>?
     @ObservationIgnored private var pending: (Context, RecordingCompactionPlan.Request)?
     @ObservationIgnored private var cancelRequested = false
+    /// The output folder of the run going on, nil between runs. A run keeps
+    /// the folder it was started with when the queue moves to another one.
+    @ObservationIgnored private var runRoot: URL?
 
     /// `isEnabled` is the FLAC setting, read live; `retentionSettings` the
     /// settings retention acts on, so an entry about to be deleted is not
@@ -107,6 +110,29 @@ final class RecordingCompaction {
     /// Whether a finished job should be converted, and a run started for it.
     var wantsWork: Bool {
         isEnabled() && codecStatus == .available
+    }
+
+    /// Whether a run is expected to remove the WAV of a track `entry` lists
+    /// beside its FLAC, so the storage limit counts the pair once
+    /// (`RecordingRetention.pairResolves`): the entry in work, or one still
+    /// marked as owed FLAC while the setting is on and the probe has not
+    /// ruled FLAC out (the rule `markFinished` marks by, so the launch pass,
+    /// which runs before the probe answers, counts a pair a quit left once),
+    /// under the folder of the run going on or `idleRoot`, the folder the
+    /// next run would be given.
+    ///
+    /// Known limit: a marked entry a run passes over (due under the age rule,
+    /// held by a job that ended in an error), and a session whose probe never
+    /// answers, still count the pair once while that lasts. So does a marked
+    /// pair whose unlink failed, or met after the setting was switched off
+    /// and on, or after a run returned early because its scope did not open:
+    /// it waits for the next job to finish or the next launch, the only
+    /// events that start a run.
+    func pairResolves(_ entry: RetainedRecording, idleRoot: URL?) -> Bool {
+        if RecordingRetentionPolicy.isInUse(entry, excludedPaths: inWorkPaths) { return true }
+        guard entry.awaiting.contains(.flac), isEnabled(), codecStatus.unavailableReason == nil else { return false }
+        let key = RecordingRetentionPolicy.pathKey(entry.root)
+        return [runRoot, idleRoot].contains { $0.map(RecordingRetentionPolicy.pathKey) == key }
     }
 
     /// How many entries a run still owes FLAC, for `/state`.
@@ -180,6 +206,8 @@ final class RecordingCompaction {
     }
 
     private func runOnce(_ context: Context, request: RecordingCompactionPlan.Request) async {
+        runRoot = context.outputRoot
+        defer { runRoot = nil }
         // One scope for the whole run, on the object the caller resolved: a
         // queue rebuild can release the queue's own while the run is going.
         if let scopeRoot = context.scopeRoot {

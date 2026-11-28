@@ -77,7 +77,7 @@ final class RecordingStorageLimitPolicyTests: XCTestCase {
     func testSelectsOldestFirstUntilUnderTheLimit() {
         let make = { (age: Double, bytes: Int64) in
             RecordingStorageLimitPolicy.Candidate(
-                jobID: UUID(), recordedAt: self.start.addingTimeInterval(-age * 86400), eligibleAt: self.start,
+                jobID: UUID(), root: URL(fileURLWithPath: "/tmp/root"), recordedAt: self.start.addingTimeInterval(-age * 86400), eligibleAt: self.start,
                 urls: [], bytes: bytes,
             )
         }
