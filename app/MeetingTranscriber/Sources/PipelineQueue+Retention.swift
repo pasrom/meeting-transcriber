@@ -42,7 +42,7 @@ extension PipelineQueue {
 
     /// Run a compaction pass with this queue's output folder, its scope and
     /// its unfinished jobs. Returns once the run (or the one it joined) is done.
-    func compactRecordings() async {
+    func compactRecordings(_ request: RecordingCompactionPlan.Request = .awaiting(.flac)) async {
         guard let recordingCompaction, let outputDir else { return }
         await recordingCompaction.run(.init(
             excludedPaths: { [weak self] in self?.retentionExcludedPaths ?? [] },
@@ -50,7 +50,7 @@ extension PipelineQueue {
             outputRoot: outputDir,
             scopeRoot: scopedOutputDir,
             securityScope: securityScope,
-        ))
+        ), request: request)
     }
 
     /// Point a job of this queue that names `from` at `to`, the compressed

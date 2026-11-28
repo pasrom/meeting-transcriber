@@ -37,8 +37,9 @@ final class RecordingCompactionPlanTests: XCTestCase {
         excluded: Set<String> = [],
         retention: RecordingRetentionSettings? = nil,
         environment: RecordingRetentionPolicy.Environment? = nil,
+        request: RecordingCompactionPlan.Request = .awaiting(.flac),
     ) -> RecordingCompactionPlan.Selection {
-        RecordingCompactionPlan.select(entries, request: .awaiting(.flac), in: .init(
+        RecordingCompactionPlan.select(entries, request: request, in: .init(
             outputRoot: root, now: now,
             retention: retention ?? off, environment: environment ?? self.environment(excluded: excluded),
         ))
@@ -100,6 +101,59 @@ final class RecordingCompactionPlanTests: XCTestCase {
 
         XCTAssertEqual(selection.candidates, [])
         XCTAssertEqual(selection.skipped, [.notAwaiting: 2])
+    }
+
+    // MARK: - Entries, the explicit run over every entry
+
+    /// "Compress Existing Recordings" takes every entry that still lists a
+    /// WAV track, marked or not; one with nothing left as WAV is counted, not
+    /// worked on, unless a mark is left to clear.
+    func testEveryEntryWithAWAVTrackIsACandidateForTheExplicitRun() {
+        let unmarked = entry(["m_mix.wav", "m_app.wav", "m_recording.json"], awaiting: [])
+        let compressed = entry(["c_mix.flac", "c_app.flac", "c_recording.json"], awaiting: [])
+        let markedDone = entry(["d_mix.flac"], awaiting: [.flac])
+
+        let selection = select([unmarked, compressed, markedDone], request: .everyEntry)
+
+        XCTAssertEqual(selection.candidates.map(\.jobID), [unmarked.jobID, markedDone.jobID])
+        XCTAssertEqual(selection.candidates.first?.tracks.map(\.lastPathComponent), ["m_mix.wav", "m_app.wav"])
+        XCTAssertEqual(selection.skipped, [.noWAVTrack: 1])
+    }
+
+    /// The explicit run skips what the automatic one skips: held entries
+    /// (an error job's recording stays held until it is dismissed), other
+    /// output folders, a missing folder and entries about to be deleted.
+    func testTheExplicitRunSkipsHeldUnreachableAndDueEntries() {
+        let held = entry(["h_mix.wav"], awaiting: [])
+        let elsewhere = entry(["e_mix.wav"], under: URL(fileURLWithPath: "/elsewhere"), awaiting: [])
+        let excluded: Set = [RecordingRetentionPolicy.pathKey(held.paths[0])]
+
+        let selection = select([held, elsewhere], excluded: excluded, request: .everyEntry)
+        XCTAssertEqual(selection.candidates, [])
+        XCTAssertEqual(selection.skipped, [.inUse: 1, .otherRoot: 1])
+
+        let env = RecordingRetentionPolicy.Environment(
+            excludedPaths: [], scopedRoot: nil, fileExists: { _ in false }, hasContent: { _ in true },
+            resolve: { $0 }, canList: { _ in true },
+        )
+        XCTAssertEqual(select([entry(["m_mix.wav"], awaiting: [])], environment: env, request: .everyEntry).skipped, [.rootMissing: 1])
+        let due = RecordingRetentionSettings(enabled: true, days: 0)
+        XCTAssertEqual(select([entry(["m_mix.wav"], awaiting: [])], retention: due, request: .everyEntry).skipped, [.due: 1])
+    }
+
+    /// What Settings counts before the run: candidates with a WAV track
+    /// directly in the current folder's recordings folder.
+    func testTheCompressibleCountTakesOnlyCandidatesWithATrackInTheFolder() {
+        var outsideOnly = entry([], awaiting: [])
+        outsideOnly.paths = [root.appendingPathComponent("elsewhere/o_mix.wav")]
+        let entries = [
+            entry(["m_mix.wav", "m_app.wav"], awaiting: []),
+            entry(["n_mic.wav"], awaiting: [.flac]),
+            entry(["d_mix.flac"], awaiting: [.flac]),
+            outsideOnly,
+        ]
+
+        XCTAssertEqual(select(entries, request: .everyEntry).compressibleCount, 2)
     }
 
     // MARK: - Tracks

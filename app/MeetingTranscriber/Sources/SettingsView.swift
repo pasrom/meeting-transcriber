@@ -35,6 +35,8 @@ struct SettingsView: View {
     var captionWarmup: LiveCaptionsWarmup = .idle
     /// What the launch probe found, for the FLAC toggle in Output.
     var keptRecordingCodec: KeptRecordingCodecStatus = .unknown
+    /// The "Compress Existing Recordings" rows in Output; nil leaves them out.
+    var compressExistingRecordings: CompressExistingRecordingsState?
 
     @State private var selection: SettingsTab = .general
 
@@ -99,7 +101,9 @@ struct SettingsView: View {
             )
 
         case .output:
-            OutputSettingsView(settings: settings, keptRecordingCodec: keptRecordingCodec)
+            OutputSettingsView(
+                settings: settings, keptRecordingCodec: keptRecordingCodec, compressExisting: compressExistingRecordings,
+            )
 
         case .advanced:
             AdvancedSettingsView(settings: settings)

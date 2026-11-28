@@ -90,19 +90,20 @@ extension PipelineController {
     /// with: the output folder from `outputDirectory.current` and its scope,
     /// held while `body` runs, and as held paths every track an unfinished
     /// job in the snapshot names, besides the placeholder queue's own. An
-    /// unreadable snapshot skips `body` with a line naming `what`. Without
-    /// `readingSnapshot` (nothing a held path could protect) the snapshot is
-    /// not read.
+    /// unreadable snapshot skips `body` with a line naming `what`, and the
+    /// result is false then. Without `readingSnapshot` (nothing a held path
+    /// could protect) the snapshot is not read.
+    @discardableResult
     private func withoutBuiltQueue(
         _ what: String, readingSnapshot: Bool, _ body: @MainActor (PlaceholderReach) async -> Void,
-    ) async {
+    ) async -> Bool {
         var held: Set<String> = []
         if readingSnapshot {
             do {
                 held = try PipelineQueue.heldTrackKeys(of: PipelineSnapshotStore.latestJobs(in: queue.logDir) ?? [])
             } catch {
                 logger.warning("\(what, privacy: .public) skipped: the queue snapshot could not be read")
-                return
+                return false
             }
         }
         // Not `resolve()`: that reports an unreachable folder, which is news
@@ -116,6 +117,7 @@ extension PipelineController {
             excludedPaths: { [weak placeholder, held] in held.union(placeholder?.retentionExcludedPaths ?? []) },
             root: root, scopeRoot: scoped, securityScope: scope,
         ))
+        return true
     }
 
     /// See `withoutBuiltQueue`.
@@ -198,15 +200,21 @@ extension PipelineController {
     /// installed, with what a retention pass at that point uses: the tracks
     /// the snapshot's unfinished jobs name as held, and the output folder's
     /// scope on `outputDirectory.current`, held until the run returns. An
-    /// unreadable snapshot skips the run. With nothing marked the run only
-    /// sweeps, and the snapshot is not read.
-    func compactRecordings() async {
+    /// unreadable snapshot skips the run, and Settings is told when the user
+    /// asked for it. With nothing marked an automatic run only sweeps, and
+    /// the snapshot is not read.
+    func compactRecordings(_ request: RecordingCompactionPlan.Request = .awaiting(.flac)) async {
         guard queue.recordingCompaction == nil else {
-            await queue.compactRecordings()
+            await queue.compactRecordings(request)
             return
         }
-        let readingSnapshot = recordingCompaction.awaitingCount > 0
-        await withoutBuiltQueue("Compaction run", readingSnapshot: readingSnapshot) { reach in
+        let started = await withoutBuiltQueue(
+            // Also while the user's run is queued: the newest context is the
+            // one queued requests run with, and one without the snapshot's
+            // held tracks would strip them from that run.
+            "Compaction run",
+            readingSnapshot: recordingCompaction.hasWork(for: request) || recordingCompaction.requestedRun != .idle,
+        ) { reach in
             await recordingCompaction.run(.init(
                 excludedPaths: reach.excludedPaths,
                 // No queue holds a finished job yet; the restore reads the
@@ -215,8 +223,24 @@ extension PipelineController {
                 outputRoot: reach.root,
                 scopeRoot: reach.scopeRoot,
                 securityScope: reach.securityScope,
-            ))
+            ), request: request)
         }
+        if !started, request.isExplicit { recordingCompaction.recordRequestedRunNotStarted(.queueStateUnreadable) }
+    }
+
+    /// "Compress Existing Recordings": one run over every tracked recording
+    /// that still has WAV tracks, with the FLAC setting on or off, through
+    /// the same `run` the automatic triggers use, so it queues behind a run
+    /// in progress instead of running beside it.
+    func compressExistingRecordings() async {
+        await compactRecordings(.everyEntry)
+    }
+
+    /// How many recordings `compressExistingRecordings` would work on now,
+    /// by name only (`RecordingCompaction.compressibleCount`).
+    var compressibleRecordingCount: Int {
+        guard let root = compactionOutputRoot else { return 0 }
+        return recordingCompaction.compressibleCount(under: root)
     }
 
     /// Start a pass once either retention setting has stopped changing for
