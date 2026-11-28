@@ -132,15 +132,20 @@ struct LiveCaptionsOverlay: View {
                 .lineLimit(1)
                 .layoutPriority(1)
             // Bound each row too, so a long mic row cannot push the app row out of the bar.
-            LiveCaptionTextClip(maxHeight: 2 * Self.lineHeight(fontSize: state.size.fontSize)) {
-                Text(text)
-                    .foregroundStyle(.white)
-                    // New words swap in at once; only the position eases, so a full line slides out the top.
-                    .contentTransition(.identity)
-            }
-            .clipped()
-            .animation(.easeOut(duration: 0.2), value: text)
+            LiveCaptionRowText(
+                text: text,
+                maxHeight: 2 * Self.lineHeight(fontSize: state.size.fontSize),
+            )
         }
+    }
+
+    /// Animates the clip only when a row grows in place. A page turn, speaker split, earlier-turn
+    /// expiry, or revised re-transcribe replaces or shortens the text at this index and snaps instead.
+    static func lineScrollAnimation(from previous: String, to current: String) -> Animation? {
+        guard !previous.isEmpty, current.count > previous.count, current.hasPrefix(previous) else {
+            return nil
+        }
+        return .easeOut(duration: 0.2)
     }
 
     /// Line pitch of the row font, which SwiftUI rounds up to whole points (19 / 26 / 33 pt at
@@ -150,6 +155,35 @@ struct LiveCaptionsOverlay: View {
         let font = medium.fontDescriptor.withDesign(.rounded)
             .flatMap { NSFont(descriptor: $0, size: fontSize) } ?? medium
         return (font.ascender - font.descender + font.leading).rounded(.up)
+    }
+}
+
+/// Clipped caption text for one row that slides only when new words extend its previous text.
+private struct LiveCaptionRowText: View {
+    let text: String
+    let maxHeight: CGFloat
+    @State private var previousText: String
+
+    init(text: String, maxHeight: CGFloat) {
+        self.text = text
+        self.maxHeight = maxHeight
+        _previousText = State(initialValue: text)
+    }
+
+    var body: some View {
+        let animation = LiveCaptionsOverlay.lineScrollAnimation(from: previousText, to: text)
+        LiveCaptionTextClip(maxHeight: maxHeight) {
+            Text(text)
+                .foregroundStyle(.white)
+                // Words on the current line swap in at once (no cross-fade); only the position
+                // eases when a new line opens, sliding the top line out and the new line in.
+                .contentTransition(.identity)
+        }
+        .clipped()
+        .transaction(value: text) { $0.animation = animation }
+        .onChange(of: text) { _, newValue in
+            previousText = newValue
+        }
     }
 }
 

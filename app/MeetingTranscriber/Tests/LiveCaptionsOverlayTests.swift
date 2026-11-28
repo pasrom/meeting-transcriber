@@ -5,6 +5,27 @@ import XCTest
 
 @MainActor
 final class LiveCaptionsOverlayTests: XCTestCase {
+    /// Only an in-place extension of a row's text should slide; page turns, speaker splits,
+    /// earlier-turn expiry, and revised partials replace or shorten the text and must snap.
+    func testLineScrollAnimationOnlyRunsWhenRowTextGrows() {
+        XCTAssertEqual(
+            LiveCaptionsOverlay.lineScrollAnimation(from: "hello", to: "hello world"),
+            .easeOut(duration: 0.2),
+        )
+        // Page turn: oldest lines dropped from the front.
+        XCTAssertNil(LiveCaptionsOverlay.lineScrollAnimation(from: "first line second line", to: "second line"))
+        // Speaker split: trailing words moved into a new row below.
+        XCTAssertNil(LiveCaptionsOverlay.lineScrollAnimation(from: "hello world next speaker", to: "hello world"))
+        // Earlier-turn expiry: row at index 0 takes over the next speaker's text.
+        XCTAssertNil(LiveCaptionsOverlay.lineScrollAnimation(from: "first speaker turn", to: "second speaker turn"))
+        // Revised re-transcribe partial: earlier word changed.
+        XCTAssertNil(LiveCaptionsOverlay.lineScrollAnimation(from: "hello world", to: "hello word there"))
+        // Defensive: a new row starts with its own text as the previous text, so the app never passes "".
+        // Unchanged text.
+        XCTAssertNil(LiveCaptionsOverlay.lineScrollAnimation(from: "", to: "hello"))
+        XCTAssertNil(LiveCaptionsOverlay.lineScrollAnimation(from: "hello", to: "hello"))
+    }
+
     func testDetectingLanguageRendersWithoutCaptionsAndClearsAfterDecision() throws {
         let state = LiveCaptionsState()
         state.setDetectingLanguage(true)
