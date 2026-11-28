@@ -364,6 +364,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 |------|------|
 | `AudioMixer.swift` | Resampling, mixing, echo suppression, WAV I/O |
 | `AudioMixer+AssetFallback.swift` | Tier 2 of `AudioMixer.loadAudioAsFloat32`: decodes via `AVAssetReader`, split out of `AudioMixer` (line cap) |
+| `AudioMixer+FrameReads.swift` | Reads a span of an `AVAudioFile` a chunk at a time until every requested frame is in, since one `read(into:)` can return short; split out of `AudioMixer` (line cap) |
 | `AudioMixer+Streaming.swift` | Streams a long import's decode + resample incrementally so it never needs one buffer for the whole recording |
 | `AudioConstants.swift` | Shared audio pipeline constants (target sample rate) |
 | `FFmpegHelper.swift` | ffmpeg CLI detection + 16 kHz mono WAV conversion fallback for file-import formats AVAsset can't decode |

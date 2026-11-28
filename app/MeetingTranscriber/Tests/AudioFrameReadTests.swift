@@ -115,4 +115,92 @@ final class AudioFrameReadTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Span reads
+
+    /// A file whose reads hand back at most `cap` frames, as a decoder may.
+    /// Short reads on any system, so the span helpers are pinned whether or not
+    /// this macOS cuts a real read short.
+    /// `@unchecked Sendable` restates what `AVAudioFile` declares; each test
+    /// uses its file from one thread.
+    private final class CappedReadFile: AVAudioFile, @unchecked Sendable {
+        var cap: AVAudioFrameCount = 1000
+        private(set) var reads = 0
+
+        override func read(into buffer: AVAudioPCMBuffer, frameCount frames: AVAudioFrameCount) throws {
+            reads += 1
+            try super.read(into: buffer, frameCount: min(frames, cap))
+        }
+    }
+
+    /// Ten thousand frames whose every value is its own, as a 16-bit file.
+    private func writeRamp() throws -> (url: URL, ramp: [Float]) {
+        let url = try makeTempDirectory(prefix: "span_read").appendingPathComponent("ramp.wav")
+        let ramp = (0 ..< 10000).map { Float($0) / 10000 * 0.9 }
+        try AudioMixer.saveWAV(samples: ramp, sampleRate: 16000, url: url)
+        return (url, ramp)
+    }
+
+    private func assertSamples(_ got: [Float], equal expected: ArraySlice<Float>, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(got.count, expected.count, file: file, line: line)
+        let worst = zip(got, expected).map { abs($0 - $1) }.max() ?? .infinity
+        XCTAssertLessThanOrEqual(worst, 2.0 / 32768, "read from the wrong position", file: file, line: line)
+    }
+
+    func testReadFramesContinuesShortReadsFromTheFilePosition() throws {
+        let (url, ramp) = try writeRamp()
+        let file = try CappedReadFile(forReading: url)
+        file.framePosition = 1234
+        var got: [Float] = []
+
+        let read = try AudioMixer.readFrames(from: file, count: 5000) { channels, frames in
+            got.append(contentsOf: UnsafeBufferPointer(start: channels[0], count: frames))
+        }
+
+        XCTAssertEqual(read, 5000)
+        assertSamples(got, equal: ramp[1234 ..< 6234])
+        XCTAssertEqual(file.reads, 5, "five reads capped at 1,000 frames")
+    }
+
+    func testReadFirstChannelContinuesShortReadsAndStopsAtTheEnd() throws {
+        let (url, ramp) = try writeRamp()
+        let file = try CappedReadFile(forReading: url)
+        file.cap = 300
+        file.framePosition = 2500
+
+        try assertSamples(AudioMixer.readFirstChannel(of: file, count: 4000), equal: ramp[2500 ..< 6500])
+        // Asks past the end: what is left, not an error.
+        try assertSamples(AudioMixer.readFirstChannel(of: file, count: 5000), equal: ramp[6500...])
+        XCTAssertEqual(try AudioMixer.readFirstChannel(of: file, count: 10), [])
+    }
+
+    /// The call-site tests for span reads (the speaker snippet, the echo
+    /// quarantine, echo classification and echo cancellation) fail without
+    /// the chunked read only where one `read(into:)` of a mono float file
+    /// really comes back short, as it does on macOS 27.2.1. This says when
+    /// that stopped holding: it skips, rather than leaving those tests green
+    /// for no reason. The capped-read tests above hold either way.
+    func testSingleReadsOfAMonoFloatFileStillReturnShort() throws {
+        let url = try makeTempDirectory(prefix: "single_read").appendingPathComponent("float.wav")
+        try writeMonoFloat32WAV((0 ..< 300_000).map { Float($0 % 1000) / 1000 }, to: url)
+
+        func singleRead(from start: Int, count: Int) throws -> Int {
+            let file = try AVAudioFile(forReading: url)
+            file.framePosition = AVAudioFramePosition(start)
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(count),
+            ))
+            try file.read(into: buffer, frameCount: AVAudioFrameCount(count))
+            return Int(buffer.frameLength)
+        }
+        let fromStart = try singleRead(from: 0, count: 100_000)
+        let afterSeek = try singleRead(from: 50000, count: 16384)
+
+        try XCTSkipIf(
+            fromStart == 100_000 || afterSeek == 16384,
+            "One read of a mono float file came back whole on this macOS (\(fromStart) of 100,000 frames "
+                + "from the start, \(afterSeek) of 16,384 after a seek), so the call-site tests for short "
+                + "span reads cannot fail here.",
+        )
+    }
 }

@@ -2046,6 +2046,38 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertTrue(verdicts.isEmpty)
     }
 
+    /// A copy at the very end of the recording is still recognised as one. One
+    /// read of a mono float app track this long returns it short and drops up
+    /// to its last 1,023 frames, so the end of the microphone track had nothing
+    /// to be explained by and read as the user's own voice. Can only fail
+    /// where such reads come back short, which
+    /// `AudioFrameReadTests.testSingleReadsOfAMonoFloatFileStillReturnShort`
+    /// checks.
+    @MainActor
+    func testClassificationReadsTheAppTrackToItsLastFrame() async throws {
+        let (h, _) = try makeHarness()
+        let dir = tmpDir.appendingPathComponent("classify-float")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let appURL = dir.appendingPathComponent("meeting_app.wav")
+        let micURL = dir.appendingPathComponent("meeting_mic.wav")
+        // 1,023 frames past a multiple of 1,024, the most a short read drops.
+        let frames = 300 * 1024 + 1023
+        let far = (0 ..< frames).map { Float($0.isMultiple(of: 2) ? 0.2 : -0.2) }
+        try writeMonoFloat32WAV(far, to: appURL)
+        try writeTrack(far.map { $0 * 0.5 }, to: micURL)
+        let rate = Double(EchoTestAudio.rate)
+
+        let verdicts = await h.queue.classifyMicEcho(
+            remedy: .transcriptDedup,
+            analysis: EchoBleedAnalysis(verdict: .affected),
+            tracks: (app: appURL, mic: micURL, micDelay: 0),
+            micSegments: [TimestampedSegment(
+                start: Double(frames - 900) / rate, end: Double(frames) / rate, text: "x",
+            )],
+        )
+        XCTAssertEqual(verdicts, [.echoOnly])
+    }
+
     /// Nothing is classified on a recording nobody called affected, and nothing
     /// on one with no microphone segments. Both are the cheap exits that keep
     /// the second audio decode off the ordinary path.
