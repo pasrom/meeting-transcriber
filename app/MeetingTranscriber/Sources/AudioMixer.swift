@@ -393,12 +393,9 @@ enum AudioMixer {
         return rmsDecibels(samples: samples)
     }
 
-    /// Frames one read of `readSamplesFromAudioFile` asks for.
-    private static let readChunkFrames = 65536
-
     /// Read mono Float32 samples from an already-opened AVAudioFile.
     ///
-    /// Reads in chunks until the file's last frame (`readAllFrames`), because
+    /// Reads in chunks until the file's last frame (`readFrames`), because
     /// one `AVAudioFile.read(into:)` sized to the whole file can return short
     /// without an error. Measured on macOS 27.2.1 for a mono 32-bit float WAV
     /// or CAF longer than 65,536 frames: it stops at a multiple of 1,024 and
@@ -415,25 +412,15 @@ enum AudioMixer {
             throw AudioMixerError.bufferCreationFailed
         }
         let total = Int(file.length)
-        guard let chunk = AVAudioPCMBuffer(
-            pcmFormat: format, frameCapacity: AVAudioFrameCount(min(total, readChunkFrames)),
-        ) else {
-            throw AudioMixerError.bufferCreationFailed
-        }
 
         let channelCount = Int(format.channelCount)
         let scale = 1.0 / Float(channelCount)
         var mono: [Float] = []
         mono.reserveCapacity(total)
-        let read = try readAllFrames(total: total) { maxFrames in
-            try file.read(into: chunk, frameCount: AVAudioFrameCount(min(maxFrames, Int(chunk.frameCapacity))))
-            guard let floatData = chunk.floatChannelData else {
-                throw AudioMixerError.noFloatData
-            }
-            let count = Int(chunk.frameLength)
+        let read = try readFrames(from: file, count: total) { floatData, count in
             if channelCount == 1 {
                 mono.append(contentsOf: UnsafeBufferPointer(start: floatData[0], count: count))
-                return count
+                return
             }
             // Stereo → mono (average channels): one channel at a time, then
             // scaled, as before the reads were chunked.
@@ -450,7 +437,6 @@ enum AudioMixer {
                     out[i] *= scale
                 }
             }
-            return count
         }
         if read < total {
             logger.warning("audio_read_short read=\(read, privacy: .public) length=\(total, privacy: .public)")
