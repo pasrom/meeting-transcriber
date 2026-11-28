@@ -481,6 +481,25 @@ func writeRawFloat32(_ samples: [Float], to url: URL) throws {
     try data.write(to: url)
 }
 
+/// Write `samples` as a mono 32-bit float WAV at `sampleRate`.
+///
+/// The fixture for a loader that has to read every frame it asks for. One
+/// `AVAudioFile.read(into:)` on such a file can return short without an error:
+/// measured on macOS 27.2.1, 100,000 frames from the start read as 99,328, and
+/// 16,384 frames from frame 50,000 as 15,536. The 16-bit files
+/// `AudioMixer.saveWAV` writes read whole, so they cannot show the difference.
+func writeMonoFloat32WAV(_ samples: [Float], to url: URL, sampleRate: Int = 16000) throws {
+    let format = try XCTUnwrap(AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: Double(sampleRate), channels: 1, interleaved: false,
+    ))
+    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)))
+    buffer.frameLength = AVAudioFrameCount(samples.count)
+    let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+    channel.update(from: samples, count: samples.count)
+    let file = try AVAudioFile(forWriting: url, settings: format.settings)
+    try file.write(from: buffer)
+}
+
 // MARK: - EOU streaming mock
 
 /// Minimal `EouStreamingAsrManaging` double for the live-transcription

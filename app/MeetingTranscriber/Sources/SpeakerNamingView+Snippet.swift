@@ -15,15 +15,10 @@ extension SpeakerNamingView {
     ) throws -> (samples: [Float], sampleRate: Int)? {
         let file = try AVAudioFile(forReading: audioPath)
         let rate = Int(file.processingFormat.sampleRate)
-        guard let range = sampleRange(start: start, end: end, sampleRate: rate, totalSamples: Int(file.length)),
-              let buffer = AVAudioPCMBuffer(
-                  pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(range.count),
-              )
+        guard let range = sampleRange(start: start, end: end, sampleRate: rate, totalSamples: Int(file.length))
         else { return nil }
         file.framePosition = AVAudioFramePosition(range.lowerBound)
-        try file.read(into: buffer, frameCount: AVAudioFrameCount(range.count))
-        guard let channel = buffer.floatChannelData?[0] else { return nil }
-        return (Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))), rate)
+        return try (AudioMixer.readFirstChannel(of: file, count: range.count), rate)
     }
 
     /// The same span as a playable WAV held in memory.

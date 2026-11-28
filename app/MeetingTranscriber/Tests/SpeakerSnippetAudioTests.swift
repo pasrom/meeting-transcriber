@@ -33,6 +33,24 @@ final class SpeakerSnippetAudioTests: XCTestCase {
         XCTAssertLessThanOrEqual(worst, 2.0 / 32768, "read from the wrong position")
     }
 
+    /// A span that one read of a mono float file returns short: the snippet
+    /// still holds every frame of it, up to the last. Can only fail where such
+    /// reads come back short, which
+    /// `AudioFrameReadTests.testSingleReadsOfAMonoFloatFileStillReturnShort`
+    /// checks.
+    func testALongSpanOfAFloatFileHoldsEveryFrame() throws {
+        let url = try makeTempDirectory(prefix: "SnippetFloat").appendingPathComponent("track.wav")
+        let ramp = (0 ..< 300_000).map { Float($0 % 1000) / 1000 }
+        try writeMonoFloat32WAV(ramp, to: url, sampleRate: sampleRate)
+
+        // Frames 50,000 to 150,000.
+        let snippet = try XCTUnwrap(SpeakerNamingView.snippetSamples(audioPath: url, start: 3.125, end: 9.375))
+
+        XCTAssertEqual(snippet.samples.count, 100_000)
+        XCTAssertEqual(snippet.samples.first, ramp[50000])
+        XCTAssertEqual(snippet.samples.last, ramp[149_999])
+    }
+
     func testNoCopyOfTheSnippetIsLeftOnDisk() throws {
         let (mix, _) = try makeMix()
         let scratch = try makeTempDirectory(prefix: "SnippetScratch")
