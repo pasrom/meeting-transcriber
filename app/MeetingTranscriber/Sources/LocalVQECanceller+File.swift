@@ -56,13 +56,13 @@ extension LocalVQECanceller {
         var processor = HopProcessor(ctx: ctx, hopLength: hopLength)
 
         do {
-            let blockFrames = AVAudioFrameCount(hopLength * Self.blockHops)
+            let blockFrames = hopLength * Self.blockHops
             var produced = [Float]()
-            produced.reserveCapacity(Int(blockFrames))
+            produced.reserveCapacity(blockFrames)
             while mic.framePosition < mic.length {
                 try Task.checkCancellation()
                 await Task.yield()
-                let micBlock = try Self.read(mic, frames: blockFrames, format: format)
+                let micBlock = try AudioMixer.readFirstChannel(of: mic, count: blockFrames)
                 // Only ever read what this block will use. Reading a whole
                 // block and trimming it to fit the padding threw the trimmed
                 // frames away with the file already advanced past them, so
@@ -75,10 +75,12 @@ extension LocalVQECanceller {
                 if micBlock.count > pad {
                     // Past the reference's end this reads nothing, and the hop
                     // processor zero-fills, which is how the contract's "a
-                    // shorter reference is silence" is actually kept.
-                    refBlock += try Self.read(
-                        reference, frames: AVAudioFrameCount(micBlock.count - pad), format: format,
-                    )
+                    // shorter reference is silence" is actually kept. Read to
+                    // the last frame asked for: after the seek past the lead,
+                    // one read of a block can come back short, and a short
+                    // block fed the canceller silence and left every later
+                    // block that much behind.
+                    refBlock += try AudioMixer.readFirstChannel(of: reference, count: micBlock.count - pad)
                 }
                 produced.removeAll(keepingCapacity: true)
                 try processor.process(mic: micBlock, reference: refBlock) { hop in
@@ -114,27 +116,13 @@ extension LocalVQECanceller {
         ]
     }
 
-    /// The three `bufferCreationFailed` guards below are unreachable as these
-    /// two are called, and stay in rather than becoming force-unwraps.
+    /// The two `bufferCreationFailed` guards below are unreachable as this is
+    /// called, and stay in rather than becoming force-unwraps.
     /// `AVAudioPCMBuffer` returns nil for a zero capacity or a format it
-    /// cannot represent; both callers rule the first out before they ask, and
-    /// the format is the one the file handed back. They are the boundary of
-    /// what this file can promise, not dead code, and a crash is a worse way
-    /// to find out the assumption stopped holding.
-    private static func read(
-        _ file: AVAudioFile, frames: AVAudioFrameCount, format: AVAudioFormat,
-    ) throws -> [Float] {
-        let remaining = file.length - file.framePosition
-        guard remaining > 0 else { return [] }
-        let wanted = AVAudioFrameCount(min(Int64(frames), remaining))
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: wanted) else {
-            throw AudioMixerError.bufferCreationFailed
-        }
-        try file.read(into: buffer, frameCount: wanted)
-        guard let channel = buffer.floatChannelData?[0] else { return [] }
-        return Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
-    }
-
+    /// cannot represent; the empty case returns before it asks, and the
+    /// format is the one the file handed back. They are the boundary of what
+    /// this file can promise, not dead code, and a crash is a worse way to
+    /// find out the assumption stopped holding.
     private static func write(
         _ samples: ArraySlice<Float>, to file: AVAudioFile, format: AVAudioFormat,
     ) throws {

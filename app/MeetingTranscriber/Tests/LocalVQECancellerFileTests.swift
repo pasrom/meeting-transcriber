@@ -121,6 +121,33 @@ final class LocalVQECancellerFileTests: XCTestCase {
         XCTAssertGreaterThan(report.windows[0].referenceDBFS, -60)
     }
 
+    /// Every block gets the whole reference stretch it lines up with. Past a
+    /// seek, one read of a mono float reference returns a block short, which
+    /// fed the canceller silence for the missing frames and left every later
+    /// block that much behind. A reference at a steady -20 dBFS has to show
+    /// that level in every window. Can only fail where such reads come back
+    /// short, which
+    /// `AudioFrameReadTests.testSingleReadsOfAMonoFloatFileStillReturnShort`
+    /// checks.
+    func testAFloatReferenceAfterASeekIsReadWholeForEveryBlock() async throws {
+        let model = try requireLocalVQEModel()
+        let rate = AudioConstants.targetSampleRate
+        let reference = (0 ..< 6 * rate).map { Float($0.isMultiple(of: 2) ? 0.1 : -0.1) }
+        let referenceURL = workDir.appendingPathComponent("ref.wav")
+        try writeMonoFloat32WAV(reference, to: referenceURL, sampleRate: rate)
+        let output = workDir.appendingPathComponent("out.wav")
+
+        let report = try await LocalVQECanceller(modelPath: model).cancelEcho(
+            micURL: write(EchoTestAudio.speechLike(seconds: 5, seed: 31), "mic.wav"),
+            referenceURL: referenceURL, outputURL: output, referenceLead: 0.3,
+        )
+
+        XCTAssertEqual(report.windows.count, 5)
+        for (index, window) in report.windows.enumerated() {
+            XCTAssertEqual(window.referenceDBFS, -20, accuracy: 0.01, "window \(index)")
+        }
+    }
+
     /// A cancelled run must not leave the partial file behind. It sits beside
     /// the destination, and a later run that found it there would be working
     /// next to a stranger's leftovers.
