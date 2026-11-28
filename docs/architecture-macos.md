@@ -112,8 +112,9 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/LegacyWhisperModelsSection.swift` | Transcription settings' Storage section: lets the user move WhisperKit model variants an earlier build left in `Documents` to the Trash |
 | `Settings/LegacyWhisperModelsState.swift` | Lists the leftover WhisperKit variants in `Documents` and moves the ones the user picked to the Trash (backs `LegacyWhisperModelsSection`) |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Speaker Naming (open the naming window automatically, how long unnamed meetings wait) · Mic Speaker Name · Known Voices · Recognition Stats · Experimental: Diarization Tuning |
-| `Settings/OutputSettingsView.swift` | Output tab: output folder · recording retention · Meeting Notes (notes language, prompt, output toggles) · AI Provider (provider, Claude CLI binary and key, connection picker, model) |
+| `Settings/OutputSettingsView.swift` | Output tab: output folder · recording storage (FLAC toggle, Compress Existing Recordings) · recording retention · Meeting Notes (notes language, prompt, output toggles) · AI Provider (provider, Claude CLI binary and key, connection picker, model) |
 | `Settings/RecordingStorageLimitRows.swift` | The storage-limit toggle, stepper and status line (usage, what cannot be deleted yet, pending deletion) under recording retention |
+| `Settings/CompressExistingRecordingsRows.swift` | "Compress Existing Recordings" under recording storage: the button, its confirmation, progress with Cancel and the last run's summary, over the compactor's explicit run (`CompressExistingRecordingsState`, one per `PipelineController`) |
 | `Settings/OpenAIConnectionSection.swift` | Connection Settings section: selected connection's endpoint and API key, collapsed Advanced group (key placement, sampling overrides) and its `OpenAIAdvancedDisclosure` state |
 | `Settings/OpenAIConnectionControls.swift` | Saved OpenAI-compatible connection picker with Add/Delete/Rename buttons |
 | `Settings/OpenAIConnectionPrompts.swift` | State of the Add and Rename (name prompt) and Delete confirmation dialogs |
@@ -236,7 +237,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `StagingRecoveryGate.swift` | One staging recovery at a time per process (header repair, crash re-mix, temp cleanup), so two overlapping recoveries on one crashed stem can't corrupt it |
 | `PipelineQueue+MeetingNotes.swift` | Retrying meeting notes that failed, from the saved transcript (per job and all at once), and notes-only jobs for transcripts the user picks |
 | `PipelineQueue+Retention.swift` | The queue's side of recording retention: records what stage 3 moved, marks a recording due once its output is written, runs passes with the tracks its unfinished jobs hold |
-| `PipelineController+Retention.swift` | When retention passes run (launch, hourly, after a rebuild, once the settings settle), and the pass before a queue is built |
+| `PipelineController+Retention.swift` | When retention passes run (launch, hourly, after a rebuild, once the settings settle), and the pass before a queue is built; the compactor's launch run and the explicit "Compress Existing Recordings" run (`compressExistingRecordings`, `compressibleRecordingCount`) |
 | `RecordingRetention.swift` | Runs retention passes: decides on the main actor, deletes off it via `RecordingFileDeleter`, rechecks each delete |
 | `RecordingRetentionPolicy.swift` | Pure decision per registry entry: delete, keep (with the reason) or drop |
 | `RecordingRetentionRegistry.swift` | The list of relocated recordings retention may delete (`retained_recordings.json`), the only thing the cleaner acts on |
@@ -936,7 +937,7 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 | **Audio** | Microphone (device, start muted, mute mic shortcut) · VAD · Echo · Per-Channel Indicator | `settings` | `audioDevices` |
 | **Transcription** | Engine + per-engine options + status + idle-model retention + Storage (leftover WhisperKit models in `Documents`) | `settings`, three engines | — |
 | **Speakers** | Diarization · Speaker Identity · Known Voices · Recognition Stats · Experimental: Diarization Tuning | `settings`, `recognitionStatsLog`, `enrollmentDiarizerFactory` | `knownVoicesSheet` |
-| **Output** | Output Folder · Notion · Recording Retention · Meeting Notes (language, prompt, output toggles) · AI Provider · Connection Settings (endpoint, key, Advanced) | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
+| **Output** | Output Folder · Notion · Recording Storage (FLAC toggle, Compress Existing Recordings) · Recording Retention · Meeting Notes (language, prompt, output toggles) · AI Provider · Connection Settings (endpoint, key, Advanced) | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
 | **Advanced** | Permissions · Diagnostics | — | `micPermission`, `screenRecordingOK`, `accessibilityOK` |
 | **About** | Build identity · Dependencies · Updates | `settings`, `updateChecker?` | — |
 

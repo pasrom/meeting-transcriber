@@ -202,6 +202,16 @@ enum RecordingRetentionPolicy {
                 canList: { FileManager.default.isReadableFile(atPath: $0.path) },
             )
         }
+
+        /// Paths taken as written, with no file looked at: every file and
+        /// folder counts as present and readable, and nothing is resolved.
+        /// For a count shown before a run, which finds what the files say.
+        static func byName(excludedPaths: Set<String>) -> Self {
+            Self(
+                excludedPaths: excludedPaths, scopedRoot: nil,
+                fileExists: { _ in true }, hasContent: { _ in true }, resolve: { $0 }, canList: { _ in true },
+            )
+        }
     }
 
     static func decide(

@@ -13,8 +13,9 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Recordi
 /// `.done` with `AppSettings.compressKeptRecordings` on marks its entry
 /// (`RetainedRecording.awaiting`) and starts a run, and a run at launch picks
 /// up every marked entry, so a quit in the middle of an encode only delays
-/// that recording. An explicit run over every entry ("Compress Existing
-/// Recordings") is a later `RecordingCompactionPlan.Request` on the same `run`.
+/// that recording. The "Compress Existing Recordings" action is a third
+/// trigger on the same `run` (`RecordingCompactionPlan.Request.everyEntry`):
+/// every entry still listing a WAV track, with the setting on or off.
 ///
 /// Per track: the file facts and the encode, decode-compare and sync run off
 /// the main actor (`RecordingCompactionWorker`); then one main-actor turn with
@@ -28,23 +29,6 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Recordi
 @Observable
 @MainActor
 final class RecordingCompaction {
-    /// What one run needs from the queue, or the controller, that asks for it.
-    struct Context {
-        /// Standardized paths a job that is not finished holds, read at
-        /// selection and again in every commit turn.
-        let excludedPaths: () -> Set<String>
-        /// Point a finished job still in memory at the copy of a track it
-        /// names, so its paths keep naming files that exist.
-        let repointJobAudio: (_ jobID: UUID, _ from: URL, _ to: URL) -> Void
-        /// The output folder this run works in. Entries under another one
-        /// are skipped, and only its `recordings` folder is swept.
-        let outputRoot: URL
-        /// The object the run opens its security scope on, for its whole
-        /// length; nil when the caller holds none (a folder that needs none).
-        let scopeRoot: URL?
-        let securityScope: SecurityScopeAccess
-    }
-
     /// How old a partial copy must be before the sweep removes it. A run in
     /// progress names its own, so this only bounds leftovers of a run that
     /// was cut off, whatever the setting says now.
@@ -60,6 +44,14 @@ final class RecordingCompaction {
     private(set) var isRunning = false
     /// The log line of the last run that looked at entries.
     private(set) var lastRunSummary: String?
+    /// How far the run going on is, in tracks; nil before its selection and
+    /// between runs.
+    private(set) var progress: RecordingCompactionProgress?
+    /// What the last run the user asked for did, for Settings; nil while one
+    /// is going and before the first.
+    private(set) var lastRequestedRun: RecordingCompactionSummary?
+
+    private(set) var requestedRun: RequestedRun = .idle
 
     /// Paths of the entry being worked on, its copies' names and its partial
     /// copies, standardized. Composed into retention's held paths, so a pass
@@ -78,8 +70,22 @@ final class RecordingCompaction {
     @ObservationIgnored private let report: (RecordingCompactionSummary) -> Void
 
     @ObservationIgnored private var running: Task<Void, Never>?
-    @ObservationIgnored private var pending: (Context, RecordingCompactionPlan.Request)?
+    /// The pass going on inside `running`, its own task so a cancel stops it
+    /// and not the loop: a request that joins after the cancel still runs.
+    @ObservationIgnored private var pass: Task<Void, Never>?
+    /// Every request waits here, the first one too, so a cancel before its
+    /// pass starts finds it; the loop takes the next pass out in the same
+    /// turn it sets `currentRequest` and `pass`.
+    @ObservationIgnored private var pending: RecordingCompactionPlan.Backlog<Context>? {
+        didSet { refreshRequestedRun() }
+    }
+
     @ObservationIgnored private var cancelRequested = false
+    /// The request of the pass going on, nil between passes.
+    @ObservationIgnored private var currentRequest: RecordingCompactionPlan.Request? {
+        didSet { refreshRequestedRun() }
+    }
+
     /// The output folder of the run going on, nil between runs. A run keeps
     /// the folder it was started with when the queue moves to another one.
     @ObservationIgnored private var runRoot: URL?
@@ -109,7 +115,35 @@ final class RecordingCompaction {
 
     /// Whether a finished job should be converted, and a run started for it.
     var wantsWork: Bool {
-        isEnabled() && codecStatus == .available
+        mayWork(.awaiting(.flac))
+    }
+
+    /// Whether a run for `request` converts anything: the probe found FLAC,
+    /// and the setting allows it.
+    private func mayWork(_ request: RecordingCompactionPlan.Request) -> Bool {
+        codecStatus == .available && settingAllows(request)
+    }
+
+    /// The setting gates the automatic runs only; the user's run ignores it.
+    private func settingAllows(_ request: RecordingCompactionPlan.Request) -> Bool {
+        request.isExplicit || isEnabled()
+    }
+
+    /// How many recordings under `root` the explicit run would work on, for
+    /// Settings, with the run's selection rules. By name only: no file of a
+    /// recording is looked at on the main actor (the caller may resolve the
+    /// output folder's bookmark, as the Output tab already does); what the
+    /// files say (gone, evicted) is the run's to find and count.
+    func compressibleCount(under root: URL) -> Int {
+        RecordingCompactionPlan.select(registry.entries, request: .everyEntry, in: .init(
+            outputRoot: root, now: now(), retention: retentionSettings(),
+            environment: .byName(excludedPaths: heldPaths().union(inWorkPaths)),
+        )).compressibleCount
+    }
+
+    /// Record that the run the user asked for could not start, for Settings.
+    func recordRequestedRunNotStarted(_ reason: RecordingCompactionSummary.NotRun) {
+        lastRequestedRun = RecordingCompactionSummary(explicit: true, notRun: reason)
     }
 
     /// Whether a run is expected to remove the WAV of a track `entry` lists
@@ -127,17 +161,12 @@ final class RecordingCompaction {
     /// pair whose unlink failed, or met after the setting was switched off
     /// and on, or after a run returned early because its scope did not open:
     /// it waits for the next job to finish or the next launch, the only
-    /// events that start a run.
+    /// automatic events that start a run, or for the user's run.
     func pairResolves(_ entry: RetainedRecording, idleRoot: URL?) -> Bool {
         if RecordingRetentionPolicy.isInUse(entry, excludedPaths: inWorkPaths) { return true }
         guard entry.awaiting.contains(.flac), isEnabled(), codecStatus.unavailableReason == nil else { return false }
         let key = RecordingRetentionPolicy.pathKey(entry.root)
         return [runRoot, idleRoot].contains { $0.map(RecordingRetentionPolicy.pathKey) == key }
-    }
-
-    /// How many entries a run still owes FLAC, for `/state`.
-    var awaitingCount: Int {
-        registry.entries.count { $0.awaiting.contains(.flac) }
     }
 
     /// Mark the entry of a job that just reached `.done` under `root`, the
@@ -164,30 +193,73 @@ final class RecordingCompaction {
     /// one. A copy not yet committed is removed; the entry stays marked.
     func cancel() {
         pending = nil
-        guard let running else { return }
+        stopPass()
+    }
+
+    /// Stop only the run the user asked for: the pass going on when it is
+    /// that one, keeping what automatic requests owe, or, while it waits
+    /// behind an automatic pass, its place in the queue, leaving that pass
+    /// alone. What it leaves unconverted stays WAV.
+    func cancelRequestedRun() {
+        if currentRequest?.isExplicit == true {
+            _ = RecordingCompactionPlan.Backlog.dropExplicit(from: &pending) // a repeat queued behind it
+            stopPass()
+        } else if RecordingCompactionPlan.Backlog.dropExplicit(from: &pending) {
+            // Never started, so no pass writes its summary.
+            lastRequestedRun = RecordingCompactionSummary(explicit: true, cancelled: true)
+        }
+    }
+
+    private func stopPass() {
+        guard let pass else { return }
         cancelRequested = true
-        running.cancel()
+        pass.cancel()
+    }
+
+    /// Written only when it changes: an equal write still redraws Settings.
+    /// Waiting only behind a pass that is going: a request the loop has not
+    /// taken yet, with no pass going, is as good as running.
+    private func refreshRequestedRun() {
+        let now: RequestedRun = if currentRequest?.isExplicit == true {
+            .running
+        } else if pending?.explicit == true {
+            currentRequest == nil ? .running : .waiting
+        } else {
+            .idle
+        }
+        if now != requestedRun { requestedRun = now }
     }
 
     /// Run once, or join the run in progress and make sure another follows
-    /// it with the newest context and request. Returns once the work asked
-    /// for is done.
+    /// it with the newest context and what this request adds. Returns once
+    /// the work asked for is done.
     func run(_ context: Context, request: RecordingCompactionPlan.Request = .awaiting(.flac)) async {
+        if pending == nil {
+            pending = .init(context: context, request: request)
+        } else {
+            pending?.add(context: context, request: request)
+        }
         if let running {
-            pending = (context, request)
             await running.value
             return
         }
         let task = Task(priority: .utility) { [self] in
-            var next: (Context, RecordingCompactionPlan.Request)? = (context, request)
-            while let (current, currentRequest) = next, !cancelRequested {
-                pending = nil
-                await runOnce(current, request: currentRequest)
-                next = pending
+            while true {
+                // One turn, current before it leaves `pending` (`requestedRun`
+                // never reads idle in between): a cancel from here finds it.
+                var backlog = pending
+                guard let next = RecordingCompactionPlan.Backlog.takeNext(from: &backlog) else { break }
+                currentRequest = next.request
+                pending = backlog
+                let once = Task(priority: .utility) { [self] in await runOnce(next.context, request: next.request) }
+                pass = once
+                await once.value
+                pass = nil
+                currentRequest = nil
+                // A cancel ends its own pass; what was queued after it runs.
+                cancelRequested = false
             }
             running = nil
-            pending = nil
-            cancelRequested = false
             isRunning = false
         }
         running = task
@@ -195,10 +267,11 @@ final class RecordingCompaction {
         await task.value
     }
 
-    /// A cancel, or the setting switched off while the run is going: the run
-    /// stops after the step it is in, and what it has not done stays marked.
+    /// A cancel, or the setting switched off while an automatic run is
+    /// going: the run stops after the step it is in, and what it has not done
+    /// stays marked. The run the user asked for ignores the setting.
     private var isCancelled: Bool {
-        cancelRequested || Task.isCancelled || !isEnabled()
+        cancelRequested || Task.isCancelled || !(currentRequest.map(settingAllows) ?? isEnabled())
     }
 
     private func inUse(_ context: Context) -> Set<String> {
@@ -207,18 +280,29 @@ final class RecordingCompaction {
 
     private func runOnce(_ context: Context, request: RecordingCompactionPlan.Request) async {
         runRoot = context.outputRoot
-        defer { runRoot = nil }
+        var summary = RecordingCompactionSummary(explicit: request.isExplicit)
+        if request.isExplicit { lastRequestedRun = nil }
+        defer {
+            runRoot = nil
+            progress = nil
+            if request.isExplicit {
+                // Only a cancel that stopped something: one pressed after the
+                // last track leaves nothing unconverted.
+                if summary.skippedTracks[.cancelled] != nil { summary.cancelled = true }
+                lastRequestedRun = summary
+            }
+        }
         // One scope for the whole run, on the object the caller resolved: a
         // queue rebuild can release the queue's own while the run is going.
         if let scopeRoot = context.scopeRoot {
             guard context.securityScope.start(scopeRoot) else {
+                summary.notRun = .outputFolderNotOpened
                 logger.warning("Compaction run skipped: the output folder's access could not be opened")
                 return
             }
         }
         defer { context.scopeRoot.map(context.securityScope.stop) }
 
-        var summary = RecordingCompactionSummary()
         let recordings = context.outputRoot.appendingPathComponent("recordings", isDirectory: true)
         // Whatever the setting says: a cut-off run's partial is a full-size
         // copy of private audio.
@@ -229,10 +313,12 @@ final class RecordingCompaction {
             logger.info("Compaction removed \(summary.sweptPartials, privacy: .public) leftover partial copies")
         }
 
-        guard wantsWork, !isCancelled else { return }
-        guard case let .awaiting(kind) = request, registry.entries.contains(where: { $0.awaiting.contains(kind) }) else {
+        guard mayWork(request), !isCancelled else {
+            summary.notRun = RecordingCompactionSummary.NotRun(codecStatus)
+            summary.cancelled = summary.notRun == nil && isCancelled
             return
         }
+        guard hasWork(for: request) else { return }
         defer {
             lastRunSummary = summary.logLine
             report(summary)
@@ -248,10 +334,17 @@ final class RecordingCompaction {
         ))
         summary.skippedEntries = selection.skipped
         summary.outsideFolder = selection.outsideFolder
+        // For Settings, which shows the user's run only.
+        if request.isExplicit {
+            progress = RecordingCompactionProgress(total: selection.candidates.reduce(0) { $0 + $1.tracks.count })
+        }
         for candidate in selection.candidates {
-            guard !isCancelled else { break }
+            guard !isCancelled else {
+                summary.cancelled = cancelRequested || Task.isCancelled
+                break
+            }
             summary.entries += 1
-            await compact(candidate, kind: kind, in: recordings, context: context, summary: &summary)
+            await compact(candidate, kind: request.clearedMark, in: recordings, context: context, summary: &summary)
         }
     }
 
@@ -270,6 +363,8 @@ final class RecordingCompaction {
         // Set when something that may work next time stopped a track; the
         // mark stays then.
         var retry = false
+        var namesChanged = false // this run changed what the entry lists
+        let marked = registry.entry(of: jobID, under: candidate.root)?.awaiting.contains(kind) == true
         var attempted: Set<String> = []
         // The tracks are read from the registry before each one, not taken
         // from the selection: an AI-title rename during the run moves them,
@@ -277,21 +372,28 @@ final class RecordingCompaction {
         while let wav = nextTrack(of: jobID, under: candidate.root, scopeRoot: context.scopeRoot, skipping: attempted) {
             guard !isCancelled else {
                 retry = true
+                summary.cancelled = cancelRequested || Task.isCancelled
                 break
             }
             attempted.insert(RecordingRetentionPolicy.pathKey(wav))
-            guard let track = Track(wav, of: jobID) else { continue }
+            guard let track = Track(wav, of: jobID) else { progress?.advance(); continue }
             inWorkPaths.formUnion([track.flac, track.partial].map(RecordingRetentionPolicy.pathKey))
             let outcome = await compactTrack(track, in: recordings, context: context)
+            progress?.advance()
             switch outcome {
-            case .compressed:
+            case let .compressed(saved):
                 summary.compressed += 1
+                summary.bytesSaved += saved
+                namesChanged = true
 
-            case .resumed:
+            case let .resumed(saved):
                 summary.resumed += 1
+                summary.bytesSaved += saved
+                namesChanged = true
 
             case .forgotten:
                 summary.forgotten += 1
+                namesChanged = true
 
             case .nothing:
                 break
@@ -313,11 +415,13 @@ final class RecordingCompaction {
         // condition retention uses before it takes files for gone.
         let recordingsListable = FileManager.default.isReadableFile(atPath: recordings.path)
         if !FileManager.default.fileExists(atPath: candidate.root.path) || !recordingsListable { retry = true }
-        if !retry, !isCancelled {
-            // A crash between the last unlink and this rewrite left old names;
-            // this run repairs them before the mark goes.
-            rewriteSidecar(jobID: jobID, root: candidate.root)
-            if registry.clearAwaiting(kind, jobID: jobID, root: candidate.root) { summary.marksCleared += 1 }
+        let finished = !retry && !isCancelled
+        // When a name changed (also before a cancel), or a marked entry
+        // finished (a crash before the rewrite left its mark, and old names);
+        // an untouched sidecar, perhaps not downloaded, is not read here.
+        if namesChanged || finished && marked { rewriteSidecar(jobID: jobID, root: candidate.root) }
+        if finished, registry.clearAwaiting(kind, jobID: jobID, root: candidate.root) {
+            summary.marksCleared += 1
         }
     }
 
@@ -336,8 +440,10 @@ final class RecordingCompaction {
         }
     }
 
+    /// The bytes saved are the WAV's size less its copy's.
     private enum TrackOutcome: Equatable {
-        case compressed, resumed, forgotten, nothing
+        case compressed(saved: Int64), resumed(saved: Int64)
+        case forgotten, nothing
         case skipped(RecordingCompactionPlan.TrackSkip)
     }
 
@@ -389,7 +495,9 @@ final class RecordingCompaction {
             else { return .skipped(.recheckFailed) }
             // The cut-off run may have stopped before it pointed the job at the copy.
             context.repointJobAudio(jobID, wav, flac)
-            return await removeSource(of: track, in: recordings, context: context).map(TrackOutcome.skipped) ?? .resumed
+            let saved = Self.savedBytes(source: facts.source, copy: Self.liveIdentity(flac))
+            return await removeSource(of: track, in: recordings, context: context).map(TrackOutcome.skipped)
+                ?? .resumed(saved: saved)
 
         case .encode:
             guard case let .regular(before) = facts.source else { return .nothing }
@@ -410,7 +518,8 @@ final class RecordingCompaction {
                 _ = await worker.remove(partial)
                 return .skipped(.recheckFailed)
             }
-            return await removeSource(of: track, in: recordings, context: context).map(TrackOutcome.skipped) ?? .compressed
+            return await removeSource(of: track, in: recordings, context: context).map(TrackOutcome.skipped)
+                ?? .compressed(saved: Self.savedBytes(source: facts.source, copy: verified))
         }
     }
 
@@ -487,30 +596,5 @@ final class RecordingCompaction {
         guard await worker.remove(track.wav) else { return .writeFailed }
         registry.forget([track.wav], of: track.jobID)
         return nil
-    }
-
-    /// Rewrite the `files` of the entry's recording sidecar to the names the
-    /// entry lists now, on the main actor. The sidecar is the one the entry
-    /// lists now: an AI-title rename in the meantime moved it, and a write
-    /// under the old name would recreate an untracked file. `files.mix` is
-    /// always written, so the sidecar keeps its shape.
-    private func rewriteSidecar(jobID: UUID, root: URL) {
-        guard let entry = registry.entry(of: jobID, under: root),
-              let sidecarURL = entry.paths.first(where: RecordingRetentionPolicy.isRecordingSidecar),
-              let sidecar = RecordingSidecar.read(from: sidecarURL) else { return }
-        let listedNames = Set(entry.paths.map(\.lastPathComponent))
-        let rewritten = sidecar.withTrackNames { name in
-            guard let track = RecordingFileSuffix.keptTrack(of: name) else { return name }
-            // The listed spelling, the WAV first: a file still there wins.
-            return RecordingFileSuffix.keptExtensions.lazy
-                .map { track.stem + RecordingFileSuffix.kept(track.suffix, extension: $0) }
-                .first(where: listedNames.contains) ?? name
-        }
-        guard rewritten.files != sidecar.files else { return }
-        do {
-            try rewritten.write(to: sidecarURL)
-        } catch {
-            logger.warning("Compaction could not rewrite a recording sidecar: \(error.localizedDescription, privacy: .private)")
-        }
     }
 }

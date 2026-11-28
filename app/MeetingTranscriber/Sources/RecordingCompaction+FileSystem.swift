@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "RecordingCompaction")
 
 /// The live file-system steps of a compaction run and the sweep of leftover
 /// partial copies.
@@ -152,5 +155,38 @@ extension RecordingCompaction {
         guard name.hasPrefix("."), name.hasSuffix(KeptRecordingCompressor.partialSuffix) else { return false }
         let inner = String(name.dropFirst().dropLast(KeptRecordingCompressor.partialSuffix.count))
         return RecordingFileSuffix.keptTrack(of: inner + "." + RecordingFileSuffix.compressedExtension) != nil
+    }
+
+    /// The bytes a copy saved: its source's size less its own.
+    static func savedBytes(
+        source: RecordingCompactionPlan.TrackFacts.Source, copy: RecordingCompactionPlan.FileIdentity?,
+    ) -> Int64 {
+        guard case let .regular(stamp) = source, let copy else { return 0 }
+        return stamp.size - copy.size
+    }
+
+    /// Rewrite the `files` of the entry's recording sidecar to the names the
+    /// entry lists now, on the main actor. The sidecar is the one the entry
+    /// lists now: an AI-title rename in the meantime moved it, and a write
+    /// under the old name would recreate an untracked file. `files.mix` is
+    /// always written, so the sidecar keeps its shape.
+    func rewriteSidecar(jobID: UUID, root: URL) {
+        guard let entry = registry.entry(of: jobID, under: root),
+              let sidecarURL = entry.paths.first(where: RecordingRetentionPolicy.isRecordingSidecar),
+              let sidecar = RecordingSidecar.read(from: sidecarURL) else { return }
+        let listedNames = Set(entry.paths.map(\.lastPathComponent))
+        let rewritten = sidecar.withTrackNames { name in
+            guard let track = RecordingFileSuffix.keptTrack(of: name) else { return name }
+            // The listed spelling, the WAV first: a file still there wins.
+            return RecordingFileSuffix.keptExtensions.lazy
+                .map { track.stem + RecordingFileSuffix.kept(track.suffix, extension: $0) }
+                .first(where: listedNames.contains) ?? name
+        }
+        guard rewritten.files != sidecar.files else { return }
+        do {
+            try rewritten.write(to: sidecarURL)
+        } catch {
+            logger.warning("Compaction could not rewrite a recording sidecar: \(error.localizedDescription, privacy: .private)")
+        }
     }
 }

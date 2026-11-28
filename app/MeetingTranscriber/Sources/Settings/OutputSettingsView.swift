@@ -82,15 +82,20 @@ struct OutputSettingsView: View {
     /// What the launch probe found; the FLAC toggle is disabled, with the
     /// reason, when this Mac cannot write FLAC.
     let keptRecordingCodec: KeptRecordingCodecStatus
+    /// The "Compress Existing Recordings" rows; nil leaves them out, which is
+    /// what tests of other rows get.
+    let compressExisting: CompressExistingRecordingsState?
 
     init(
         settings: AppSettings,
         keptRecordingCodec: KeptRecordingCodecStatus = .unknown,
+        compressExisting: CompressExistingRecordingsState? = nil,
         // swiftlint:disable:next unneeded_escaping
         apiKeyDrafts: @autoclosure @escaping () -> ProtocolAPIKeyDrafts? = nil,
     ) {
         self.settings = settings
         self.keptRecordingCodec = keptRecordingCodec
+        self.compressExisting = compressExisting
         _apiKeyDrafts = StateObject(wrappedValue: apiKeyDrafts() ?? ProtocolAPIKeyDrafts(settings: settings))
     }
 
@@ -232,6 +237,10 @@ struct OutputSettingsView: View {
             )
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            if let compressExisting {
+                CompressExistingRecordingsRows(state: compressExisting)
+            }
         }
     }
 
@@ -479,14 +488,6 @@ struct OutputSettingsView: View {
         }
     }
 
-    private var languagePickerOptions: [String] {
-        OutputSettingsLogic.mergePickerOptions(available: AppSettings.protocolLanguages, selected: settings.protocolLanguage)
-    }
-
-    private var modelPickerOptions: [String] {
-        OutputSettingsLogic.mergePickerOptions(available: availableModels, selected: settings.openAIModel)
-    }
-
     private func ensurePromptDirectory() {
         try? FileManager.default.createDirectory(
             at: AppPaths.customPromptFile.deletingLastPathComponent(),
@@ -534,5 +535,16 @@ struct OutputSettingsView: View {
         panel.message = "Choose a folder for recordings, transcripts and meeting notes"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         settings.setCustomOutputDir(url)
+    }
+}
+
+// Outside the struct body, which is at its length limit.
+private extension OutputSettingsView {
+    var languagePickerOptions: [String] {
+        OutputSettingsLogic.mergePickerOptions(available: AppSettings.protocolLanguages, selected: settings.protocolLanguage)
+    }
+
+    var modelPickerOptions: [String] {
+        OutputSettingsLogic.mergePickerOptions(available: availableModels, selected: settings.openAIModel)
     }
 }

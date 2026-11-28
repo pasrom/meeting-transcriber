@@ -341,6 +341,7 @@ struct MeetingTranscriberApp: App {
                 legacyWhisperModels: appState.engines.legacyWhisperModels,
                 captionWarmup: appState.liveTranscription.warmup,
                 keptRecordingCodec: appState.pipeline.recordingCompaction.codecStatus,
+                compressExistingRecordings: appState.pipeline.existingRecordingsCompression,
             )
         }
         .windowResizability(.contentSize)

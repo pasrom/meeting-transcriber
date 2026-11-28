@@ -412,3 +412,140 @@ final class PipelineControllerCompactionTests: XCTestCase {
         )
     }
 }
+
+// MARK: - Compress Existing Recordings
+
+extension PipelineControllerCompactionTests {
+    /// With the setting off and no queue built yet, the action converts a
+    /// recording the automatic runs would never take.
+    func testCompressExistingRecordingsConvertsAnUnmarkedRecordingWithTheSettingOff() async throws {
+        let controller = try makeController(activate: false)
+        let mix = try registerMarkedRecording(in: controller, marked: false)
+        controller.recordingCompaction.codecStatus = .available
+        XCTAssertEqual(controller.compressibleRecordingCount, 1)
+
+        await controller.compressExistingRecordings()
+
+        XCTAssertFalse(CompactionDisk.exists(mix))
+        XCTAssertTrue(try KeptRecordingCompressor.isNativeFLAC(XCTUnwrap(KeptRecordingCompressor.compressedURL(for: mix))))
+        XCTAssertEqual(controller.recordingCompaction.lastRequestedRun?.compressed, 1)
+        XCTAssertEqual(controller.compressibleRecordingCount, 0)
+    }
+
+    /// Before a queue is built the snapshot is the only record of a job the
+    /// restore brings back; the action keeps that job's tracks as they are.
+    func testCompressExistingRecordingsKeepsTracksTheSnapshotHolds() async throws {
+        let controller = try makeController(activate: false)
+        let mix = try registerMarkedRecording(in: controller, marked: false)
+        try PipelineSnapshot.save(
+            [PipelineJob(meetingTitle: "Weekly Sync", appName: "Teams", mixPath: mix, appPath: nil, micPath: nil, micDelay: 0)],
+            to: logDir,
+        )
+        controller.recordingCompaction.codecStatus = .available
+
+        await controller.compressExistingRecordings()
+
+        XCTAssertTrue(CompactionDisk.exists(mix), "a track the restored job will read was converted")
+        XCTAssertEqual(controller.recordingCompaction.lastRequestedRun?.skippedEntries, [.inUse: 1])
+    }
+
+    /// An unreadable snapshot stops the run before it looks at anything, and
+    /// Settings says so instead of showing nothing.
+    func testAnUnreadableSnapshotIsReportedToTheUser() async throws {
+        let controller = try makeController(activate: false)
+        let mix = try registerMarkedRecording(in: controller, marked: false)
+        controller.recordingCompaction.codecStatus = .available
+        try Data("not json".utf8).write(to: logDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        await controller.compressExistingRecordings()
+
+        XCTAssertTrue(CompactionDisk.exists(mix))
+        XCTAssertEqual(controller.recordingCompaction.lastRequestedRun?.notRun, .queueStateUnreadable)
+    }
+
+    /// With a built queue the action runs through it, under its folder.
+    func testCompressExistingRecordingsRunsThroughABuiltQueue() async throws {
+        let controller = try makeController()
+        await controller.compactionLaunch?.value
+        controller.rebuild()
+        XCTAssertNotNil(controller.queue.recordingCompaction, "test premise: a built queue")
+        let mix = try registerMarkedRecording(in: controller, marked: false)
+
+        await controller.compressExistingRecordings()
+
+        XCTAssertFalse(CompactionDisk.exists(mix))
+        XCTAssertEqual(controller.recordingCompaction.lastRequestedRun?.compressed, 1)
+    }
+
+    /// Before a queue is built, the context a run gets depends on the
+    /// request: only one that has work reads the snapshot's held tracks. A
+    /// later automatic call with nothing marked must not replace the context
+    /// of a user run queued behind the one going with a weaker one.
+    func testALaterAutomaticCallKeepsTheSnapshotHoldForAQueuedUserRun() async throws {
+        let gate = StepGate()
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let steps = RecordingCompactionWorker.Steps.live.with(\.prepare) { source, partial in
+            try KeptRecordingCompressor().prepare(source: source, partial: partial)
+            if calls.withLock({ $0 += 1; return $0 }) == 1 { await gate.pass() }
+        }
+        let controller = try makeController(steps: steps, activate: false)
+        controller.recordingCompaction.codecStatus = .available
+        _ = try registerMarkedRecording(in: controller, stem: "20260101_0900_first_ab12cd34", marked: false)
+        let held = try registerMarkedRecording(in: controller, stem: "20260101_1000_held_ab12cd34", marked: false)
+        try PipelineSnapshot.save(
+            [PipelineJob(meetingTitle: "Weekly Sync", appName: "Teams", mixPath: held, appPath: nil, micPath: nil, micDelay: 0)],
+            to: logDir,
+        )
+        let first = Task { await controller.compressExistingRecordings() }
+        await waitFor(gate.reached == 1, timeout: .seconds(10))
+        // Each flag is set in the same turn the call reaches the queue.
+        let entered = OSAllocatedUnfairLock(initialState: 0)
+        let second = Task {
+            entered.withLock { $0 += 1 }
+            await controller.compressExistingRecordings()
+        }
+        await waitFor(entered.withLock { $0 } == 1, timeout: .seconds(5))
+        let automatic = Task {
+            entered.withLock { $0 += 1 }
+            await controller.compactRecordings()
+        }
+        await waitFor(entered.withLock { $0 } == 2, timeout: .seconds(5))
+        gate.open()
+        await first.value
+        await second.value
+        await automatic.value
+
+        XCTAssertTrue(CompactionDisk.exists(held), "a track the restored job will read was converted")
+    }
+
+    /// The rows' refresh follows the tracks the current queue's unfinished
+    /// jobs hold, so a job finishing reruns the count with the setting off.
+    func testTheSettingsRowsFollowTheTracksTheQueueHolds() throws {
+        let controller = try makeController(activate: false)
+        let state = controller.existingRecordingsCompression
+        let mix = tmpDir.appendingPathComponent("staging/20260101_0900_sync_mix.wav")
+        XCTAssertEqual(state.refreshKey.held, [], "test premise: nothing held")
+
+        controller.queue.enqueue(PipelineJob(
+            meetingTitle: "Weekly Sync", appName: "Teams", mixPath: mix, appPath: nil, micPath: nil, micDelay: 0,
+        ))
+
+        XCTAssertTrue(state.refreshKey.held.contains(RecordingRetentionPolicy.pathKey(mix)))
+    }
+
+    /// The Settings rows' state, as the app builds it, counts and runs
+    /// through this controller.
+    func testTheSettingsRowsCountAndRunThroughTheController() async throws {
+        let controller = try makeController(activate: false)
+        let mix = try registerMarkedRecording(in: controller, marked: false)
+        controller.recordingCompaction.codecStatus = .available
+        let state = controller.existingRecordingsCompression
+
+        XCTAssertIdentical(state.compaction, controller.recordingCompaction)
+        XCTAssertEqual(state.compressibleCount, 1)
+        await state.confirm().value
+
+        XCTAssertFalse(CompactionDisk.exists(mix))
+        XCTAssertEqual(state.compressibleCount, 0)
+    }
+}

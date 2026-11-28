@@ -55,6 +55,10 @@ final class PipelineController {
     /// queue keeps `lastRecordingRelocation`. It opens and closes the output
     /// folder's scope once.
     @ObservationIgnored private(set) var compactionLaunch: Task<Void, Never>?
+    /// The "Compress Existing Recordings" rows in Settings → Output, on this
+    /// compactor. One instance, so the confirmation survives the Settings
+    /// scene being rebuilt.
+    @ObservationIgnored private(set) lazy var existingRecordingsCompression = CompressExistingRecordingsState(pipeline: self)
 
     /// Where the queues this controller builds keep their data and how they
     /// reach the output folder, beyond the settings: the logs and snapshot, the
