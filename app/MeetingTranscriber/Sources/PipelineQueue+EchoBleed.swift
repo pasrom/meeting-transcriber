@@ -222,12 +222,8 @@ extension PipelineQueue {
         let rate = Int(file.processingFormat.sampleRate)
         guard rate > 0 else { return nil }
         let wanted = min(Double(file.length), maxSeconds * Double(rate))
-        let frames = AVAudioFrameCount(wanted)
-        guard frames > 0,
-              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames),
-              (try? file.read(into: buffer, frameCount: frames)) != nil,
-              let channel = buffer.floatChannelData?[0]
-        else { return nil }
-        return (Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))), rate)
+        let frames = Int(wanted)
+        guard frames > 0, let samples = try? AudioMixer.readFirstChannel(of: file, count: frames) else { return nil }
+        return (samples, rate)
     }
 }
