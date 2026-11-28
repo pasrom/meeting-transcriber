@@ -23,6 +23,8 @@ extension LocalVQECanceller {
     ) async throws -> EchoCancellationReport {
         let mic = try AVAudioFile(forReading: micURL)
         let reference = try AVAudioFile(forReading: referenceURL)
+        try Self.requireLinedUpFormat(mic, name: "microphone")
+        try Self.requireLinedUpFormat(reference, name: "reference")
         let format = mic.processingFormat
 
         // Line the reference up with the microphone before a single hop runs.
@@ -100,6 +102,18 @@ extension LocalVQECanceller {
         try? FileManager.default.removeItem(at: outputURL)
         try FileManager.default.moveItem(at: staging, to: outputURL)
         return EchoCancellationReport(windows: windows)
+    }
+
+    /// The lead and every block are counted in 16 kHz frames of one channel.
+    /// A track in another shape would be cancelled against the wrong stretch
+    /// of the other, so it is refused before anything runs.
+    private static func requireLinedUpFormat(_ file: AVAudioFile, name: String) throws {
+        let shape = file.processingFormat
+        guard shape.sampleRate == Double(AudioConstants.targetSampleRate), shape.channelCount == 1 else {
+            throw EchoCancellationError.unsupportedTrackFormat(
+                "\(name) is \(Int(shape.sampleRate)) Hz, \(shape.channelCount) channel(s)",
+            )
+        }
     }
 
     /// 16-bit PCM, matching what `AudioMixer.saveWAV` writes for every other

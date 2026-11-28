@@ -5,6 +5,7 @@
 //
 // Model-gated like LocalVQECancellerTests: set
 // MEETINGTRANSCRIBER_LOCALVQE_MODEL to a .gguf, or these skip.
+import AVFoundation
 @testable import MeetingTranscriber
 import XCTest
 
@@ -288,6 +289,61 @@ final class LocalVQECancellerFileTests: XCTestCase {
                 FileManager.default.fileExists(atPath: output.path),
                 "a half-written output would be adopted by the caller as a cancelled track",
             )
+        }
+    }
+
+    /// What the pipeline's failure log line shows: the shape or the return code,
+    /// never the library's own text, which may carry a path.
+    func testTheErrorDescriptionsCarryTheirPayloadAndNotTheLibraryText() {
+        XCTAssertEqual(
+            EchoCancellationError.unsupportedTrackFormat("reference is 48000 Hz, 1 channel(s)").localizedDescription,
+            "a track is not 16 kHz mono: reference is 48000 Hz, 1 channel(s)",
+        )
+        XCTAssertEqual(
+            EchoCancellationError.processingFailed(code: 7, message: "/private/model.gguf").localizedDescription,
+            "echo cancellation processing failed with code 7",
+        )
+        XCTAssertEqual(
+            EchoCancellationError.modelLoadFailed("/private/model.gguf").localizedDescription,
+            "the echo cancellation model could not be loaded",
+        )
+    }
+
+    /// The lead and the blocks are counted in 16 kHz frames of one channel,
+    /// so a track in any other shape would be cancelled against the wrong
+    /// stretch of the other. It is refused before anything runs. Checked
+    /// ahead of the model load, so no model is needed: with the check gone
+    /// the absent model is what fails.
+    func testATrackThatIsNot16kHzMonoIsRefused() async throws {
+        let second = EchoTestAudio.speechLike(seconds: 1, seed: 41)
+        let fine = try write(second, "fine.wav")
+        let fast = workDir.appendingPathComponent("48k.wav")
+        try AudioMixer.saveWAV(samples: second + second + second, sampleRate: 48000, url: fast)
+        let stereo = workDir.appendingPathComponent("stereo.wav")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 2, interleaved: false,
+        ))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(second.count)))
+        buffer.frameLength = AVAudioFrameCount(second.count)
+        try AVAudioFile(forWriting: stereo, settings: format.settings).write(from: buffer)
+
+        let cases = [
+            ("reference at 48 kHz", fine, fast),
+            ("stereo reference", fine, stereo),
+            ("microphone at 48 kHz", fast, fine),
+        ]
+        for (name, mic, reference) in cases {
+            do {
+                _ = try await LocalVQECanceller(modelPath: "/nonexistent/model.gguf").cancelEcho(
+                    micURL: mic, referenceURL: reference,
+                    outputURL: workDir.appendingPathComponent("out.wav"), referenceLead: 0,
+                )
+                XCTFail("\(name): expected unsupportedTrackFormat")
+            } catch EchoCancellationError.unsupportedTrackFormat {
+                // Refused, as it should be.
+            } catch {
+                XCTFail("\(name): expected unsupportedTrackFormat, got \(error)")
+            }
         }
     }
 }

@@ -24,6 +24,27 @@ enum EchoCancellationError: Error {
     /// A processing call failed mid-stream. `code` is the library's return
     /// code, `message` its error string at the time of failure.
     case processingFailed(code: Int32, message: String)
+    /// A track is not the 16 kHz mono audio the canceller lines up and
+    /// processes. The payload names the track and its shape.
+    case unsupportedTrackFormat(String)
+}
+
+/// What the pipeline's `echo_cancel failed` log line shows. The library's own
+/// messages stay out: nothing promises they carry no path, and the line is
+/// logged public. Track shapes and return codes are safe.
+extension EchoCancellationError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .modelLoadFailed:
+            "the echo cancellation model could not be loaded"
+
+        case let .processingFailed(code, _):
+            "echo cancellation processing failed with code \(code)"
+
+        case let .unsupportedTrackFormat(shape):
+            "a track is not 16 kHz mono: \(shape)"
+        }
+    }
 }
 
 /// One second of the recording, as the canceller saw it. Measurement only: it
@@ -73,6 +94,9 @@ protocol EchoCancelling: Sendable {
     ///   line up with the microphone, in seconds. Positive when the microphone
     ///   started late, which is the sign convention `micDelay` already uses:
     ///   microphone sample *j* belongs with reference sample *j + lead*.
+    /// - Throws: `EchoCancellationError.unsupportedTrackFormat` before anything
+    ///   runs when either file is not 16 kHz mono, which the lead and the
+    ///   blocks are counted in.
     func cancelEcho(
         micURL: URL, referenceURL: URL, outputURL: URL, referenceLead: TimeInterval,
     ) async throws -> EchoCancellationReport
