@@ -10,7 +10,7 @@ final class LiveCaptionsOverlayTests: XCTestCase {
     func testLineScrollAnimationOnlyRunsWhenRowTextGrows() {
         XCTAssertEqual(
             LiveCaptionsOverlay.lineScrollAnimation(from: "hello", to: "hello world"),
-            .easeOut(duration: 0.2),
+            .easeInOut(duration: 0.3),
         )
         // Page turn: oldest lines dropped from the front.
         XCTAssertNil(LiveCaptionsOverlay.lineScrollAnimation(from: "first line second line", to: "second line"))
