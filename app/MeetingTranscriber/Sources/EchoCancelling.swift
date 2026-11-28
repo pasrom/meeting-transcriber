@@ -27,11 +27,14 @@ enum EchoCancellationError: Error {
     /// A track is not the 16 kHz mono audio the canceller lines up and
     /// processes. The payload names the track and its shape.
     case unsupportedTrackFormat(String)
+    /// The microphone track stopped yielding frames before its stated end.
+    /// The payload is the frame it stalled at.
+    case microphoneReadStalled(at: Int64)
 }
 
 /// What the pipeline's `echo_cancel failed` log line shows. The library's own
 /// messages stay out: nothing promises they carry no path, and the line is
-/// logged public. Track shapes and return codes are safe.
+/// logged public. Track shapes, return codes and frame positions are safe.
 extension EchoCancellationError: LocalizedError {
     var errorDescription: String? {
         switch self {
@@ -43,6 +46,9 @@ extension EchoCancellationError: LocalizedError {
 
         case let .unsupportedTrackFormat(shape):
             "a track is not 16 kHz mono: \(shape)"
+
+        case let .microphoneReadStalled(frame):
+            "the microphone track stopped yielding frames at frame \(frame)"
         }
     }
 }
@@ -96,7 +102,8 @@ protocol EchoCancelling: Sendable {
     ///   microphone sample *j* belongs with reference sample *j + lead*.
     /// - Throws: `EchoCancellationError.unsupportedTrackFormat` before anything
     ///   runs when either file is not 16 kHz mono, which the lead and the
-    ///   blocks are counted in.
+    ///   blocks are counted in; `EchoCancellationError.microphoneReadStalled`
+    ///   when the microphone stops yielding frames before its stated end.
     func cancelEcho(
         micURL: URL, referenceURL: URL, outputURL: URL, referenceLead: TimeInterval,
     ) async throws -> EchoCancellationReport

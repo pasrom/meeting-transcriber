@@ -65,6 +65,13 @@ extension LocalVQECanceller {
                 try Task.checkCancellation()
                 await Task.yield()
                 let micBlock = try AudioMixer.readFirstChannel(of: mic, count: blockFrames)
+                // A read that yields nothing before the stated end would leave
+                // the position where it is and this loop spinning. Thrown
+                // rather than ended, so the caller keeps the recorded track
+                // instead of adopting one that stops early.
+                guard !micBlock.isEmpty else {
+                    throw EchoCancellationError.microphoneReadStalled(at: mic.framePosition)
+                }
                 // Only ever read what this block will use. Reading a whole
                 // block and trimming it to fit the padding threw the trimmed
                 // frames away with the file already advanced past them, so

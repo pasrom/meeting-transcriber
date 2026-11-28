@@ -292,12 +292,16 @@ final class LocalVQECancellerFileTests: XCTestCase {
         }
     }
 
-    /// What the pipeline's failure log line shows: the shape or the return code,
-    /// never the library's own text, which may carry a path.
+    /// What the pipeline's failure log line shows: the shape, the return code
+    /// or the frame, never the library's own text, which may carry a path.
     func testTheErrorDescriptionsCarryTheirPayloadAndNotTheLibraryText() {
         XCTAssertEqual(
             EchoCancellationError.unsupportedTrackFormat("reference is 48000 Hz, 1 channel(s)").localizedDescription,
             "a track is not 16 kHz mono: reference is 48000 Hz, 1 channel(s)",
+        )
+        XCTAssertEqual(
+            EchoCancellationError.microphoneReadStalled(at: 4096).localizedDescription,
+            "the microphone track stopped yielding frames at frame 4096",
         )
         XCTAssertEqual(
             EchoCancellationError.processingFailed(code: 7, message: "/private/model.gguf").localizedDescription,
