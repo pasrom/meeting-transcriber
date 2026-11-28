@@ -21,7 +21,8 @@ final class AppMeetingPatternTests: XCTestCase {
     // MARK: - All Patterns
 
     func testAllPatternsCount() {
-        XCTAssertEqual(AppMeetingPattern.all.count, 10)
+        XCTAssertEqual(AppMeetingPattern.all.count, 11)
+        XCTAssertTrue(AppMeetingPattern.all.contains(.discord))
     }
 
     // MARK: - Browser meetings category (issue #503)

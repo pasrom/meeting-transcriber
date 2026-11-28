@@ -260,6 +260,10 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         didSet { defaults.set(watchSlack, forKey: "watchSlack") }
     }
 
+    var watchDiscord: Bool {
+        didSet { defaults.set(watchDiscord, forKey: "watchDiscord") }
+    }
+
     var watchCustomApps: [String] {
         didSet { defaults.set(watchCustomApps, forKey: "watchCustomApps") }
     }
@@ -927,6 +931,7 @@ final class AppSettings { // swiftlint:disable:this type_body_length
         watchFaceTime = defaults.bool(forKey: "watchFaceTime", default: false)
         watchWhatsApp = defaults.bool(forKey: "watchWhatsApp", default: false)
         watchSlack = defaults.bool(forKey: "watchSlack", default: false)
+        watchDiscord = defaults.bool(forKey: "watchDiscord", default: false)
         watchCustomApps = defaults.stringArray(forKey: "watchCustomApps") ?? []
         autoWatch = defaults.bool(forKey: "autoWatch", default: false)
 
