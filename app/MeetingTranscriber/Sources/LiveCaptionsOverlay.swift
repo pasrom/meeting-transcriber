@@ -139,13 +139,17 @@ struct LiveCaptionsOverlay: View {
         }
     }
 
+    /// How long a full row takes to slide its top line out. At 0.2 s easing out, most of the travel
+    /// finished in the first three frames of a 30 fps recording and read as a jump.
+    private static let lineScrollDuration: TimeInterval = 0.3
+
     /// Animates the clip only when a row grows in place. A page turn, speaker split, earlier-turn
     /// expiry, or revised re-transcribe replaces or shortens the text at this index and snaps instead.
     static func lineScrollAnimation(from previous: String, to current: String) -> Animation? {
         guard !previous.isEmpty, current.count > previous.count, current.hasPrefix(previous) else {
             return nil
         }
-        return .easeOut(duration: 0.2)
+        return .easeInOut(duration: lineScrollDuration)
     }
 
     /// Line pitch of the row font, which SwiftUI rounds up to whole points (19 / 26 / 33 pt at
